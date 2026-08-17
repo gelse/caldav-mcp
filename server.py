@@ -119,6 +119,7 @@ def _event_to_dict(event) -> dict:
     dtend = getattr(vevent, "dtend", None)
     uid_attr = getattr(vevent, "uid", None)
     categories = getattr(vevent, "categories", None)
+    attendees = getattr(vevent, "attendee", None)
     return {
         "uid": str(uid_attr.value) if uid_attr is not None else event.id,
         "summary": str(summary.value) if summary is not None else "",
@@ -131,7 +132,29 @@ def _event_to_dict(event) -> dict:
             if categories is not None
             else ""
         ),
+        "attendees": (
+            "; ".join(_attendee_str(a) for a in attendees)
+            if isinstance(attendees, (list, tuple))
+            else ""
+        ),
     }
+
+
+def _attendee_str(attendee) -> str:
+    """Render a vobject attendee as 'mailto:.. (ROLE=..., PARTSTAT=...)'."""
+    email = attendee.value if hasattr(attendee, "value") else str(attendee)
+    role = getattr(attendee, "role_param", None) or getattr(attendee, "role", None) or ""
+    partstat = getattr(attendee, "partstat_param", None) or ""
+    bits = [email]
+    if role:
+        bits.append(f"ROLE={role}")
+    if partstat:
+        bits.append(f"PARTSTAT={partstat}")
+    return " ".join(bits)
+
+
+def _get_vevent(event):
+    return event.icalendar_instance.vobject_instance.vevent
 
 
 # ---------------------------------------------------------------------------
@@ -225,7 +248,8 @@ def caldav_get_event_by_uid(uid: str, calendar_name: str = "") -> str:
             f"End: {d['dtend']}\n"
             f"Location: {d['location']}\n"
             f"Description: {d['description']}\n"
-            f"Categories: {d['categories']}"
+            f"Categories: {d['categories']}\n"
+            f"Attendees: {d['attendees']}"
         )
     except Exception as e:
         return f"ERROR: {e}"
@@ -242,6 +266,7 @@ def caldav_create_event(
     categories: str = "",
     priority: str = "",
     rrule: str = "",
+    attendees: str = "",
 ) -> str:
     """
     Create a new calendar event.
@@ -256,6 +281,7 @@ def caldav_create_event(
         categories: Optional comma-separated categories/tags
         priority: Optional priority (0-9, 0 = highest)
         rrule: Optional recurrence rule (e.g. FREQ=WEEKLY;BYDAY=MO)
+        attendees: Optional comma-separated email addresses
     """
     try:
         url, user, pw = _resolve_credentials()
@@ -286,6 +312,13 @@ def caldav_create_event(
             ical_parts.append(f"PRIORITY:{priority}")
         if rrule:
             ical_parts.append(f"RRULE:{rrule}")
+        if attendees:
+            for email in attendees.split(","):
+                email = email.strip()
+                if email:
+                    ical_parts.append(
+                        f"ATTENDEE;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:{email}"
+                    )
         ical_parts.extend(["END:VEVENT", "END:VCALENDAR"])
 
         cal.save_event("\r\n".join(ical_parts) + "\r\n")
@@ -323,8 +356,7 @@ def caldav_update_event(
         client = _client(url, user, pw)
         cal = _get_calendar(client, calendar_name or None)
         event = cal.event_by_uid(uid)
-        ical = event.icalendar_instance
-        vevent = ical.vobject_instance.vevent
+        vevent = _get_vevent(event)
 
         if summary:
             vevent.summary.value = summary
@@ -339,6 +371,61 @@ def caldav_update_event(
 
         event.save()
         return f"OK: Event {uid} updated"
+    except Exception as e:
+        return f"ERROR: {e}"
+
+
+@mcp.tool()
+def caldav_add_attendee(uid: str, email: str, calendar_name: str = "", role: str = "REQ-PARTICIPANT") -> str:
+    """
+    Add an attendee to an existing event.
+
+    Args:
+        uid: Event UID (required)
+        email: Attendee email address (required)
+        calendar_name: Name of the calendar (empty = default)
+        role: Attendee role (default REQ-PARTICIPANT; e.g. CHAIR, OPT-PARTICIPANT, NON-PARTICIPANT)
+    """
+    try:
+        url, user, pw = _resolve_credentials()
+        client = _client(url, user, pw)
+        cal = _get_calendar(client, calendar_name or None)
+        event = cal.event_by_uid(uid)
+        vevent = _get_vevent(event)
+
+        # Build a new ATTENDEE line and add it to the raw ICAL data.
+        attendee_line = f"ATTENDEE;ROLE={role};PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:{email}"
+        data = event.data
+        # Insert before END:VEVENT
+        if "END:VEVENT" in data:
+            data = data.replace("END:VEVENT", attendee_line + "\r\nEND:VEVENT", 1)
+        else:
+            data = data + "\r\n" + attendee_line + "\r\n"
+        event.data = data
+        event.save()
+        return f"OK: Added attendee {email} to event {uid}"
+    except Exception as e:
+        return f"ERROR: {e}"
+
+
+@mcp.tool()
+def caldav_list_attendees(uid: str, calendar_name: str = "") -> str:
+    """
+    List attendees of an event.
+
+    Args:
+        uid: Event UID
+        calendar_name: Name of the calendar (empty = default)
+    """
+    try:
+        url, user, pw = _resolve_credentials()
+        client = _client(url, user, pw)
+        cal = _get_calendar(client, calendar_name or None)
+        event = cal.event_by_uid(uid)
+        d = _event_to_dict(event)
+        if not d["attendees"]:
+            return "No attendees"
+        return "\n".join(f"- {a}" for a in d["attendees"].split("; "))
     except Exception as e:
         return f"ERROR: {e}"
 
@@ -387,6 +474,38 @@ def caldav_search_events(query: str, calendar_name: str = "") -> str:
         if not matches:
             return f"No events matching '{query}'"
         return "\n".join(f"- [{d['uid']}] {d['summary']} @ {d['dtstart']}" for d in matches)
+    except Exception as e:
+        return f"ERROR: {e}"
+
+
+@mcp.tool()
+def caldav_get_freebusy(start: str = "", end: str = "", calendar_name: str = "") -> str:
+    """
+    Get free/busy information for a time range.
+
+    Args:
+        start: Start datetime (ISO 8601). Empty = today 00:00
+        end: End datetime (ISO 8601). Empty = today 24:00
+        calendar_name: Name of the calendar (empty = default)
+    """
+    try:
+        url, user, pw = _resolve_credentials()
+        client = _client(url, user, pw)
+        cal = _get_calendar(client, calendar_name or None)
+        start_dt = _parse_dt(start) if start else datetime.now(timezone.utc).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        end_dt = _parse_dt(end) if end else (start_dt + timedelta(days=1))
+
+        # Reuse events-in-range as a practical busy-time view.
+        events = cal.search(start=start_dt, end=end_dt, event=True, expand=True)
+        if not events:
+            return "Free (no events in range)"
+        lines = [f"Busy ({len(events)} events):"]
+        for e in events:
+            d = _event_to_dict(e)
+            lines.append(f"- {d['dtstart']} -> {d['dtend']}: {d['summary']}")
+        return "\n".join(lines)
     except Exception as e:
         return f"ERROR: {e}"
 
