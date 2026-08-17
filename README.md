@@ -35,7 +35,9 @@ on a custom port.
 | `caldav_create_event` | Create event (summary, start, end, location, description, categories, priority, rrule, attendees) |
 | `caldav_update_event` | Update event by UID (summary, start, end, location, description) |
 | `caldav_add_attendee` | Add attendee to an event |
+| `caldav_remove_attendee` | Remove attendee from an event |
 | `caldav_list_attendees` | List attendees of an event |
+| `caldav_move_event` | Move event to another calendar |
 | `caldav_delete_event` | Delete event by UID |
 | `caldav_search_events` | Full-text search |
 | `caldav_get_freebusy` | Free/busy for a time range |
@@ -43,7 +45,6 @@ on a custom port.
 ## Docker Compose
 
 ```yaml
-# docker-compose.yaml — maps container port 8080 -> host 8600
 services:
   caldav-mcp:
     build: .
@@ -59,14 +60,7 @@ docker compose up -d
 
 ## MCP client (Streamable HTTP)
 
-Connect your MCP client to:
-
-```
-http://<host>:8600/mcp
-```
-
-For Bifrost: add as an **HTTP** (streamable) MCP server, pointing at that URL.
-Per-request CalDAV credentials are passed as headers by the client.
+Connect your MCP client to `http://<host>:8600/mcp`.
 
 ## Example call
 
