@@ -14,16 +14,17 @@ environment variables (never hardcoded):
 """
 
 import os
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from caldav import DAVClient
-from caldav.elements import dav, cdav
 from fastmcp import FastMCP
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class CalDAVConfig:
@@ -64,7 +65,7 @@ def principal(client: DAVClient):
 
 
 def get_calendar(client: DAVClient, calendar_name: str = None):
-    """Resolve a calendar by name, or return the default calendar."""
+    """Resolve a calendar by name, or return the default (first) calendar."""
     principal_obj = principal(client)
     calendars = principal_obj.calendars()
     if not calendars:
@@ -77,7 +78,6 @@ def get_calendar(client: DAVClient, calendar_name: str = None):
             f"Calendar '{calendar_name}' not found. Available: "
             + ", ".join(c.name for c in calendars)
         )
-    # Default: first calendar
     return calendars[0]
 
 
@@ -86,7 +86,7 @@ def _parse_dt(value: str) -> datetime:
     value = value.strip()
     if not value:
         return datetime.now(timezone.utc)
-    # Strip trailing 'Z' → UTC
+    # Strip trailing 'Z' -> UTC
     if value.endswith("Z"):
         value = value[:-1] + "+00:00"
     for fmt in (
@@ -114,8 +114,9 @@ def _event_to_dict(event) -> dict:
     summary = str(summary.value) if summary is not None else ""
     dtstart = getattr(vevent, "dtstart", None)
     dtend = getattr(vevent, "dtend", None)
+    uid_attr = getattr(vevent, "uid", None)
     return {
-        "uid": getattr(vevent, "uid", None).value if getattr(vevent, "uid", None) else event.id,
+        "uid": str(uid_attr.value) if uid_attr is not None else event.id,
         "summary": summary,
         "dtstart": str(dtstart.value) if dtstart is not None else "",
         "dtend": str(dtend.value) if dtend is not None else "",
@@ -127,6 +128,7 @@ def _event_to_dict(event) -> dict:
 # ---------------------------------------------------------------------------
 # Tools
 # ---------------------------------------------------------------------------
+
 
 @mcp.tool()
 def caldav_list_calendars() -> str:
@@ -157,13 +159,15 @@ def caldav_get_events(calendar_name: str = "", start: str = "", end: str = "") -
     try:
         client = get_client()
         cal = get_calendar(client, calendar_name or None)
-        start_dt = _parse_dt(start) if start else datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        start_dt = _parse_dt(start) if start else datetime.now(timezone.utc).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
         end_dt = _parse_dt(end) if end else (start_dt + timedelta(days=1))
         events = cal.search(start=start_dt, end=end_dt, event=True, expand=True)
         if not events:
             return "No events in range"
         return "\n".join(
-            f"- [{e_dict['uid']}] {e_dict['summary']} @ {e_dict['dtstart']} → {e_dict['dtend']}"
+            f"- [{e_dict['uid']}] {e_dict['summary']} @ {e_dict['dtstart']} -> {e_dict['dtend']}"
             for e_dict in (_event_to_dict(e) for e in events)
         )
     except Exception as e:
@@ -244,12 +248,13 @@ def caldav_create_event(
         start_dt = _parse_dt(start)
         end_dt = _parse_dt(end) if end else (start_dt + timedelta(hours=1))
 
+        uid = f"{uuid.uuid4()}@caldav-mcp"
         ical_parts = [
             "BEGIN:VCALENDAR",
             "VERSION:2.0",
             "PRODID:-//caldav-mcp//EN",
             "BEGIN:VEVENT",
-            f"UID:{_new_uid()}",
+            f"UID:{uid}",
             f"DTSTAMP:{_format_ical_dt(datetime.now(timezone.utc))}",
             f"DTSTART:{_format_ical_dt(start_dt)}",
             f"DTEND:{_format_ical_dt(end_dt)}",
@@ -261,13 +266,7 @@ def caldav_create_event(
             ical_parts.append(f"DESCRIPTION:{description}")
         ical_parts.extend(["END:VEVENT", "END:VCALENDAR"])
 
-        result = cal.save_event("\r\n".join(ical_parts) + "\r\n")
-        # Extract UID from created event
-        uid = _new_uid()  # fallback
-        try:
-            uid = str(result.icalendar_instance.vobject_instance.vevent.uid.value)
-        except Exception:
-            pass
+        cal.save_event("\r\n".join(ical_parts) + "\r\n")
         return f"OK: Event '{summary}' created (uid={uid})"
     except Exception as e:
         return f"ERROR: {e}"
@@ -315,8 +314,7 @@ def caldav_search_events(query: str, calendar_name: str = "") -> str:
         if not matches:
             return f"No events matching '{query}'"
         return "\n".join(
-            f"- [{d['uid']}] {d['summary']} @ {d['dtstart']}"
-            for d in matches
+            f"- [{d['uid']}] {d['summary']} @ {d['dtstart']}" for d in matches
         )
     except Exception as e:
         return f"ERROR: {e}"
@@ -325,11 +323,6 @@ def caldav_search_events(query: str, calendar_name: str = "") -> str:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-import uuid as _uuid
-
-def _new_uid() -> str:
-    return f"{_uuid.uuid4()}@caldav-mcp"
 
 
 def _format_ical_dt(dt: datetime) -> str:
@@ -340,5 +333,9 @@ def _format_ical_dt(dt: datetime) -> str:
     return dt.strftime("%Y%m%dT%H%M%SZ")
 
 
-if __name__ == "__main__":
+def main():
     mcp.run()
+
+
+if __name__ == "__main__":
+    main()
