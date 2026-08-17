@@ -7,10 +7,6 @@ from caldav import DAVClient
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_http_headers
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
-
 DEFAULT_PORT = int(os.environ.get("CALDAV_MCP_PORT", "8080"))
 DEFAULT_PATH = os.environ.get("CALDAV_MCP_PATH", "/mcp")
 
@@ -96,49 +92,72 @@ def _format_ical_dt(dt):
     return dt.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
+def _get_vevent(event):
+    """Return the VEVENT component for a caldav Event object."""
+    vobj = getattr(event, "vobject_instance", None)
+    if vobj is None:
+        # Fallback: icalendar component
+        ical = getattr(event, "icalendar_component", None)
+        return ical
+    # vobject_instance is a vobject Component; VEVENT may be a child or itself
+    vevent = getattr(vobj, "vevent", None)
+    if vevent is not None:
+        return vevent
+    return vobj
+
+
 def _event_to_dict(event):
-    ical = event.icalendar_instance
-    vevent = ical.vobject_instance.vevent
+    vevent = _get_vevent(event)
     summary = getattr(vevent, "summary", None)
     dtstart = getattr(vevent, "dtstart", None)
     dtend = getattr(vevent, "dtend", None)
     uid_attr = getattr(vevent, "uid", None)
     categories = getattr(vevent, "categories", None)
     attendees = getattr(vevent, "attendee", None)
+
+    def _val(attr):
+        v = getattr(attr, "value", None)
+        if v is None:
+            return ""
+        return str(v)
+
+    cats = ""
+    if categories is not None:
+        try:
+            cats = ",".join(str(x) for x in categories.value_list)
+        except Exception:
+            cats = _val(categories)
+
+    att = ""
+    if isinstance(attendees, (list, tuple)):
+        att = "; ".join(_attendee_str(a) for a in attendees)
+    elif attendees is not None:
+        att = _attendee_str(attendees)
+
     return {
-        "uid": str(uid_attr.value) if uid_attr is not None else event.id,
-        "summary": str(summary.value) if summary is not None else "",
-        "dtstart": str(dtstart.value) if dtstart is not None else "",
-        "dtend": str(dtend.value) if dtend is not None else "",
-        "location": str(vevent.location.value) if getattr(vevent, "location", None) else "",
-        "description": str(vevent.description.value) if getattr(vevent, "description", None) else "",
-        "categories": (
-            ",".join(str(x) for x in categories.value_list)
-            if categories is not None
-            else ""
-        ),
-        "attendees": (
-            "; ".join(_attendee_str(a) for a in attendees)
-            if isinstance(attendees, (list, tuple))
-            else ""
-        ),
+        "uid": _val(uid_attr) if uid_attr is not None else getattr(event, "id", ""),
+        "summary": _val(summary),
+        "dtstart": _val(dtstart),
+        "dtend": _val(dtend),
+        "location": _val(getattr(vevent, "location", None)),
+        "description": _val(getattr(vevent, "description", None)),
+        "categories": cats,
+        "attendees": att,
     }
 
 
 def _attendee_str(attendee):
-    email = attendee.value if hasattr(attendee, "value") else str(attendee)
+    email = getattr(attendee, "value", None)
+    if email is None:
+        email = str(attendee)
     role = getattr(attendee, "role_param", None) or getattr(attendee, "role", None) or ""
     partstat = getattr(attendee, "partstat_param", None) or ""
-    bits = [email]
+    bits = [str(email)]
     if role:
-        bits.append("ROLE=" + role)
+        bits.append("ROLE=" + str(role))
     if partstat:
-        bits.append("PARTSTAT=" + partstat)
+        bits.append("PARTSTAT=" + str(partstat))
     return " ".join(bits)
-
-
-def _get_vevent(event):
-    return event.icalendar_instance.vobject_instance.vevent
 
 
 @mcp.tool()
@@ -156,9 +175,7 @@ def caldav_list_calendars() -> str:
 
 @mcp.tool()
 def caldav_get_events(calendar_name: str = "", start: str = "", end: str = "") -> str:
-    """Get events in a date range for a calendar.
-    Args: calendar_name (empty=default), start (ISO 8601, empty=today 00:00), end (ISO 8601, empty=today 24:00)
-    """
+    """Get events in a date range for a calendar."""
     try:
         url, user, pw = _resolve_credentials()
         client = _client(url, user, pw)
