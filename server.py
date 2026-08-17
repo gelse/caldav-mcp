@@ -1,31 +1,11 @@
-#!/usr/bin/env python3
-"""
-CalDAV MCP Server (Streamable HTTP)
-
-Exposes read/write access to any CalDAV-compatible calendar server
-(Nextcloud, ownCloud, iCloud, Fastmail, etc.) via the Model Context Protocol
-over the Streamable HTTP transport.
-
-Design:
-- Runs as a Docker container, listening on a configurable port (default 8080).
-- No authentication on the MCP endpoint itself.
-- CalDAV credentials are supplied PER REQUEST as HTTP headers:
-
-    X-Caldav-Url        e.g. https://cloud.example.com/remote.php/dav/calendars/user/
-    X-Caldav-Username   CalDAV username
-    X-Caldav-Password   CalDAV password (or app-specific password)
-
-  Fallback to environment variables CALDAV_URL / CALDAV_USERNAME /
-  CALDAV_PASSWORD if the headers are absent (convenient for local use).
-"""
-
 import os
 import uuid
+import asyncio
 from datetime import datetime, timedelta, timezone
-from urllib.parse import unquote
 
 from caldav import DAVClient
-from fastmcp import FastMCP, Context
+from fastmcp import FastMCP
+from fastmcp.server.dependencies import get_http_headers
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -34,7 +14,7 @@ from fastmcp import FastMCP, Context
 DEFAULT_PORT = int(os.environ.get("CALDAV_MCP_PORT", "8080"))
 DEFAULT_PATH = os.environ.get("CALDAV_MCP_PATH", "/mcp")
 
-# Header names (lowercase for lookup; FastMCP/ASGI normalizes to lowercase)
+# Header names (lowercase for lookup; get_http_headers returns lowercase keys)
 HDR_URL = "x-caldav-url"
 HDR_USERNAME = "x-caldav-username"
 HDR_PASSWORD = "x-caldav-password"
@@ -60,9 +40,9 @@ class CalDAVError(Exception):
     pass
 
 
-def _resolve_credentials(ctx: Context | None) -> tuple[str, str, str]:
+def _resolve_credentials() -> tuple[str, str, str]:
     """Return (url, username, password) from request headers, falling back to env."""
-    headers = _request_headers(ctx)
+    headers = get_http_headers()
 
     url = headers.get(HDR_URL) or os.environ.get("CALDAV_URL", "")
     username = headers.get(HDR_USERNAME) or os.environ.get("CALDAV_USERNAME", "")
@@ -75,28 +55,6 @@ def _resolve_credentials(ctx: Context | None) -> tuple[str, str, str]:
             "CALDAV_PASSWORD environment variables."
         )
     return url, username, password
-
-
-def _request_headers(ctx: Context | None) -> dict:
-    """Extract HTTP request headers from the FastMCP context (best effort)."""
-    if ctx is None:
-        return {}
-    # FastMCP Context exposes the underlying request via .request_context / .meta
-    # depending on version. Try several accessors defensively.
-    for attr in ("request_context", "request", "meta"):
-        obj = getattr(ctx, attr, None)
-        if obj is None:
-            continue
-        headers = getattr(obj, "headers", None)
-        if isinstance(headers, dict):
-            return {k.lower(): v for k, v in headers.items()}
-        # Some versions expose a Headers object (multidict-like)
-        if hasattr(headers, "get"):
-            try:
-                return {k.lower(): headers.get(k) for k in headers.items()}
-            except Exception:
-                pass
-    return {}
 
 
 # ---------------------------------------------------------------------------
@@ -176,21 +134,16 @@ def _event_to_dict(event) -> dict:
     }
 
 
-def _context_arg(ctx: Context | None) -> Context:
-    # FastMCP injects Context if a parameter is annotated Context and named ctx.
-    return ctx
-
-
 # ---------------------------------------------------------------------------
 # Tools
 # ---------------------------------------------------------------------------
 
 
 @mcp.tool()
-def caldav_list_calendars(ctx: Context = None) -> str:
+def caldav_list_calendars() -> str:
     """List all calendars available for the configured account."""
     try:
-        url, user, pw = _resolve_credentials(ctx)
+        url, user, pw = _resolve_credentials()
         calendars = _client(url, user, pw).principal().calendars()
         if not calendars:
             return "No calendars found"
@@ -200,12 +153,7 @@ def caldav_list_calendars(ctx: Context = None) -> str:
 
 
 @mcp.tool()
-def caldav_get_events(
-    calendar_name: str = "",
-    start: str = "",
-    end: str = "",
-    ctx: Context = None,
-) -> str:
+def caldav_get_events(calendar_name: str = "", start: str = "", end: str = "") -> str:
     """
     Get events in a date range for a calendar.
 
@@ -215,7 +163,7 @@ def caldav_get_events(
         end: End datetime (ISO 8601). Empty = today 24:00
     """
     try:
-        url, user, pw = _resolve_credentials(ctx)
+        url, user, pw = _resolve_credentials()
         client = _client(url, user, pw)
         cal = _get_calendar(client, calendar_name or None)
         start_dt = _parse_dt(start) if start else datetime.now(timezone.utc).replace(
@@ -234,31 +182,29 @@ def caldav_get_events(
 
 
 @mcp.tool()
-def caldav_get_today_events(calendar_name: str = "", ctx: Context = None) -> str:
+def caldav_get_today_events(calendar_name: str = "") -> str:
     """Get events for today (00:00 to 24:00)."""
     today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     return caldav_get_events(
         calendar_name=calendar_name,
         start=today.isoformat(),
         end=(today + timedelta(days=1)).isoformat(),
-        ctx=ctx,
     )
 
 
 @mcp.tool()
-def caldav_get_week_events(calendar_name: str = "", ctx: Context = None) -> str:
+def caldav_get_week_events(calendar_name: str = "") -> str:
     """Get events for the next 7 days."""
     now = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     return caldav_get_events(
         calendar_name=calendar_name,
         start=now.isoformat(),
         end=(now + timedelta(days=7)).isoformat(),
-        ctx=ctx,
     )
 
 
 @mcp.tool()
-def caldav_get_event_by_uid(uid: str, calendar_name: str = "", ctx: Context = None) -> str:
+def caldav_get_event_by_uid(uid: str, calendar_name: str = "") -> str:
     """
     Get a specific event by its UID.
 
@@ -267,7 +213,7 @@ def caldav_get_event_by_uid(uid: str, calendar_name: str = "", ctx: Context = No
         calendar_name: Name of the calendar (empty = default)
     """
     try:
-        url, user, pw = _resolve_credentials(ctx)
+        url, user, pw = _resolve_credentials()
         client = _client(url, user, pw)
         cal = _get_calendar(client, calendar_name or None)
         event = cal.event_by_uid(uid)
@@ -296,7 +242,6 @@ def caldav_create_event(
     categories: str = "",
     priority: str = "",
     rrule: str = "",
-    ctx: Context = None,
 ) -> str:
     """
     Create a new calendar event.
@@ -313,7 +258,7 @@ def caldav_create_event(
         rrule: Optional recurrence rule (e.g. FREQ=WEEKLY;BYDAY=MO)
     """
     try:
-        url, user, pw = _resolve_credentials(ctx)
+        url, user, pw = _resolve_credentials()
         client = _client(url, user, pw)
         cal = _get_calendar(client, calendar_name or None)
         start_dt = _parse_dt(start)
@@ -358,7 +303,6 @@ def caldav_update_event(
     calendar_name: str = "",
     location: str = "",
     description: str = "",
-    ctx: Context = None,
 ) -> str:
     """
     Update an existing event by UID.
@@ -375,7 +319,7 @@ def caldav_update_event(
         description: New description (optional)
     """
     try:
-        url, user, pw = _resolve_credentials(ctx)
+        url, user, pw = _resolve_credentials()
         client = _client(url, user, pw)
         cal = _get_calendar(client, calendar_name or None)
         event = cal.event_by_uid(uid)
@@ -400,7 +344,7 @@ def caldav_update_event(
 
 
 @mcp.tool()
-def caldav_delete_event(uid: str, calendar_name: str = "", ctx: Context = None) -> str:
+def caldav_delete_event(uid: str, calendar_name: str = "") -> str:
     """
     Delete an event by UID.
 
@@ -409,7 +353,7 @@ def caldav_delete_event(uid: str, calendar_name: str = "", ctx: Context = None) 
         calendar_name: Name of the calendar (empty = default)
     """
     try:
-        url, user, pw = _resolve_credentials(ctx)
+        url, user, pw = _resolve_credentials()
         client = _client(url, user, pw)
         cal = _get_calendar(client, calendar_name or None)
         event = cal.event_by_uid(uid)
@@ -420,7 +364,7 @@ def caldav_delete_event(uid: str, calendar_name: str = "", ctx: Context = None) 
 
 
 @mcp.tool()
-def caldav_search_events(query: str, calendar_name: str = "", ctx: Context = None) -> str:
+def caldav_search_events(query: str, calendar_name: str = "") -> str:
     """
     Search events by text (summary/description/location).
 
@@ -429,7 +373,7 @@ def caldav_search_events(query: str, calendar_name: str = "", ctx: Context = Non
         calendar_name: Name of the calendar (empty = default)
     """
     try:
-        url, user, pw = _resolve_credentials(ctx)
+        url, user, pw = _resolve_credentials()
         client = _client(url, user, pw)
         cal = _get_calendar(client, calendar_name or None)
         events = cal.search()
@@ -453,8 +397,6 @@ def caldav_search_events(query: str, calendar_name: str = "", ctx: Context = Non
 
 
 def main():
-    import asyncio
-
     asyncio.run(
         mcp.run_http_async(
             host="0.0.0.0",
