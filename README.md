@@ -42,6 +42,21 @@ on a custom port.
 | `caldav_search_events` | Full-text search |
 | `caldav_get_freebusy` | Free/busy for a time range |
 
+## Development
+
+- **Dependencies**: installed from [`requirements.txt`](./requirements.txt) (or via the
+  `dependencies` list in [`pyproject.toml`](./pyproject.toml)). Includes `icalendar`, which is used
+  to build and correctly RFC 5545-escape event payloads.
+- **Tests**: unit tests live in [`tests/`](./tests) and run with the standard library:
+
+  ```bash
+  python -m unittest discover -s tests -v
+  ```
+
+  The suite covers escaping of special characters (`\`, `,`, `;`, newlines), attendees,
+  priority/rrule validation, and edge cases (emoji, empty optional fields) for
+  `caldav_create_event`.
+
 ## Docker Compose
 
 ```yaml

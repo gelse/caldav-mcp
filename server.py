@@ -4,6 +4,8 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 
 from caldav import DAVClient
+from icalendar import Calendar, Event
+from icalendar import vCalAddress, vText
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_http_headers
 
@@ -272,35 +274,56 @@ def caldav_create_event(
         end_dt = _parse_dt(end) if end else (start_dt + timedelta(hours=1))
 
         uid = "%s@caldav-mcp" % uuid.uuid4()
-        ical_parts = [
-            "BEGIN:VCALENDAR",
-            "VERSION:2.0",
-            "PRODID:-//caldav-mcp//EN",
-            "BEGIN:VEVENT",
-            "UID:" + uid,
-            "DTSTAMP:" + _format_ical_dt(datetime.now(timezone.utc)),
-            "DTSTART:" + _format_ical_dt(start_dt),
-            "DTEND:" + _format_ical_dt(end_dt),
-            "SUMMARY:" + summary,
-        ]
+
+        ical = Calendar()
+        ical.add("prodid", "-//caldav-mcp//EN")
+        ical.add("version", "2.0")
+
+        event = Event()
+        event.add("uid", uid)
+        event.add("dtstamp", datetime.now(timezone.utc))
+        event.add("dtstart", start_dt)
+        event.add("dtend", end_dt)
+        event.add("summary", summary)
+
         if location:
-            ical_parts.append("LOCATION:" + location)
+            event.add("location", location)
         if description:
-            ical_parts.append("DESCRIPTION:" + description)
+            event.add("description", description)
         if categories:
-            ical_parts.append("CATEGORIES:" + categories)
+            event.add("categories", categories)
+
         if priority:
-            ical_parts.append("PRIORITY:" + priority)
+            try:
+                priority_int = int(priority)
+            except (TypeError, ValueError):
+                return "ERROR: priority must be an integer"
+            if not 0 <= priority_int <= 9:
+                return "ERROR: priority must be between 0 and 9"
+            event.add("priority", priority_int)
+
         if rrule:
-            ical_parts.append("RRULE:" + rrule)
+            try:
+                from icalendar.prop import vRecur
+
+                vRecur.from_ical(rrule)
+            except Exception:
+                return "ERROR: invalid RRULE"
+            event.add("rrule", rrule)
+
         if attendees:
             for email in attendees.split(","):
                 email = email.strip()
-                if email:
-                    ical_parts.append("ATTENDEE;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:" + email)
-        ical_parts.extend(["END:VEVENT", "END:VCALENDAR"])
+                if not email:
+                    continue
+                attendee = vCalAddress("mailto:" + email)
+                attendee.params["PARTSTAT"] = vText("NEEDS-ACTION")
+                attendee.params["RSVP"] = vText("TRUE")
+                attendee.params["ROLE"] = vText("REQ-PARTICIPANT")
+                event.add("attendee", attendee, encode=False)
 
-        cal.save_event("\r\n".join(ical_parts) + "\r\n")
+        ical.add_component(event)
+        cal.save_event(ical.to_ical().decode("utf-8"))
         return "OK: Event '%s' created (uid=%s)" % (summary, uid)
     except Exception as e:
         return "ERROR: %s" % e
