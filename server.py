@@ -14,7 +14,6 @@ from fastmcp.server.dependencies import get_http_headers
 DEFAULT_PORT = int(os.environ.get("CALDAV_MCP_PORT", "8080"))
 DEFAULT_PATH = os.environ.get("CALDAV_MCP_PATH", "/mcp")
 
-# Header names (lowercase for lookup; get_http_headers returns lowercase keys)
 HDR_URL = "x-caldav-url"
 HDR_USERNAME = "x-caldav-username"
 HDR_PASSWORD = "x-caldav-password"
@@ -31,23 +30,15 @@ mcp = FastMCP(
 )
 
 
-# ---------------------------------------------------------------------------
-# Credential resolution (per-request headers, env fallback)
-# ---------------------------------------------------------------------------
-
-
 class CalDAVError(Exception):
     pass
 
 
-def _resolve_credentials() -> tuple[str, str, str]:
-    """Return (url, username, password) from request headers, falling back to env."""
+def _resolve_credentials() -> tuple:
     headers = get_http_headers()
-
     url = headers.get(HDR_URL) or os.environ.get("CALDAV_URL", "")
     username = headers.get(HDR_USERNAME) or os.environ.get("CALDAV_USERNAME", "")
     password = headers.get(HDR_PASSWORD) or os.environ.get("CALDAV_PASSWORD", "")
-
     if not url or not username or not password:
         raise CalDAVError(
             "Missing CalDAV credentials. Provide X-Caldav-Url, X-Caldav-Username, "
@@ -57,17 +48,11 @@ def _resolve_credentials() -> tuple[str, str, str]:
     return url, username, password
 
 
-# ---------------------------------------------------------------------------
-# CalDAV helpers
-# ---------------------------------------------------------------------------
-
-
-def _client(url: str, username: str, password: str) -> DAVClient:
+def _client(url, username, password):
     return DAVClient(url=url, username=username, password=password)
 
 
-def _get_calendar(client: DAVClient, calendar_name: str = ""):
-    """Resolve a calendar by name, or return the default (first) calendar."""
+def _get_calendar(client, calendar_name=""):
     calendars = client.principal().calendars()
     if not calendars:
         raise ValueError("No calendars found for this principal")
@@ -76,13 +61,13 @@ def _get_calendar(client: DAVClient, calendar_name: str = ""):
             if c.name == calendar_name:
                 return c
         raise ValueError(
-            f"Calendar '{calendar_name}' not found. Available: "
+            "Calendar '%s' not found. Available: " % calendar_name
             + ", ".join(c.name for c in calendars)
         )
     return calendars[0]
 
 
-def _parse_dt(value: str) -> datetime:
+def _parse_dt(value):
     value = value.strip()
     if not value:
         return datetime.now(timezone.utc)
@@ -102,16 +87,16 @@ def _parse_dt(value: str) -> datetime:
             return dt
         except ValueError:
             continue
-    raise ValueError(f"Could not parse datetime: {value!r}")
+    raise ValueError("Could not parse datetime: %r" % value)
 
 
-def _format_ical_dt(dt: datetime) -> str:
+def _format_ical_dt(dt):
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
-def _event_to_dict(event) -> dict:
+def _event_to_dict(event):
     ical = event.icalendar_instance
     vevent = ical.vobject_instance.vevent
     summary = getattr(vevent, "summary", None)
@@ -140,26 +125,20 @@ def _event_to_dict(event) -> dict:
     }
 
 
-def _attendee_str(attendee) -> str:
-    """Render a vobject attendee as 'mailto:.. (ROLE=..., PARTSTAT=...)'."""
+def _attendee_str(attendee):
     email = attendee.value if hasattr(attendee, "value") else str(attendee)
     role = getattr(attendee, "role_param", None) or getattr(attendee, "role", None) or ""
     partstat = getattr(attendee, "partstat_param", None) or ""
     bits = [email]
     if role:
-        bits.append(f"ROLE={role}")
+        bits.append("ROLE=" + role)
     if partstat:
-        bits.append(f"PARTSTAT={partstat}")
+        bits.append("PARTSTAT=" + partstat)
     return " ".join(bits)
 
 
 def _get_vevent(event):
     return event.icalendar_instance.vobject_instance.vevent
-
-
-# ---------------------------------------------------------------------------
-# Tools
-# ---------------------------------------------------------------------------
 
 
 @mcp.tool()
@@ -170,20 +149,15 @@ def caldav_list_calendars() -> str:
         calendars = _client(url, user, pw).principal().calendars()
         if not calendars:
             return "No calendars found"
-        return "\n".join(f"- {c.name} (url: {c.url})" for c in calendars)
+        return "\n".join("- %s (url: %s)" % (c.name, c.url) for c in calendars)
     except Exception as e:
-        return f"ERROR: {e}"
+        return "ERROR: %s" % e
 
 
 @mcp.tool()
 def caldav_get_events(calendar_name: str = "", start: str = "", end: str = "") -> str:
-    """
-    Get events in a date range for a calendar.
-
-    Args:
-        calendar_name: Name of the calendar (empty = default)
-        start: Start datetime (ISO 8601). Empty = today 00:00
-        end: End datetime (ISO 8601). Empty = today 24:00
+    """Get events in a date range for a calendar.
+    Args: calendar_name (empty=default), start (ISO 8601, empty=today 00:00), end (ISO 8601, empty=today 24:00)
     """
     try:
         url, user, pw = _resolve_credentials()
@@ -197,11 +171,11 @@ def caldav_get_events(calendar_name: str = "", start: str = "", end: str = "") -
         if not events:
             return "No events in range"
         return "\n".join(
-            f"- [{d['uid']}] {d['summary']} @ {d['dtstart']} -> {d['dtend']}"
+            "- [%s] %s @ %s -> %s" % (d["uid"], d["summary"], d["dtstart"], d["dtend"])
             for d in (_event_to_dict(e) for e in events)
         )
     except Exception as e:
-        return f"ERROR: {e}"
+        return "ERROR: %s" % e
 
 
 @mcp.tool()
@@ -228,13 +202,7 @@ def caldav_get_week_events(calendar_name: str = "") -> str:
 
 @mcp.tool()
 def caldav_get_event_by_uid(uid: str, calendar_name: str = "") -> str:
-    """
-    Get a specific event by its UID.
-
-    Args:
-        uid: Event UID
-        calendar_name: Name of the calendar (empty = default)
-    """
+    """Get a specific event by its UID."""
     try:
         url, user, pw = _resolve_credentials()
         client = _client(url, user, pw)
@@ -242,17 +210,17 @@ def caldav_get_event_by_uid(uid: str, calendar_name: str = "") -> str:
         event = cal.event_by_uid(uid)
         d = _event_to_dict(event)
         return (
-            f"UID: {d['uid']}\n"
-            f"Summary: {d['summary']}\n"
-            f"Start: {d['dtstart']}\n"
-            f"End: {d['dtend']}\n"
-            f"Location: {d['location']}\n"
-            f"Description: {d['description']}\n"
-            f"Categories: {d['categories']}\n"
-            f"Attendees: {d['attendees']}"
+            "UID: " + d["uid"] + "\n"
+            "Summary: " + d["summary"] + "\n"
+            "Start: " + d["dtstart"] + "\n"
+            "End: " + d["dtend"] + "\n"
+            "Location: " + d["location"] + "\n"
+            "Description: " + d["description"] + "\n"
+            "Categories: " + d["categories"] + "\n"
+            "Attendees: " + d["attendees"]
         )
     except Exception as e:
-        return f"ERROR: {e}"
+        return "ERROR: %s" % e
 
 
 @mcp.tool()
@@ -268,21 +236,7 @@ def caldav_create_event(
     rrule: str = "",
     attendees: str = "",
 ) -> str:
-    """
-    Create a new calendar event.
-
-    Args:
-        summary: Event title/summary
-        start: Start datetime (ISO 8601)
-        end: End datetime (ISO 8601, optional; defaults to start + 1 hour)
-        calendar_name: Name of the calendar (empty = default)
-        location: Optional location
-        description: Optional description
-        categories: Optional comma-separated categories/tags
-        priority: Optional priority (0-9, 0 = highest)
-        rrule: Optional recurrence rule (e.g. FREQ=WEEKLY;BYDAY=MO)
-        attendees: Optional comma-separated email addresses
-    """
+    """Create a new calendar event."""
     try:
         url, user, pw = _resolve_credentials()
         client = _client(url, user, pw)
@@ -290,41 +244,39 @@ def caldav_create_event(
         start_dt = _parse_dt(start)
         end_dt = _parse_dt(end) if end else (start_dt + timedelta(hours=1))
 
-        uid = f"{uuid.uuid4()}@caldav-mcp"
+        uid = "%s@caldav-mcp" % uuid.uuid4()
         ical_parts = [
             "BEGIN:VCALENDAR",
             "VERSION:2.0",
             "PRODID:-//caldav-mcp//EN",
             "BEGIN:VEVENT",
-            f"UID:{uid}",
-            f"DTSTAMP:{_format_ical_dt(datetime.now(timezone.utc))}",
-            f"DTSTART:{_format_ical_dt(start_dt)}",
-            f"DTEND:{_format_ical_dt(end_dt)}",
-            f"SUMMARY:{summary}",
+            "UID:" + uid,
+            "DTSTAMP:" + _format_ical_dt(datetime.now(timezone.utc)),
+            "DTSTART:" + _format_ical_dt(start_dt),
+            "DTEND:" + _format_ical_dt(end_dt),
+            "SUMMARY:" + summary,
         ]
         if location:
-            ical_parts.append(f"LOCATION:{location}")
+            ical_parts.append("LOCATION:" + location)
         if description:
-            ical_parts.append(f"DESCRIPTION:{description}")
+            ical_parts.append("DESCRIPTION:" + description)
         if categories:
-            ical_parts.append(f"CATEGORIES:{categories}")
+            ical_parts.append("CATEGORIES:" + categories)
         if priority:
-            ical_parts.append(f"PRIORITY:{priority}")
+            ical_parts.append("PRIORITY:" + priority)
         if rrule:
-            ical_parts.append(f"RRULE:{rrule}")
+            ical_parts.append("RRULE:" + rrule)
         if attendees:
             for email in attendees.split(","):
                 email = email.strip()
                 if email:
-                    ical_parts.append(
-                        f"ATTENDEE;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:{email}"
-                    )
+                    ical_parts.append("ATTENDEE;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:" + email)
         ical_parts.extend(["END:VEVENT", "END:VCALENDAR"])
 
         cal.save_event("\r\n".join(ical_parts) + "\r\n")
-        return f"OK: Event '{summary}' created (uid={uid})"
+        return "OK: Event '%s' created (uid=%s)" % (summary, uid)
     except Exception as e:
-        return f"ERROR: {e}"
+        return "ERROR: %s" % e
 
 
 @mcp.tool()
@@ -337,27 +289,13 @@ def caldav_update_event(
     location: str = "",
     description: str = "",
 ) -> str:
-    """
-    Update an existing event by UID.
-
-    Only the fields provided (non-empty) are updated.
-
-    Args:
-        uid: Event UID (required)
-        summary: New summary (optional)
-        start: New start datetime (ISO 8601, optional)
-        end: New end datetime (ISO 8601, optional)
-        calendar_name: Name of the calendar (empty = default)
-        location: New location (optional)
-        description: New description (optional)
-    """
+    """Update an existing event by UID. Only provided fields are updated."""
     try:
         url, user, pw = _resolve_credentials()
         client = _client(url, user, pw)
         cal = _get_calendar(client, calendar_name or None)
         event = cal.event_by_uid(uid)
         vevent = _get_vevent(event)
-
         if summary:
             vevent.summary.value = summary
         if start:
@@ -368,55 +306,65 @@ def caldav_update_event(
             vevent.location.value = location
         if description:
             vevent.description.value = description
-
         event.save()
-        return f"OK: Event {uid} updated"
+        return "OK: Event %s updated" % uid
     except Exception as e:
-        return f"ERROR: {e}"
+        return "ERROR: %s" % e
 
 
 @mcp.tool()
 def caldav_add_attendee(uid: str, email: str, calendar_name: str = "", role: str = "REQ-PARTICIPANT") -> str:
-    """
-    Add an attendee to an existing event.
-
-    Args:
-        uid: Event UID (required)
-        email: Attendee email address (required)
-        calendar_name: Name of the calendar (empty = default)
-        role: Attendee role (default REQ-PARTICIPANT; e.g. CHAIR, OPT-PARTICIPANT, NON-PARTICIPANT)
-    """
+    """Add an attendee to an existing event."""
     try:
         url, user, pw = _resolve_credentials()
         client = _client(url, user, pw)
         cal = _get_calendar(client, calendar_name or None)
         event = cal.event_by_uid(uid)
-        vevent = _get_vevent(event)
-
-        # Build a new ATTENDEE line and add it to the raw ICAL data.
-        attendee_line = f"ATTENDEE;ROLE={role};PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:{email}"
+        attendee_line = "ATTENDEE;ROLE=%s;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:%s" % (role, email)
         data = event.data
-        # Insert before END:VEVENT
         if "END:VEVENT" in data:
             data = data.replace("END:VEVENT", attendee_line + "\r\nEND:VEVENT", 1)
         else:
             data = data + "\r\n" + attendee_line + "\r\n"
         event.data = data
         event.save()
-        return f"OK: Added attendee {email} to event {uid}"
+        return "OK: Added attendee %s to event %s" % (email, uid)
     except Exception as e:
-        return f"ERROR: {e}"
+        return "ERROR: %s" % e
+
+
+@mcp.tool()
+def caldav_remove_attendee(uid: str, email: str, calendar_name: str = "") -> str:
+    """Remove an attendee from an existing event."""
+    try:
+        url, user, pw = _resolve_credentials()
+        client = _client(url, user, pw)
+        cal = _get_calendar(client, calendar_name or None)
+        event = cal.event_by_uid(uid)
+        vevent = _get_vevent(event)
+        attendees = getattr(vevent, "attendee", None)
+        if isinstance(attendees, (list, tuple)):
+            target = "mailto:" + email
+            if not any(getattr(a, "value", "") == target for a in attendees):
+                return "Attendee %s not found on event %s" % (email, uid)
+            data = event.data
+            new_lines = []
+            for line in data.splitlines():
+                ul = line.upper()
+                if ul.startswith("ATTENDEE") and target in line:
+                    continue
+                new_lines.append(line)
+            event.data = "\r\n".join(new_lines)
+            event.save()
+            return "OK: Removed attendee %s from event %s" % (email, uid)
+        return "No attendees on event %s" % uid
+    except Exception as e:
+        return "ERROR: %s" % e
 
 
 @mcp.tool()
 def caldav_list_attendees(uid: str, calendar_name: str = "") -> str:
-    """
-    List attendees of an event.
-
-    Args:
-        uid: Event UID
-        calendar_name: Name of the calendar (empty = default)
-    """
+    """List attendees of an event."""
     try:
         url, user, pw = _resolve_credentials()
         client = _client(url, user, pw)
@@ -425,40 +373,47 @@ def caldav_list_attendees(uid: str, calendar_name: str = "") -> str:
         d = _event_to_dict(event)
         if not d["attendees"]:
             return "No attendees"
-        return "\n".join(f"- {a}" for a in d["attendees"].split("; "))
+        return "\n".join("- " + a for a in d["attendees"].split("; "))
     except Exception as e:
-        return f"ERROR: {e}"
+        return "ERROR: %s" % e
 
 
 @mcp.tool()
 def caldav_delete_event(uid: str, calendar_name: str = "") -> str:
-    """
-    Delete an event by UID.
-
-    Args:
-        uid: Event UID
-        calendar_name: Name of the calendar (empty = default)
-    """
+    """Delete an event by UID."""
     try:
         url, user, pw = _resolve_credentials()
         client = _client(url, user, pw)
         cal = _get_calendar(client, calendar_name or None)
         event = cal.event_by_uid(uid)
         event.delete()
-        return f"OK: Deleted event {uid}"
+        return "OK: Deleted event %s" % uid
     except Exception as e:
-        return f"ERROR: {e}"
+        return "ERROR: %s" % e
+
+
+@mcp.tool()
+def caldav_move_event(uid: str, target_calendar: str, source_calendar: str = "") -> str:
+    """Move an event to another calendar (copy to target with new UID, delete original)."""
+    try:
+        url, user, pw = _resolve_credentials()
+        client = _client(url, user, pw)
+        src_cal = _get_calendar(client, source_calendar or None)
+        dst_cal = _get_calendar(client, target_calendar)
+        event = src_cal.event_by_uid(uid)
+        data = event.data
+        new_uid = "%s@caldav-mcp" % uuid.uuid4()
+        data = data.replace("UID:" + uid, "UID:" + new_uid, 1)
+        dst_cal.save_event(data)
+        event.delete()
+        return "OK: Moved event %s -> %s (new uid=%s)" % (uid, target_calendar, new_uid)
+    except Exception as e:
+        return "ERROR: %s" % e
 
 
 @mcp.tool()
 def caldav_search_events(query: str, calendar_name: str = "") -> str:
-    """
-    Search events by text (summary/description/location).
-
-    Args:
-        query: Search text
-        calendar_name: Name of the calendar (empty = default)
-    """
+    """Search events by text (summary/description/location)."""
     try:
         url, user, pw = _resolve_credentials()
         client = _client(url, user, pw)
@@ -472,22 +427,15 @@ def caldav_search_events(query: str, calendar_name: str = "") -> str:
             if q in blob:
                 matches.append(d)
         if not matches:
-            return f"No events matching '{query}'"
-        return "\n".join(f"- [{d['uid']}] {d['summary']} @ {d['dtstart']}" for d in matches)
+            return "No events matching '%s'" % query
+        return "\n".join("- [%s] %s @ %s" % (d["uid"], d["summary"], d["dtstart"]) for d in matches)
     except Exception as e:
-        return f"ERROR: {e}"
+        return "ERROR: %s" % e
 
 
 @mcp.tool()
 def caldav_get_freebusy(start: str = "", end: str = "", calendar_name: str = "") -> str:
-    """
-    Get free/busy information for a time range.
-
-    Args:
-        start: Start datetime (ISO 8601). Empty = today 00:00
-        end: End datetime (ISO 8601). Empty = today 24:00
-        calendar_name: Name of the calendar (empty = default)
-    """
+    """Get free/busy information for a time range."""
     try:
         url, user, pw = _resolve_credentials()
         client = _client(url, user, pw)
@@ -496,23 +444,16 @@ def caldav_get_freebusy(start: str = "", end: str = "", calendar_name: str = "")
             hour=0, minute=0, second=0, microsecond=0
         )
         end_dt = _parse_dt(end) if end else (start_dt + timedelta(days=1))
-
-        # Reuse events-in-range as a practical busy-time view.
         events = cal.search(start=start_dt, end=end_dt, event=True, expand=True)
         if not events:
             return "Free (no events in range)"
-        lines = [f"Busy ({len(events)} events):"]
+        lines = ["Busy (%d events):" % len(events)]
         for e in events:
             d = _event_to_dict(e)
-            lines.append(f"- {d['dtstart']} -> {d['dtend']}: {d['summary']}")
+            lines.append("- %s -> %s: %s" % (d["dtstart"], d["dtend"], d["summary"]))
         return "\n".join(lines)
     except Exception as e:
-        return f"ERROR: {e}"
-
-
-# ---------------------------------------------------------------------------
-# Entrypoint
-# ---------------------------------------------------------------------------
+        return "ERROR: %s" % e
 
 
 def main():
