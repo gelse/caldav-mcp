@@ -13,7 +13,7 @@ services:
       CALDAV_MCP_PATH: "/mcp"
       TZ: Europe/Vienna
     healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/mcp')"]
+      test: ["CMD", "python3", "-c", "import socket; s=socket.socket(); s.settimeout(3); s.connect(('127.0.0.1',8080)); s.close()"]
       interval: 30s
       timeout: 10s
       retries: 3
