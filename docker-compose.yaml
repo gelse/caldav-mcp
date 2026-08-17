@@ -1,0 +1,20 @@
+services:
+  caldav-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: caldav-mcp:latest
+    container_name: caldav-mcp
+    restart: unless-stopped
+    ports:
+      - "8600:8080"
+    environment:
+      CALDAV_MCP_PORT: "8080"
+      CALDAV_MCP_PATH: "/mcp"
+      TZ: Europe/Vienna
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/mcp')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
