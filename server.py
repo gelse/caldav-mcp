@@ -92,71 +92,81 @@ def _format_ical_dt(dt):
     return dt.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
-def _get_vevent(event):
-    """Return the VEVENT component for a caldav Event object."""
-    vobj = getattr(event, "vobject_instance", None)
-    if vobj is None:
-        # Fallback: icalendar component
-        ical = getattr(event, "icalendar_component", None)
-        return ical
-    # vobject_instance is a vobject Component; VEVENT may be a child or itself
-    vevent = getattr(vobj, "vevent", None)
-    if vevent is not None:
-        return vevent
-    return vobj
+def _text(comp, name):
+    """Extract a text value from an icalendar component property."""
+    v = comp.get(name)
+    if v is None:
+        return ""
+    if isinstance(v, (list, tuple)):
+        return ",".join(_text_single(x) for x in v)
+    return _text_single(v)
+
+
+def _text_single(v):
+    # icalendar prop objects; handle vText / vDDDTypes / plain str
+    try:
+        dt = v.dt
+    except AttributeError:
+        dt = None
+    if dt is not None:
+        if isinstance(dt, datetime):
+            return dt.isoformat()
+        return str(dt)
+    return str(v)
+
+
+def _comp(event):
+    """Return the icalendar.Component for a caldav Event object."""
+    return getattr(event, "icalendar_component", None)
 
 
 def _event_to_dict(event):
-    vevent = _get_vevent(event)
-    summary = getattr(vevent, "summary", None)
-    dtstart = getattr(vevent, "dtstart", None)
-    dtend = getattr(vevent, "dtend", None)
-    uid_attr = getattr(vevent, "uid", None)
-    categories = getattr(vevent, "categories", None)
-    attendees = getattr(vevent, "attendee", None)
+    comp = _comp(event)
+    if comp is None:
+        return {
+            "uid": getattr(event, "id", ""),
+            "summary": "",
+            "dtstart": "",
+            "dtend": "",
+            "location": "",
+            "description": "",
+            "categories": "",
+            "attendees": "",
+        }
 
-    def _val(attr):
-        v = getattr(attr, "value", None)
-        if v is None:
-            return ""
-        return str(v)
-
-    cats = ""
-    if categories is not None:
-        try:
-            cats = ",".join(str(x) for x in categories.value_list)
-        except Exception:
-            cats = _val(categories)
-
-    att = ""
-    if isinstance(attendees, (list, tuple)):
-        att = "; ".join(_attendee_str(a) for a in attendees)
-    elif attendees is not None:
-        att = _attendee_str(attendees)
+    attendee_val = comp.get("attendee")
+    attendee_str = ""
+    if isinstance(attendee_val, (list, tuple)):
+        attendee_str = "; ".join(_attendee_str(a) for a in attendee_val)
+    elif attendee_val is not None:
+        attendee_str = _attendee_str(attendee_val)
 
     return {
-        "uid": _val(uid_attr) if uid_attr is not None else getattr(event, "id", ""),
-        "summary": _val(summary),
-        "dtstart": _val(dtstart),
-        "dtend": _val(dtend),
-        "location": _val(getattr(vevent, "location", None)),
-        "description": _val(getattr(vevent, "description", None)),
-        "categories": cats,
-        "attendees": att,
+        "uid": _text(comp, "uid") or getattr(event, "id", ""),
+        "summary": _text(comp, "summary"),
+        "dtstart": _text(comp, "dtstart"),
+        "dtend": _text(comp, "dtend"),
+        "location": _text(comp, "location"),
+        "description": _text(comp, "description"),
+        "categories": _text(comp, "categories"),
+        "attendees": attendee_str,
     }
 
 
 def _attendee_str(attendee):
-    email = getattr(attendee, "value", None)
-    if email is None:
-        email = str(attendee)
-    role = getattr(attendee, "role_param", None) or getattr(attendee, "role", None) or ""
-    partstat = getattr(attendee, "partstat_param", None) or ""
-    bits = [str(email)]
-    if role:
-        bits.append("ROLE=" + str(role))
-    if partstat:
-        bits.append("PARTSTAT=" + str(partstat))
+    email = str(attendee)
+    # vCalAddress: value is 'mailto:user@host'
+    role = getattr(attendee, "params", {})
+    r = ""
+    p = ""
+    if isinstance(role, dict):
+        r = str(role.get("ROLE", ""))
+        p = str(role.get("PARTSTAT", ""))
+    bits = [email]
+    if r:
+        bits.append("ROLE=" + r)
+    if p:
+        bits.append("PARTSTAT=" + p)
     return " ".join(bits)
 
 
@@ -312,17 +322,21 @@ def caldav_update_event(
         client = _client(url, user, pw)
         cal = _get_calendar(client, calendar_name or None)
         event = cal.event_by_uid(uid)
-        vevent = _get_vevent(event)
+        from icalendar import Calendar, Event as IEvent
+        comp = _comp(event)
+        if comp is None:
+            return "ERROR: no icalendar component"
         if summary:
-            vevent.summary.value = summary
+            comp["SUMMARY"] = summary
         if start:
-            vevent.dtstart.value = _parse_dt(start)
+            comp["DTSTART"] = _parse_dt(start)
         if end:
-            vevent.dtend.value = _parse_dt(end)
+            comp["DTEND"] = _parse_dt(end)
         if location:
-            vevent.location.value = location
+            comp["LOCATION"] = location
         if description:
-            vevent.description.value = description
+            comp["DESCRIPTION"] = description
+        event.data = comp.to_ical().decode("utf-8")
         event.save()
         return "OK: Event %s updated" % uid
     except Exception as e:
@@ -358,23 +372,19 @@ def caldav_remove_attendee(uid: str, email: str, calendar_name: str = "") -> str
         client = _client(url, user, pw)
         cal = _get_calendar(client, calendar_name or None)
         event = cal.event_by_uid(uid)
-        vevent = _get_vevent(event)
-        attendees = getattr(vevent, "attendee", None)
-        if isinstance(attendees, (list, tuple)):
-            target = "mailto:" + email
-            if not any(getattr(a, "value", "") == target for a in attendees):
-                return "Attendee %s not found on event %s" % (email, uid)
-            data = event.data
-            new_lines = []
-            for line in data.splitlines():
-                ul = line.upper()
-                if ul.startswith("ATTENDEE") and target in line:
-                    continue
-                new_lines.append(line)
-            event.data = "\r\n".join(new_lines)
-            event.save()
-            return "OK: Removed attendee %s from event %s" % (email, uid)
-        return "No attendees on event %s" % uid
+        target = "mailto:" + email
+        data = event.data
+        if target not in data:
+            return "Attendee %s not found on event %s" % (email, uid)
+        new_lines = []
+        for line in data.splitlines():
+            ul = line.upper()
+            if ul.startswith("ATTENDEE") and target in line:
+                continue
+            new_lines.append(line)
+        event.data = "\r\n".join(new_lines)
+        event.save()
+        return "OK: Removed attendee %s from event %s" % (email, uid)
     except Exception as e:
         return "ERROR: %s" % e
 
