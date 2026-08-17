@@ -7,9 +7,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY server.py .
 
-# Run as root (caldav library needs no special perms, but keep simple for Bifrost STDIO spawn)
-USER root
-
 EXPOSE 8080
 
+# Streamable HTTP endpoint on /mcp
 CMD ["python3", "server.py"]
