@@ -83,11 +83,23 @@ services:
     restart: unless-stopped
     ports:
       - "8600:8080"
+    environment:
+      # Optional; set the API key in a local .env file (see below).
+      CALDAV_MCP_API_KEY: "${CALDAV_MCP_API_KEY:-}"
 ```
 
 ```bash
 docker compose up -d
 ```
+
+To set the API key, create a `.env` file next to the compose file:
+
+```bash
+CALDAV_MCP_API_KEY=CHANGE_ME
+```
+
+`docker compose` loads `.env` automatically and injects the value into the container. When
+unset, the token is empty and authentication is disabled.
 
 ## MCP client (Streamable HTTP)
 
