@@ -134,7 +134,7 @@ class MoveEventComponentTest(unittest.TestCase):
             target_calendar="dst",
         )
         ev = self.event.icalendar_component
-        self.assertIn("new uid=%s" % ev.get("uid"), result)
+        self.assertIn(f"new uid={ev.get('uid')}", result)
 
     def test_move_no_component_returns_error(self):
         self.event.icalendar_component = None

@@ -8,9 +8,8 @@ parsing behavior.
 """
 
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest import mock
-
 from zoneinfo import ZoneInfo
 
 import server
@@ -27,17 +26,17 @@ class ServerTzResolutionTest(unittest.TestCase):
     def test_tz_unset_returns_utc(self):
         with mock.patch.dict(server.os.environ, {}, clear=True):
             tz = server._server_tz()
-        self.assertIs(tz, timezone.utc)
+        self.assertIs(tz, UTC)
 
     def test_tz_empty_returns_utc(self):
         with mock.patch.dict(server.os.environ, {"TZ": ""}):
             tz = server._server_tz()
-        self.assertIs(tz, timezone.utc)
+        self.assertIs(tz, UTC)
 
     def test_tz_invalid_falls_back_to_utc(self):
         with mock.patch.dict(server.os.environ, {"TZ": "Not/AZone"}):
             tz = server._server_tz()
-        self.assertIs(tz, timezone.utc)
+        self.assertIs(tz, UTC)
 
 
 class NowAndStartOfDayTest(unittest.TestCase):
@@ -64,10 +63,10 @@ class NowAndStartOfDayTest(unittest.TestCase):
         self.assertEqual(sd.microsecond, 0)
 
     def test_start_of_day_utc(self):
-        dt = datetime(2026, 8, 17, 15, 30, tzinfo=timezone.utc)
+        dt = datetime(2026, 8, 17, 15, 30, tzinfo=UTC)
         sd = server._start_of_day(dt)
-        self.assertEqual(sd, datetime(2026, 8, 17, tzinfo=timezone.utc))
-        self.assertIs(sd.tzinfo, timezone.utc)
+        self.assertEqual(sd, datetime(2026, 8, 17, tzinfo=UTC))
+        self.assertIs(sd.tzinfo, UTC)
 
 
 class ParseDtServerTimezoneTest(unittest.TestCase):
@@ -91,7 +90,7 @@ class ParseDtServerTimezoneTest(unittest.TestCase):
     def test_explicit_z_suffix_returns_utc(self):
         with mock.patch.object(server, "SERVER_TZ", ZoneInfo("Europe/Vienna")):
             dt = server._parse_dt("2026-01-01T10:00:00Z")
-        self.assertEqual(dt.tzinfo, timezone.utc)
+        self.assertEqual(dt.tzinfo, UTC)
         self.assertEqual(dt.strftime("%Y-%m-%d %H:%M:%S"), "2026-01-01 10:00:00")
 
     def test_empty_input_returns_now(self):

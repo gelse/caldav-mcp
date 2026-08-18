@@ -10,9 +10,8 @@ helper logic that produces the default boundary values.
 """
 
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest import mock
-
 from zoneinfo import ZoneInfo
 
 import server
@@ -40,7 +39,7 @@ class GetEventsDefaultsTest(unittest.TestCase):
         self.assertEqual(end_dt.isoformat(), "2026-08-19T00:00:00+02:00")
 
     def test_default_start_uses_utc_midnight_when_server_is_utc(self):
-        tz_utc = timezone.utc
+        tz_utc = UTC
         fake_now = datetime(2026, 8, 18, 15, 30, 45, tzinfo=tz_utc)
         with mock.patch.object(server, "SERVER_TZ", tz_utc):
             with mock.patch.object(server, "_now", lambda: fake_now):

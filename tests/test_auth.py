@@ -11,7 +11,6 @@ from unittest import mock
 
 import server
 
-
 UNAUTHORIZED = "ERROR: unauthorized - missing or invalid API token"
 
 

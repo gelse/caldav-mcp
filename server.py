@@ -1,15 +1,14 @@
-import os
-import uuid
 import asyncio
 import logging
-from datetime import datetime, timedelta, timezone
+import os
+import uuid
+from datetime import UTC, datetime, timedelta, tzinfo
 from zoneinfo import ZoneInfo
 
-from caldav import DAVClient
-from icalendar import Calendar, Event
-from icalendar import vCalAddress, vText
+from caldav import DAVClient  # type: ignore[attr-defined]
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_http_headers
+from icalendar import Calendar, Event, vCalAddress, vText
 
 DEFAULT_PORT = int(os.environ.get("CALDAV_MCP_PORT", "8080"))
 DEFAULT_PATH = os.environ.get("CALDAV_MCP_PATH", "/mcp")
@@ -23,7 +22,7 @@ HDR_AUTHORIZATION = "authorization"
 HDR_API_KEY = "x-api-key"
 
 
-def _server_tz() -> timezone:
+def _server_tz() -> tzinfo:
     """Return the configured server timezone.
 
     Reads the TZ environment variable (e.g. 'Europe/Vienna'); falls back to
@@ -35,7 +34,7 @@ def _server_tz() -> timezone:
             return ZoneInfo(tz_name)
         except Exception:
             pass
-    return timezone.utc
+    return UTC
 
 
 SERVER_TZ = _server_tz()
@@ -140,7 +139,7 @@ def _get_calendar(client, calendar_name=None):
             if c.name == calendar_name:
                 return c
         raise NotFoundError(
-            "Calendar '%s' not found. Available: " % calendar_name
+            f"Calendar '{calendar_name}' not found. Available: "
             + ", ".join(c.name for c in calendars)
         )
     return calendars[0]
@@ -180,13 +179,13 @@ def _parse_dt(value):
             return dt
         except ValueError:
             continue
-    raise ValueError("Could not parse datetime: %r" % value)
+    raise ValueError(f"Could not parse datetime: {value!r}")
 
 
 def _format_ical_dt(dt):
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        dt = dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC).strftime("%Y%m%dT%H%M%SZ")
 
 
 def _text(comp, name):
@@ -275,14 +274,14 @@ def caldav_list_calendars() -> str:
         if error:
             return error
         url, user, pw = _resolve_credentials()
-        calendars = DAVClient(url=url, username=user, password=pw).principal().calendars()
+        calendars = DAVClient(url=url, username=user, password=pw).principal().calendars()  # type: ignore[operator]
         if not calendars:
             return "No calendars found"
-        return "\n".join("- %s (url: %s)" % (c.name, c.url) for c in calendars)
+        return "\n".join(f"- {c.name} (url: {c.url})" for c in calendars)
     except AuthError as e:
-        return "ERROR:[auth] %s" % e
+        return f"ERROR:[auth] {e}"
     except NotFoundError as e:
-        return "ERROR:[not_found] %s" % e
+        return f"ERROR:[not_found] {e}"
     except Exception as e:
         return _log_exception(e, "caldav_list_calendars")
 
@@ -295,7 +294,7 @@ def caldav_get_events(calendar_name: str = "", start: str = "", end: str = "") -
         if error:
             return error
         url, user, pw = _resolve_credentials()
-        client = DAVClient(url=url, username=user, password=pw)
+        client = DAVClient(url=url, username=user, password=pw)  # type: ignore[operator]
         cal = _get_calendar(client, calendar_name or None)
         start_dt = _parse_dt(start) if start else _start_of_day(_now())
         end_dt = _parse_dt(end) if end else (start_dt + timedelta(days=1))
@@ -303,13 +302,13 @@ def caldav_get_events(calendar_name: str = "", start: str = "", end: str = "") -
         if not events:
             return "No events in range"
         return "\n".join(
-            "- [%s] %s @ %s -> %s" % (d["uid"], d["summary"], d["dtstart"], d["dtend"])
+            f"- [{d['uid']}] {d['summary']} @ {d['dtstart']} -> {d['dtend']}"
             for d in (_event_to_dict(e) for e in events)
         )
     except AuthError as e:
-        return "ERROR:[auth] %s" % e
+        return f"ERROR:[auth] {e}"
     except NotFoundError as e:
-        return "ERROR:[not_found] %s" % e
+        return f"ERROR:[not_found] {e}"
     except Exception as e:
         return _log_exception(e, "caldav_get_events")
 
@@ -350,7 +349,7 @@ def caldav_get_event_by_uid(uid: str, calendar_name: str = "") -> str:
         if error:
             return error
         url, user, pw = _resolve_credentials()
-        client = DAVClient(url=url, username=user, password=pw)
+        client = DAVClient(url=url, username=user, password=pw)  # type: ignore[operator]
         cal = _get_calendar(client, calendar_name or None)
         event = cal.event_by_uid(uid)
         d = _event_to_dict(event)
@@ -365,9 +364,9 @@ def caldav_get_event_by_uid(uid: str, calendar_name: str = "") -> str:
             "Attendees: " + d["attendees"]
         )
     except AuthError as e:
-        return "ERROR:[auth] %s" % e
+        return f"ERROR:[auth] {e}"
     except NotFoundError as e:
-        return "ERROR:[not_found] %s" % e
+        return f"ERROR:[not_found] {e}"
     except Exception as e:
         return _log_exception(e, "caldav_get_event_by_uid")
 
@@ -391,12 +390,12 @@ def caldav_create_event(
         if error:
             return error
         url, user, pw = _resolve_credentials()
-        client = DAVClient(url=url, username=user, password=pw)
+        client = DAVClient(url=url, username=user, password=pw)  # type: ignore[operator]
         cal = _get_calendar(client, calendar_name or None)
         start_dt = _parse_dt(start)
         end_dt = _parse_dt(end) if end else (start_dt + timedelta(hours=1))
 
-        uid = "%s@caldav-mcp" % uuid.uuid4()
+        uid = f"{uuid.uuid4()}@caldav-mcp"
 
         ical = Calendar()
         ical.add("prodid", "-//caldav-mcp//EN")
@@ -451,11 +450,11 @@ def caldav_create_event(
 
         ical.add_component(event)
         cal.save_event(ical.to_ical().decode("utf-8"))
-        return "OK: Event '%s' created (uid=%s)" % (summary, uid)
+        return f"OK: Event '{summary}' created (uid={uid})"
     except AuthError as e:
-        return "ERROR:[auth] %s" % e
+        return f"ERROR:[auth] {e}"
     except NotFoundError as e:
-        return "ERROR:[not_found] %s" % e
+        return f"ERROR:[not_found] {e}"
     except Exception as e:
         return _log_exception(e, "caldav_create_event")
 
@@ -476,7 +475,7 @@ def caldav_update_event(
         if error:
             return error
         url, user, pw = _resolve_credentials()
-        client = DAVClient(url=url, username=user, password=pw)
+        client = DAVClient(url=url, username=user, password=pw)  # type: ignore[operator]
         cal = _get_calendar(client, calendar_name or None)
         event = cal.event_by_uid(uid)
         comp = _comp(event)
@@ -494,24 +493,26 @@ def caldav_update_event(
             comp["DESCRIPTION"] = description
         event.data = comp.to_ical().decode("utf-8")
         event.save()
-        return "OK: Event %s updated" % uid
+        return f"OK: Event {uid} updated"
     except AuthError as e:
-        return "ERROR:[auth] %s" % e
+        return f"ERROR:[auth] {e}"
     except NotFoundError as e:
-        return "ERROR:[not_found] %s" % e
+        return f"ERROR:[not_found] {e}"
     except Exception as e:
         return _log_exception(e, "caldav_update_event")
 
 
 @mcp.tool()
-def caldav_add_attendee(uid: str, email: str, calendar_name: str = "", role: str = "REQ-PARTICIPANT") -> str:
+def caldav_add_attendee(
+    uid: str, email: str, calendar_name: str = "", role: str = "REQ-PARTICIPANT"
+) -> str:
     """Add an attendee to an existing event."""
     try:
         error = _require_auth()
         if error:
             return error
         url, user, pw = _resolve_credentials()
-        client = DAVClient(url=url, username=user, password=pw)
+        client = DAVClient(url=url, username=user, password=pw)  # type: ignore[operator]
         cal = _get_calendar(client, calendar_name or None)
         event = cal.event_by_uid(uid)
         comp = _comp(event)
@@ -527,11 +528,11 @@ def caldav_add_attendee(uid: str, email: str, calendar_name: str = "", role: str
         comp.add("attendee", attendee, encode=False)
         event.data = comp.to_ical().decode("utf-8")
         event.save()
-        return "OK: Added attendee %s to event %s" % (email, uid)
+        return f"OK: Added attendee {email} to event {uid}"
     except AuthError as e:
-        return "ERROR:[auth] %s" % e
+        return f"ERROR:[auth] {e}"
     except NotFoundError as e:
-        return "ERROR:[not_found] %s" % e
+        return f"ERROR:[not_found] {e}"
     except Exception as e:
         return _log_exception(e, "caldav_add_attendee")
 
@@ -544,7 +545,7 @@ def caldav_remove_attendee(uid: str, email: str, calendar_name: str = "") -> str
         if error:
             return error
         url, user, pw = _resolve_credentials()
-        client = DAVClient(url=url, username=user, password=pw)
+        client = DAVClient(url=url, username=user, password=pw)  # type: ignore[operator]
         cal = _get_calendar(client, calendar_name or None)
         event = cal.event_by_uid(uid)
         comp = _comp(event)
@@ -557,13 +558,13 @@ def caldav_remove_attendee(uid: str, email: str, calendar_name: str = "") -> str
 
         current = comp.get("attendee")
         if current is None:
-            return "Attendee %s not found on event %s" % (email, uid)
+            return f"Attendee {email} not found on event {uid}"
         if not isinstance(current, (list, tuple)):
             current = [current]
 
         remaining = [a for a in current if str(a).strip().lower() != target_norm]
         if len(remaining) == len(current):
-            return "Attendee %s not found on event %s" % (email, uid)
+            return f"Attendee {email} not found on event {uid}"
 
         if remaining:
             comp["attendee"] = remaining
@@ -571,11 +572,11 @@ def caldav_remove_attendee(uid: str, email: str, calendar_name: str = "") -> str
             del comp["attendee"]
         event.data = comp.to_ical().decode("utf-8")
         event.save()
-        return "OK: Removed attendee %s from event %s" % (email, uid)
+        return f"OK: Removed attendee {email} from event {uid}"
     except AuthError as e:
-        return "ERROR:[auth] %s" % e
+        return f"ERROR:[auth] {e}"
     except NotFoundError as e:
-        return "ERROR:[not_found] %s" % e
+        return f"ERROR:[not_found] {e}"
     except Exception as e:
         return _log_exception(e, "caldav_remove_attendee")
 
@@ -588,7 +589,7 @@ def caldav_list_attendees(uid: str, calendar_name: str = "") -> str:
         if error:
             return error
         url, user, pw = _resolve_credentials()
-        client = DAVClient(url=url, username=user, password=pw)
+        client = DAVClient(url=url, username=user, password=pw)  # type: ignore[operator]
         cal = _get_calendar(client, calendar_name or None)
         event = cal.event_by_uid(uid)
         d = _event_to_dict(event)
@@ -596,9 +597,9 @@ def caldav_list_attendees(uid: str, calendar_name: str = "") -> str:
             return "No attendees"
         return "\n".join("- " + a for a in d["attendees"].split("; "))
     except AuthError as e:
-        return "ERROR:[auth] %s" % e
+        return f"ERROR:[auth] {e}"
     except NotFoundError as e:
-        return "ERROR:[not_found] %s" % e
+        return f"ERROR:[not_found] {e}"
     except Exception as e:
         return _log_exception(e, "caldav_list_attendees")
 
@@ -611,15 +612,15 @@ def caldav_delete_event(uid: str, calendar_name: str = "") -> str:
         if error:
             return error
         url, user, pw = _resolve_credentials()
-        client = DAVClient(url=url, username=user, password=pw)
+        client = DAVClient(url=url, username=user, password=pw)  # type: ignore[operator]
         cal = _get_calendar(client, calendar_name or None)
         event = cal.event_by_uid(uid)
         event.delete()
-        return "OK: Deleted event %s" % uid
+        return f"OK: Deleted event {uid}"
     except AuthError as e:
-        return "ERROR:[auth] %s" % e
+        return f"ERROR:[auth] {e}"
     except NotFoundError as e:
-        return "ERROR:[not_found] %s" % e
+        return f"ERROR:[not_found] {e}"
     except Exception as e:
         return _log_exception(e, "caldav_delete_event")
 
@@ -632,22 +633,22 @@ def caldav_move_event(uid: str, target_calendar: str, source_calendar: str = "")
         if error:
             return error
         url, user, pw = _resolve_credentials()
-        client = DAVClient(url=url, username=user, password=pw)
+        client = DAVClient(url=url, username=user, password=pw)  # type: ignore[operator]
         src_cal = _get_calendar(client, source_calendar or None)
         dst_cal = _get_calendar(client, target_calendar)
         event = src_cal.event_by_uid(uid)
         comp = _comp(event)
         if comp is None:
             return "ERROR: no icalendar component"
-        new_uid = "%s@caldav-mcp" % uuid.uuid4()
+        new_uid = f"{uuid.uuid4()}@caldav-mcp"
         comp["UID"] = new_uid
         dst_cal.save_event(comp.to_ical().decode("utf-8"))
         event.delete()
-        return "OK: Moved event %s -> %s (new uid=%s)" % (uid, target_calendar, new_uid)
+        return f"OK: Moved event {uid} -> {target_calendar} (new uid={new_uid})"
     except AuthError as e:
-        return "ERROR:[auth] %s" % e
+        return f"ERROR:[auth] {e}"
     except NotFoundError as e:
-        return "ERROR:[not_found] %s" % e
+        return f"ERROR:[not_found] {e}"
     except Exception as e:
         return _log_exception(e, "caldav_move_event")
 
@@ -660,23 +661,27 @@ def caldav_search_events(query: str, calendar_name: str = "") -> str:
         if error:
             return error
         url, user, pw = _resolve_credentials()
-        client = DAVClient(url=url, username=user, password=pw)
+        client = DAVClient(url=url, username=user, password=pw)  # type: ignore[operator]
         cal = _get_calendar(client, calendar_name or None)
         events = cal.search()
         q = query.lower()
         matches = []
         for event in events:
             d = _event_to_dict(event)
-            blob = " ".join([d["summary"], d["description"], d["location"], d["categories"]]).lower()
+            blob = " ".join(
+                [d["summary"], d["description"], d["location"], d["categories"]]
+            ).lower()
             if q in blob:
                 matches.append(d)
         if not matches:
-            return "No events matching '%s'" % query
-        return "\n".join("- [%s] %s @ %s" % (d["uid"], d["summary"], d["dtstart"]) for d in matches)
+            return f"No events matching '{query}'"
+        return "\n".join(
+            f"- [{d['uid']}] {d['summary']} @ {d['dtstart']}" for d in matches
+        )
     except AuthError as e:
-        return "ERROR:[auth] %s" % e
+        return f"ERROR:[auth] {e}"
     except NotFoundError as e:
-        return "ERROR:[not_found] %s" % e
+        return f"ERROR:[not_found] {e}"
     except Exception as e:
         return _log_exception(e, "caldav_search_events")
 
@@ -689,22 +694,22 @@ def caldav_get_freebusy(start: str = "", end: str = "", calendar_name: str = "")
         if error:
             return error
         url, user, pw = _resolve_credentials()
-        client = DAVClient(url=url, username=user, password=pw)
+        client = DAVClient(url=url, username=user, password=pw)  # type: ignore[operator]
         cal = _get_calendar(client, calendar_name or None)
         start_dt = _parse_dt(start) if start else _start_of_day(_now())
         end_dt = _parse_dt(end) if end else (start_dt + timedelta(days=1))
         events = cal.search(start=start_dt, end=end_dt, event=True, expand=True)
         if not events:
             return "Free (no events in range)"
-        lines = ["Busy (%d events):" % len(events)]
+        lines = [f"Busy ({len(events)} events):"]
         for e in events:
             d = _event_to_dict(e)
-            lines.append("- %s -> %s: %s" % (d["dtstart"], d["dtend"], d["summary"]))
+            lines.append(f"- {d['dtstart']} -> {d['dtend']}: {d['summary']}")
         return "\n".join(lines)
     except AuthError as e:
-        return "ERROR:[auth] %s" % e
+        return f"ERROR:[auth] {e}"
     except NotFoundError as e:
-        return "ERROR:[not_found] %s" % e
+        return f"ERROR:[not_found] {e}"
     except Exception as e:
         return _log_exception(e, "caldav_get_freebusy")
 

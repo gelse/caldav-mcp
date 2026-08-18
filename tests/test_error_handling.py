@@ -61,7 +61,7 @@ class ServerErrorClassificationTest(unittest.TestCase):
         with mock.patch.object(
             server,
             "_resolve_credentials",
-            side_effect=RuntimeError("connection failed with password=%s" % secret),
+            side_effect=RuntimeError(f"connection failed with password={secret}"),
         ), mock.patch.object(
             server,
             "_log_exception",
@@ -82,7 +82,7 @@ class LogExceptionTest(unittest.TestCase):
 
     def test_log_exception_never_leaks_exception_text(self):
         secret = "s3cret-value"
-        exc = RuntimeError("priviledge escalation with key=%s" % secret)
+        exc = RuntimeError(f"priviledge escalation with key={secret}")
         with mock.patch.object(server.log, "exception"):
             result = server._log_exception(exc, "caldav_foo")
         self.assertNotIn(secret, result)

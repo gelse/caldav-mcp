@@ -14,7 +14,7 @@ boundary is mocked with in-memory fakes, mirroring ``test_create_event.py``.
 import unittest
 from unittest import mock
 
-from icalendar import Calendar, Event
+from icalendar import Calendar
 
 import server
 
@@ -90,7 +90,7 @@ class EventRoundtripTest(unittest.TestCase):
         """Create an event and return the re-parsed VEVENT component."""
         summary = kwargs.get("summary", "s")
         result = server.caldav_create_event(**kwargs)
-        self.assertTrue(result.startswith("OK: Event '%s'" % summary), msg=result)
+        self.assertTrue(result.startswith(f"OK: Event '{summary}'"), msg=result)
         return self.fake_cal.last_event()
 
     def _event_from_payload(self, index=-1):
@@ -159,7 +159,7 @@ class EventRoundtripTest(unittest.TestCase):
         self.assertEqual(d["dtend"], "2026-03-05T10:30:00+00:00")
 
     def test_attendees_round_trip(self):
-        ev = self._create(
+        self._create(
             summary="s",
             start="2026-01-01T10:00:00Z",
             attendees="alice@example.com, bob@example.com",
@@ -176,7 +176,7 @@ class EventRoundtripTest(unittest.TestCase):
             self.assertEqual(a.params.get("ROLE"), "REQ-PARTICIPANT")
 
     def test_priority_round_trip(self):
-        ev = self._create(
+        self._create(
             summary="s",
             start="2026-01-01T10:00:00Z",
             priority="7",
@@ -184,7 +184,7 @@ class EventRoundtripTest(unittest.TestCase):
         self.assertEqual(int(self._event_from_payload()["priority"]), 7)
 
     def test_rrule_round_trip(self):
-        ev = self._create(
+        self._create(
             summary="s",
             start="2026-01-01T10:00:00Z",
             end="2026-01-01T11:00:00Z",
@@ -193,7 +193,7 @@ class EventRoundtripTest(unittest.TestCase):
         self.assertIn("rrule", self._event_from_payload())
 
     def test_empty_optional_fields_absent_after_roundtrip(self):
-        ev = self._create(summary="s", start="2026-01-01T10:00:00Z")
+        self._create(summary="s", start="2026-01-01T10:00:00Z")
         raw = self._event_from_payload()
         self.assertIn("uid", raw)
         self.assertIn("dtstart", raw)

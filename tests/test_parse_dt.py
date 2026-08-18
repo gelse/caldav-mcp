@@ -6,9 +6,8 @@ inputs keep their original offset.
 """
 
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from unittest import mock
-
 from zoneinfo import ZoneInfo
 
 import server
@@ -22,15 +21,15 @@ class ParseDtServerTimezoneTest(unittest.TestCase):
         self.assertEqual(dt.strftime("%H:%M:%S"), "00:00:00")
 
     def test_date_only_utc_fallback(self):
-        with mock.patch.object(server, "SERVER_TZ", timezone.utc):
+        with mock.patch.object(server, "SERVER_TZ", UTC):
             dt = server._parse_dt("2026-08-17")
-        self.assertEqual(dt.tzinfo, timezone.utc)
+        self.assertEqual(dt.tzinfo, UTC)
         self.assertEqual(dt.strftime("%H:%M:%S"), "00:00:00")
 
     def test_explicit_z_offset_unchanged(self):
         with mock.patch.object(server, "SERVER_TZ", ZoneInfo("Europe/Vienna")):
             dt = server._parse_dt("2026-08-17T10:00:00Z")
-        self.assertEqual(dt.tzinfo, timezone.utc)
+        self.assertEqual(dt.tzinfo, UTC)
         self.assertEqual(dt.strftime("%H:%M:%S"), "10:00:00")
 
     def test_explicit_plus_offset_unchanged(self):
@@ -76,7 +75,7 @@ class ParseDtTest(unittest.TestCase):
         self._expect(server._parse_dt("2026-01-01 10:30+0100"), expected)
 
     def test_z_suffix_normalized_to_utc(self):
-        expected = datetime(2026, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
+        expected = datetime(2026, 1, 1, 10, 0, 0, tzinfo=UTC)
         self._expect(server._parse_dt("2026-01-01T10:00:00Z"), expected)
 
     def test_naive_datetime_full_seconds_uses_server_tz(self):

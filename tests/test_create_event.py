@@ -7,9 +7,9 @@ round-trip the serialized iCal payload without a live server.
 import unittest
 from datetime import datetime
 from unittest import mock
+from zoneinfo import ZoneInfo
 
 from icalendar import Calendar
-from zoneinfo import ZoneInfo
 
 import server
 
@@ -64,7 +64,7 @@ class CreateEventEscapingTest(unittest.TestCase):
 
     def _create(self, **kwargs):
         result = server.caldav_create_event(**kwargs)
-        self.assertTrue(result.startswith("OK:"), msg="call failed: %r" % result)
+        self.assertTrue(result.startswith("OK:"), msg=f"call failed: {result!r}")
         saved = self.fake_cal.saved
         if saved is None:
             self.fail("no payload was saved")
@@ -137,15 +137,21 @@ class CreateEventEscapingTest(unittest.TestCase):
         self.assertEqual(int(self._event(parsed)["priority"]), 5)
 
     def test_invalid_priority_non_integer(self):
-        result = server.caldav_create_event(summary="s", start="2026-01-01T10:00:00Z", priority="high")
+        result = server.caldav_create_event(
+            summary="s", start="2026-01-01T10:00:00Z", priority="high"
+        )
         self.assertIn("priority must be an integer", result)
 
     def test_invalid_priority_out_of_range(self):
-        result = server.caldav_create_event(summary="s", start="2026-01-01T10:00:00Z", priority="10")
+        result = server.caldav_create_event(
+            summary="s", start="2026-01-01T10:00:00Z", priority="10"
+        )
         self.assertIn("priority must be between 0 and 9", result)
 
     def test_invalid_rrule(self):
-        result = server.caldav_create_event(summary="s", start="2026-01-01T10:00:00Z", rrule="FREQ=BOGUS")
+        result = server.caldav_create_event(
+            summary="s", start="2026-01-01T10:00:00Z", rrule="FREQ=BOGUS"
+        )
         self.assertIn("invalid RRULE", result)
 
     def test_valid_rrule(self):
@@ -166,7 +172,7 @@ class CreateEventEscapingTest(unittest.TestCase):
                 result = server.caldav_create_event(
                     summary="s", start="2026-01-01T10:00:00Z"
                 )
-        self.assertTrue(result.startswith("OK:"), msg="call failed: %r" % result)
+        self.assertTrue(result.startswith("OK:"), msg=f"call failed: {result!r}")
         payload = self.fake_cal.saved
         if payload is None:
             self.fail("no payload was saved")

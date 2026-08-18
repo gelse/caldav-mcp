@@ -8,7 +8,7 @@ wall clock) and network-free.
 """
 
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest import mock
 
 import server
@@ -18,11 +18,11 @@ class DayBoundaryTest(unittest.TestCase):
     """Day-boundary correctness for _start_of_day / _now."""
 
     def test_start_of_day_preserves_tz_and_zeroes_time(self):
-        dt = datetime(2026, 8, 17, 15, 30, 45, 123456, tzinfo=timezone.utc)
+        dt = datetime(2026, 8, 17, 15, 30, 45, 123456, tzinfo=UTC)
         sd = server._start_of_day(dt)
         self.assertEqual(
             sd,
-            datetime(2026, 8, 17, 0, 0, 0, 0, tzinfo=timezone.utc),
+            datetime(2026, 8, 17, 0, 0, 0, 0, tzinfo=UTC),
         )
         self.assertIsNotNone(sd.tzinfo)
         self.assertEqual(sd.hour, 0)
@@ -35,7 +35,7 @@ class DayBoundaryTest(unittest.TestCase):
         self.assertIsNotNone(now.tzinfo)
 
     def test_fixed_now_contiguous_24h_day_window(self):
-        fixed_now = datetime(2026, 8, 17, 15, 30, 45, 123456, tzinfo=timezone.utc)
+        fixed_now = datetime(2026, 8, 17, 15, 30, 45, 123456, tzinfo=UTC)
         with mock.patch.object(server, "_now", return_value=fixed_now):
             now = server._now()
             start = server._start_of_day(now)
