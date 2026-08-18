@@ -68,10 +68,16 @@ class CreateEventEscapingTest(unittest.TestCase):
             self.fail("no payload was saved")
         return Calendar.from_ical(saved)
 
+    def _event(self, parsed):
+        """Return the single VEVENT subcomponent of a parsed calendar."""
+        events = parsed.walk("VEVENT")
+        self.assertEqual(len(events), 1)
+        return events[0]
+
     def test_summary_with_special_characters_round_trips(self):
         summary = "a,b;c\\d\ne"
         parsed = self._create(summary=summary, start="2026-01-01T10:00:00Z")
-        self.assertEqual(str(parsed["VEVENT"][0]["summary"]), summary)
+        self.assertEqual(str(self._event(parsed)["summary"]), summary)
 
     def test_location_and_description_special_characters(self):
         location = "Room 1, Building A"
@@ -82,7 +88,7 @@ class CreateEventEscapingTest(unittest.TestCase):
             location=location,
             description=description,
         )
-        ev = parsed["VEVENT"][0]
+        ev = self._event(parsed)
         self.assertEqual(str(ev["location"]), location)
         self.assertEqual(str(ev["description"]), description)
 
@@ -92,7 +98,7 @@ class CreateEventEscapingTest(unittest.TestCase):
             start="2026-01-01T10:00:00Z",
             attendees="a@example.com, b@example.com",
         )
-        ev = parsed["VEVENT"][0]
+        ev = self._event(parsed)
         attendees = ev.get("attendee")
         if not isinstance(attendees, (list, tuple)):
             attendees = [attendees]
@@ -107,11 +113,11 @@ class CreateEventEscapingTest(unittest.TestCase):
     def test_emoji_in_summary(self):
         summary = "🎉 party"
         parsed = self._create(summary=summary, start="2026-01-01T10:00:00Z")
-        self.assertEqual(str(parsed["VEVENT"][0]["summary"]), summary)
+        self.assertEqual(str(self._event(parsed)["summary"]), summary)
 
     def test_empty_optional_fields(self):
         parsed = self._create(summary="s", start="2026-01-01T10:00:00Z")
-        ev = parsed["VEVENT"][0]
+        ev = self._event(parsed)
         self.assertIn("uid", ev)
         self.assertIn("dtstart", ev)
         self.assertIn("dtend", ev)
@@ -126,7 +132,7 @@ class CreateEventEscapingTest(unittest.TestCase):
 
     def test_valid_priority(self):
         parsed = self._create(summary="s", start="2026-01-01T10:00:00Z", priority="5")
-        self.assertEqual(int(parsed["VEVENT"][0]["priority"]), 5)
+        self.assertEqual(int(self._event(parsed)["priority"]), 5)
 
     def test_invalid_priority_non_integer(self):
         result = server.caldav_create_event(summary="s", start="2026-01-01T10:00:00Z", priority="high")
@@ -142,7 +148,7 @@ class CreateEventEscapingTest(unittest.TestCase):
 
     def test_valid_rrule(self):
         parsed = self._create(summary="s", start="2026-01-01T10:00:00Z", rrule="FREQ=DAILY;COUNT=5")
-        self.assertIn("rrule", parsed["VEVENT"][0])
+        self.assertIn("rrule", self._event(parsed))
 
 
 if __name__ == "__main__":
