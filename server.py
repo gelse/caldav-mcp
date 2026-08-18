@@ -306,8 +306,12 @@ def caldav_create_event(
             try:
                 from icalendar.prop import vRecur
 
-                vRecur.from_ical(rrule)
+                parsed_rrule = vRecur.from_ical(rrule)
             except Exception:
+                return "ERROR: invalid RRULE"
+            if not parsed_rrule:
+                # e.g. "garbage" parses to an empty vRecur; a valid recur
+                # requires at least a frequency.
                 return "ERROR: invalid RRULE"
             event.add("rrule", rrule)
 
