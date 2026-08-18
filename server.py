@@ -123,7 +123,7 @@ def _resolve_credentials() -> tuple:
     username = headers.get(HDR_USERNAME) or os.environ.get("CALDAV_USERNAME", "")
     password = headers.get(HDR_PASSWORD) or os.environ.get("CALDAV_PASSWORD", "")
     if not url or not username or not password:
-        raise CalDAVError(
+        raise AuthError(
             "Missing CalDAV credentials. Provide X-Caldav-Url, X-Caldav-Username, "
             "X-Caldav-Password headers, or set CALDAV_URL/CALDAV_USERNAME/"
             "CALDAV_PASSWORD environment variables."
@@ -138,12 +138,12 @@ def _client(url, username, password):
 def _get_calendar(client, calendar_name=""):
     calendars = client.principal().calendars()
     if not calendars:
-        raise ValueError("No calendars found for this principal")
+        raise NotFoundError("No calendars found for this principal")
     if calendar_name:
         for c in calendars:
             if c.name == calendar_name:
                 return c
-        raise ValueError(
+        raise NotFoundError(
             "Calendar '%s' not found. Available: " % calendar_name
             + ", ".join(c.name for c in calendars)
         )
@@ -283,8 +283,12 @@ def caldav_list_calendars() -> str:
         if not calendars:
             return "No calendars found"
         return "\n".join("- %s (url: %s)" % (c.name, c.url) for c in calendars)
+    except AuthError as e:
+        return "ERROR:[auth] %s" % e
+    except NotFoundError as e:
+        return "ERROR:[not_found] %s" % e
     except Exception as e:
-        return "ERROR: %s" % e
+        return _log_exception(e, "caldav_list_calendars")
 
 
 @mcp.tool()
@@ -306,8 +310,12 @@ def caldav_get_events(calendar_name: str = "", start: str = "", end: str = "") -
             "- [%s] %s @ %s -> %s" % (d["uid"], d["summary"], d["dtstart"], d["dtend"])
             for d in (_event_to_dict(e) for e in events)
         )
+    except AuthError as e:
+        return "ERROR:[auth] %s" % e
+    except NotFoundError as e:
+        return "ERROR:[not_found] %s" % e
     except Exception as e:
-        return "ERROR: %s" % e
+        return _log_exception(e, "caldav_get_events")
 
 
 @mcp.tool()
@@ -360,8 +368,12 @@ def caldav_get_event_by_uid(uid: str, calendar_name: str = "") -> str:
             "Categories: " + d["categories"] + "\n"
             "Attendees: " + d["attendees"]
         )
+    except AuthError as e:
+        return "ERROR:[auth] %s" % e
+    except NotFoundError as e:
+        return "ERROR:[not_found] %s" % e
     except Exception as e:
-        return "ERROR: %s" % e
+        return _log_exception(e, "caldav_get_event_by_uid")
 
 
 @mcp.tool()
@@ -444,8 +456,12 @@ def caldav_create_event(
         ical.add_component(event)
         cal.save_event(ical.to_ical().decode("utf-8"))
         return "OK: Event '%s' created (uid=%s)" % (summary, uid)
+    except AuthError as e:
+        return "ERROR:[auth] %s" % e
+    except NotFoundError as e:
+        return "ERROR:[not_found] %s" % e
     except Exception as e:
-        return "ERROR: %s" % e
+        return _log_exception(e, "caldav_create_event")
 
 
 @mcp.tool()
@@ -484,8 +500,12 @@ def caldav_update_event(
         event.data = comp.to_ical().decode("utf-8")
         event.save()
         return "OK: Event %s updated" % uid
+    except AuthError as e:
+        return "ERROR:[auth] %s" % e
+    except NotFoundError as e:
+        return "ERROR:[not_found] %s" % e
     except Exception as e:
-        return "ERROR: %s" % e
+        return _log_exception(e, "caldav_update_event")
 
 
 @mcp.tool()
@@ -508,8 +528,12 @@ def caldav_add_attendee(uid: str, email: str, calendar_name: str = "", role: str
         event.data = data
         event.save()
         return "OK: Added attendee %s to event %s" % (email, uid)
+    except AuthError as e:
+        return "ERROR:[auth] %s" % e
+    except NotFoundError as e:
+        return "ERROR:[not_found] %s" % e
     except Exception as e:
-        return "ERROR: %s" % e
+        return _log_exception(e, "caldav_add_attendee")
 
 
 @mcp.tool()
@@ -536,8 +560,12 @@ def caldav_remove_attendee(uid: str, email: str, calendar_name: str = "") -> str
         event.data = "\r\n".join(new_lines)
         event.save()
         return "OK: Removed attendee %s from event %s" % (email, uid)
+    except AuthError as e:
+        return "ERROR:[auth] %s" % e
+    except NotFoundError as e:
+        return "ERROR:[not_found] %s" % e
     except Exception as e:
-        return "ERROR: %s" % e
+        return _log_exception(e, "caldav_remove_attendee")
 
 
 @mcp.tool()
@@ -555,8 +583,12 @@ def caldav_list_attendees(uid: str, calendar_name: str = "") -> str:
         if not d["attendees"]:
             return "No attendees"
         return "\n".join("- " + a for a in d["attendees"].split("; "))
+    except AuthError as e:
+        return "ERROR:[auth] %s" % e
+    except NotFoundError as e:
+        return "ERROR:[not_found] %s" % e
     except Exception as e:
-        return "ERROR: %s" % e
+        return _log_exception(e, "caldav_list_attendees")
 
 
 @mcp.tool()
@@ -572,8 +604,12 @@ def caldav_delete_event(uid: str, calendar_name: str = "") -> str:
         event = cal.event_by_uid(uid)
         event.delete()
         return "OK: Deleted event %s" % uid
+    except AuthError as e:
+        return "ERROR:[auth] %s" % e
+    except NotFoundError as e:
+        return "ERROR:[not_found] %s" % e
     except Exception as e:
-        return "ERROR: %s" % e
+        return _log_exception(e, "caldav_delete_event")
 
 
 @mcp.tool()
@@ -594,8 +630,12 @@ def caldav_move_event(uid: str, target_calendar: str, source_calendar: str = "")
         dst_cal.save_event(data)
         event.delete()
         return "OK: Moved event %s -> %s (new uid=%s)" % (uid, target_calendar, new_uid)
+    except AuthError as e:
+        return "ERROR:[auth] %s" % e
+    except NotFoundError as e:
+        return "ERROR:[not_found] %s" % e
     except Exception as e:
-        return "ERROR: %s" % e
+        return _log_exception(e, "caldav_move_event")
 
 
 @mcp.tool()
@@ -619,8 +659,12 @@ def caldav_search_events(query: str, calendar_name: str = "") -> str:
         if not matches:
             return "No events matching '%s'" % query
         return "\n".join("- [%s] %s @ %s" % (d["uid"], d["summary"], d["dtstart"]) for d in matches)
+    except AuthError as e:
+        return "ERROR:[auth] %s" % e
+    except NotFoundError as e:
+        return "ERROR:[not_found] %s" % e
     except Exception as e:
-        return "ERROR: %s" % e
+        return _log_exception(e, "caldav_search_events")
 
 
 @mcp.tool()
@@ -643,8 +687,12 @@ def caldav_get_freebusy(start: str = "", end: str = "", calendar_name: str = "")
             d = _event_to_dict(e)
             lines.append("- %s -> %s: %s" % (d["dtstart"], d["dtend"], d["summary"]))
         return "\n".join(lines)
+    except AuthError as e:
+        return "ERROR:[auth] %s" % e
+    except NotFoundError as e:
+        return "ERROR:[not_found] %s" % e
     except Exception as e:
-        return "ERROR: %s" % e
+        return _log_exception(e, "caldav_get_freebusy")
 
 
 def main():
