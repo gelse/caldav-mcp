@@ -7,4 +7,4 @@ build:
 
 .PHONY: test
 test:
-	pytest tests/
+	./.venv/bin/pytest tests/

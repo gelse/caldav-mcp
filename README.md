@@ -68,7 +68,14 @@ to the public internet.**
   to build and correctly RFC 5545-escape event payloads.
   Dependency versions are **pinned** in `requirements.txt` and `pyproject.toml` for reproducible
   builds; update both files together when bumping a dependency.
-- **Tests**: unit tests live in [`tests/`](./tests) and run with the standard library:
+- **Tests**: unit tests live in [`tests/`](./tests) and run with `pytest` via the Makefile:
+
+  ```bash
+  make test
+  ```
+
+  This uses the project virtual environment at `./.venv` (`./.venv/bin/pytest`). Tests can also
+  be run directly with the standard library if preferred:
 
   ```bash
   python -m unittest discover -s tests -v
