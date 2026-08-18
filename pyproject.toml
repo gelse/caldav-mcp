@@ -9,6 +9,11 @@ dependencies = [
     "fastmcp==3.4.7",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+]
+
 [project.scripts]
 caldav-mcp = "server:main"
 
