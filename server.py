@@ -13,9 +13,13 @@ from fastmcp.server.dependencies import get_http_headers
 DEFAULT_PORT = int(os.environ.get("CALDAV_MCP_PORT", "8080"))
 DEFAULT_PATH = os.environ.get("CALDAV_MCP_PATH", "/mcp")
 
+API_KEY = os.environ.get("CALDAV_MCP_API_KEY", "")
+
 HDR_URL = "x-caldav-url"
 HDR_USERNAME = "x-caldav-username"
 HDR_PASSWORD = "x-caldav-password"
+HDR_AUTHORIZATION = "authorization"
+HDR_API_KEY = "x-api-key"
 
 
 def _server_tz() -> timezone:
@@ -49,6 +53,42 @@ mcp = FastMCP(
 
 class CalDAVError(Exception):
     pass
+
+
+def _const_eq(a: str, b: str) -> bool:
+    """Constant-time string comparison to avoid timing attacks on the token."""
+    if len(a) != len(b):
+        return False
+    result = 0
+    for x, y in zip(a, b):
+        result |= ord(x) ^ ord(y)
+    return result == 0
+
+
+def _require_auth() -> str:
+    """Enforce the shared API token, if configured.
+
+    Returns an empty string on success, or an auth error string to return to the
+    client when authentication fails. Authentication is disabled (returns "") when
+    CALDAV_MCP_API_KEY is not set.
+    """
+    expected = API_KEY
+    if not expected:
+        return ""
+
+    headers = get_http_headers()
+    provided = ""
+    auth = headers.get(HDR_AUTHORIZATION, "")
+    if auth:
+        scheme, _, token = auth.partition(" ")
+        if scheme.lower() == "bearer":
+            provided = token.strip()
+    if not provided:
+        provided = headers.get(HDR_API_KEY, "").strip()
+
+    if provided and _const_eq(provided, expected):
+        return ""
+    return "ERROR: unauthorized - missing or invalid API token"
 
 
 def _resolve_credentials() -> tuple:
