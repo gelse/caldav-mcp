@@ -237,7 +237,7 @@ def caldav_get_events(calendar_name: str = "", start: str = "", end: str = "") -
 @mcp.tool()
 def caldav_get_today_events(calendar_name: str = "") -> str:
     """Get events for today (00:00 to 24:00)."""
-    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    today = _start_of_day(_now())
     return caldav_get_events(
         calendar_name=calendar_name,
         start=today.isoformat(),
@@ -248,7 +248,7 @@ def caldav_get_today_events(calendar_name: str = "") -> str:
 @mcp.tool()
 def caldav_get_week_events(calendar_name: str = "") -> str:
     """Get events for the next 7 days."""
-    now = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    now = _start_of_day(_now())
     return caldav_get_events(
         calendar_name=calendar_name,
         start=now.isoformat(),
@@ -521,9 +521,7 @@ def caldav_get_freebusy(start: str = "", end: str = "", calendar_name: str = "")
         url, user, pw = _resolve_credentials()
         client = _client(url, user, pw)
         cal = _get_calendar(client, calendar_name or None)
-        start_dt = _parse_dt(start) if start else datetime.now(timezone.utc).replace(
-            hour=0, minute=0, second=0, microsecond=0
-        )
+        start_dt = _parse_dt(start) if start else _start_of_day(_now())
         end_dt = _parse_dt(end) if end else (start_dt + timedelta(days=1))
         events = cal.search(start=start_dt, end=end_dt, event=True, expand=True)
         if not events:
