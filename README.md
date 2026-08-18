@@ -34,6 +34,9 @@ to the public internet.**
 ## Config
 | Env | Default | Description |
 |---|---|---|
+| `CALDAV_URL` | *(none)* | CalDAV server URL. Env fallback for the `X-Caldav-Url` request header. |
+| `CALDAV_USERNAME` | *(none)* | CalDAV username. Env fallback for the `X-Caldav-Username` request header. |
+| `CALDAV_PASSWORD` | *(none)* | CalDAV password. Env fallback for the `X-Caldav-Password` request header. |
 | `CALDAV_MCP_PORT` | `8080` | Listen port (inside container) |
 | `CALDAV_MCP_PATH` | `/mcp` | Streamable HTTP path |
 | `CALDAV_MCP_API_KEY` | *(none)* | Shared secret API token. When set, requests must include a matching `Authorization: Bearer <token>` or `X-Api-Key: <token>` header. |
