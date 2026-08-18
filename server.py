@@ -514,13 +514,18 @@ def caldav_add_attendee(uid: str, email: str, calendar_name: str = "", role: str
         client = DAVClient(url=url, username=user, password=pw)
         cal = _get_calendar(client, calendar_name or None)
         event = cal.event_by_uid(uid)
-        attendee_line = "ATTENDEE;ROLE=%s;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:%s" % (role, email)
-        data = event.data
-        if "END:VEVENT" in data:
-            data = data.replace("END:VEVENT", attendee_line + "\r\nEND:VEVENT", 1)
-        else:
-            data = data + "\r\n" + attendee_line + "\r\n"
-        event.data = data
+        comp = _comp(event)
+        if comp is None:
+            return "ERROR: no icalendar component"
+        email_clean = email.strip()
+        if not email_clean.lower().startswith("mailto:"):
+            email_clean = "mailto:" + email_clean
+        attendee = vCalAddress(email_clean)
+        attendee.params["PARTSTAT"] = vText("NEEDS-ACTION")
+        attendee.params["RSVP"] = vText("TRUE")
+        attendee.params["ROLE"] = vText(role)
+        comp.add("attendee", attendee, encode=False)
+        event.data = comp.to_ical().decode("utf-8")
         event.save()
         return "OK: Added attendee %s to event %s" % (email, uid)
     except AuthError as e:
