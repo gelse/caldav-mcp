@@ -37,7 +37,7 @@ to the public internet.**
 | `CALDAV_MCP_PORT` | `8080` | Listen port (inside container) |
 | `CALDAV_MCP_PATH` | `/mcp` | Streamable HTTP path |
 | `CALDAV_MCP_API_KEY` | *(none)* | Shared secret API token. When set, requests must include a matching `Authorization: Bearer <token>` or `X-Api-Key: <token>` header. |
-| `TZ` | `UTC` | IANA timezone used for "today"/"week" boundaries and date-only inputs (e.g. `Europe/Vienna`) |
+| `TZ` | `UTC` | Server timezone (e.g. `Europe/Vienna`) used for "today"/"week" boundaries and date-only inputs. Reads the `TZ` env var via `zoneinfo`; falls back to `UTC` when unset, empty, or invalid. |
 
 ## Tools
 
@@ -63,6 +63,8 @@ to the public internet.**
 - **Dependencies**: installed from [`requirements.txt`](./requirements.txt) (or via the
   `dependencies` list in [`pyproject.toml`](./pyproject.toml)). Includes `icalendar`, which is used
   to build and correctly RFC 5545-escape event payloads.
+  Dependency versions are **pinned** in `requirements.txt` and `pyproject.toml` for reproducible
+  builds; update both files together when bumping a dependency.
 - **Tests**: unit tests live in [`tests/`](./tests) and run with the standard library:
 
   ```bash
