@@ -483,7 +483,6 @@ def caldav_update_event(
         client = _client(url, user, pw)
         cal = _get_calendar(client, calendar_name or None)
         event = cal.event_by_uid(uid)
-        from icalendar import Calendar, Event as IEvent
         comp = _comp(event)
         if comp is None:
             return "ERROR: no icalendar component"
