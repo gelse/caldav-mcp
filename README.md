@@ -19,8 +19,19 @@ on a custom port.
   - `X-Caldav-Password`
 - Env fallback (`CALDAV_URL` / `CALDAV_USERNAME` / `CALDAV_PASSWORD`) if headers absent.
 
-## Config
+## Security
 
+The MCP endpoint **has no built-in authentication by default** and grants
+read/write access to any CalDAV calendar you configure. It may be left fully
+unauthenticated when `CALDAV_MCP_API_KEY` is unset. **Do not expose it directly
+to the public internet.**
+
+- Put the server behind a reverse proxy (e.g. Traefik, Caddy, nginx) that terminates **TLS**.
+- Restrict access at the network/firewall layer to trusted hosts or a private VPN.
+- Prefer binding the container port to `127.0.0.1` unless you explicitly need remote access.
+- Never place CalDAV app passwords or the endpoint in public configuration or logs.
+
+## Config
 | Env | Default | Description |
 |---|---|---|
 | `CALDAV_MCP_PORT` | `8080` | Listen port (inside container) |
