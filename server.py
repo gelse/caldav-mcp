@@ -97,7 +97,7 @@ def _start_of_day(dt):
 def _parse_dt(value):
     value = value.strip()
     if not value:
-        return datetime.now(timezone.utc)
+        return _now()
     if value.endswith("Z"):
         value = value[:-1] + "+00:00"
     for fmt in (
@@ -110,7 +110,7 @@ def _parse_dt(value):
         try:
             dt = datetime.strptime(value, fmt)
             if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
+                dt = dt.replace(tzinfo=SERVER_TZ)
             return dt
         except ValueError:
             continue
