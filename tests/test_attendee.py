@@ -1,7 +1,7 @@
-"""Unit tests for caldav_add_attendee using the icalendar component API.
+"""Unit tests for caldav_add_attendee and caldav_remove_attendee.
 
 These tests mock the CalDAV network boundaries and provide a fake event with a
-parsed icalendar component so we can verify that attendees are appended via the
+parsed icalendar component so we can verify that attendees are managed via the
 component API (vCalAddress with ROLE/PARTSTAT/RSVP params) rather than raw text
 manipulation.
 """
@@ -146,6 +146,92 @@ class AddAttendeeComponentTest(unittest.TestCase):
         server.caldav_add_attendee(uid="test-uid@caldav-mcp", email="a@example.com")
         server.caldav_add_attendee(uid="test-uid@caldav-mcp", email="a@example.com")
         self.assertEqual(len(self._attendees()), 2)
+
+
+class RemoveAttendeeComponentTest(unittest.TestCase):
+    def setUp(self):
+        self.ical = make_event()
+        self.event = FakeEvent(self.ical)
+        self.fake_cal = FakeCalendar(self.event)
+        self.patchers = patch_network(self.fake_cal)
+        for p in self.patchers:
+            p.start()
+        self.addCleanup(self._stop_patchers)
+
+    def _stop_patchers(self):
+        for p in self.patchers:
+            p.stop()
+
+    def _attendees(self):
+        ev = self.event.icalendar_component
+        attendees = ev.get("attendee")
+        if attendees is None:
+            return []
+        if not isinstance(attendees, (list, tuple)):
+            return [attendees]
+        return list(attendees)
+
+    def test_removes_attendee(self):
+        server.caldav_add_attendee(uid="test-uid@caldav-mcp", email="alice@example.com")
+        result = server.caldav_remove_attendee(
+            uid="test-uid@caldav-mcp",
+            email="alice@example.com",
+        )
+        self.assertTrue(result.startswith("OK:"), msg=result)
+        self.assertEqual(self._attendees(), [])
+
+    def test_remove_handles_mailto_prefix(self):
+        server.caldav_add_attendee(uid="test-uid@caldav-mcp", email="alice@example.com")
+        result = server.caldav_remove_attendee(
+            uid="test-uid@caldav-mcp",
+            email="mailto:alice@example.com",
+        )
+        self.assertTrue(result.startswith("OK:"), msg=result)
+        self.assertEqual(self._attendees(), [])
+
+    def test_remove_is_case_insensitive(self):
+        server.caldav_add_attendee(uid="test-uid@caldav-mcp", email="alice@example.com")
+        result = server.caldav_remove_attendee(
+            uid="test-uid@caldav-mcp",
+            email="ALICE@example.com",
+        )
+        self.assertTrue(result.startswith("OK:"), msg=result)
+        self.assertEqual(self._attendees(), [])
+
+    def test_remove_leaves_other_attendees(self):
+        server.caldav_add_attendee(uid="test-uid@caldav-mcp", email="alice@example.com")
+        server.caldav_add_attendee(uid="test-uid@caldav-mcp", email="bob@example.com")
+        result = server.caldav_remove_attendee(
+            uid="test-uid@caldav-mcp",
+            email="alice@example.com",
+        )
+        self.assertTrue(result.startswith("OK:"), msg=result)
+        emails = sorted(str(a) for a in self._attendees())
+        self.assertEqual(emails, ["mailto:bob@example.com"])
+
+    def test_remove_not_found(self):
+        server.caldav_add_attendee(uid="test-uid@caldav-mcp", email="alice@example.com")
+        result = server.caldav_remove_attendee(
+            uid="test-uid@caldav-mcp",
+            email="nobody@example.com",
+        )
+        self.assertIn("not found", result)
+        self.assertEqual(len(self._attendees()), 1)
+
+    def test_remove_no_attendees_not_found(self):
+        result = server.caldav_remove_attendee(
+            uid="test-uid@caldav-mcp",
+            email="alice@example.com",
+        )
+        self.assertIn("not found", result)
+
+    def test_remove_no_component_returns_error(self):
+        self.event.icalendar_component = None
+        result = server.caldav_remove_attendee(
+            uid="test-uid@caldav-mcp",
+            email="alice@example.com",
+        )
+        self.assertIn("no icalendar component", result)
 
 
 if __name__ == "__main__":

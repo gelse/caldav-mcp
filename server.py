@@ -547,17 +547,29 @@ def caldav_remove_attendee(uid: str, email: str, calendar_name: str = "") -> str
         client = DAVClient(url=url, username=user, password=pw)
         cal = _get_calendar(client, calendar_name or None)
         event = cal.event_by_uid(uid)
-        target = "mailto:" + email
-        data = event.data
-        if target not in data:
+        comp = _comp(event)
+        if comp is None:
+            return "ERROR: no icalendar component"
+        target = email.strip()
+        if not target.lower().startswith("mailto:"):
+            target = "mailto:" + target
+        target_norm = target.lower()
+
+        current = comp.get("attendee")
+        if current is None:
             return "Attendee %s not found on event %s" % (email, uid)
-        new_lines = []
-        for line in data.splitlines():
-            ul = line.upper()
-            if ul.startswith("ATTENDEE") and target in line:
-                continue
-            new_lines.append(line)
-        event.data = "\r\n".join(new_lines)
+        if not isinstance(current, (list, tuple)):
+            current = [current]
+
+        remaining = [a for a in current if str(a).strip().lower() != target_norm]
+        if len(remaining) == len(current):
+            return "Attendee %s not found on event %s" % (email, uid)
+
+        if remaining:
+            comp["attendee"] = remaining
+        else:
+            del comp["attendee"]
+        event.data = comp.to_ical().decode("utf-8")
         event.save()
         return "OK: Removed attendee %s from event %s" % (email, uid)
     except AuthError as e:
