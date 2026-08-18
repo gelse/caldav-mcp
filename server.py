@@ -221,9 +221,7 @@ def caldav_get_events(calendar_name: str = "", start: str = "", end: str = "") -
         url, user, pw = _resolve_credentials()
         client = _client(url, user, pw)
         cal = _get_calendar(client, calendar_name or None)
-        start_dt = _parse_dt(start) if start else datetime.now(timezone.utc).replace(
-            hour=0, minute=0, second=0, microsecond=0
-        )
+        start_dt = _parse_dt(start) if start else _start_of_day(_now())
         end_dt = _parse_dt(end) if end else (start_dt + timedelta(days=1))
         events = cal.search(start=start_dt, end=end_dt, event=True, expand=True)
         if not events:
