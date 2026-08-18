@@ -636,10 +636,12 @@ def caldav_move_event(uid: str, target_calendar: str, source_calendar: str = "")
         src_cal = _get_calendar(client, source_calendar or None)
         dst_cal = _get_calendar(client, target_calendar)
         event = src_cal.event_by_uid(uid)
-        data = event.data
+        comp = _comp(event)
+        if comp is None:
+            return "ERROR: no icalendar component"
         new_uid = "%s@caldav-mcp" % uuid.uuid4()
-        data = data.replace("UID:" + uid, "UID:" + new_uid, 1)
-        dst_cal.save_event(data)
+        comp["UID"] = new_uid
+        dst_cal.save_event(comp.to_ical().decode("utf-8"))
         event.delete()
         return "OK: Moved event %s -> %s (new uid=%s)" % (uid, target_calendar, new_uid)
     except AuthError as e:
