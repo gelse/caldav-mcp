@@ -9,6 +9,7 @@ from caldav import DAVClient  # type: ignore[attr-defined]
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_http_headers
 from icalendar import Calendar, Event, vCalAddress, vText
+from icalendar.prop import vRecur
 
 DEFAULT_PORT = int(os.environ.get("CALDAV_MCP_PORT", "8080"))
 DEFAULT_PATH = os.environ.get("CALDAV_MCP_PATH", "/mcp")
@@ -283,6 +284,21 @@ def _validate_priority(priority: str) -> tuple[int | None, str | None]:
     return priority_int, None
 
 
+def _validate_rrule(rrule: str) -> bool:
+    """Return True if rrule is empty or a valid recurrence rule, False otherwise."""
+    if not rrule:
+        return True
+    try:
+        parsed_rrule = vRecur.from_ical(rrule)
+    except Exception:
+        return False
+    if not parsed_rrule:
+        # e.g. "garbage" parses to an empty vRecur; a valid recur requires
+        # at least a frequency.
+        return False
+    return True
+
+
 @mcp.tool()
 def caldav_list_calendars() -> str:
     """List all calendars available for the configured account."""
@@ -439,15 +455,7 @@ def caldav_create_event(
             event.add("priority", priority_int)
 
         if rrule:
-            try:
-                from icalendar.prop import vRecur
-
-                parsed_rrule = vRecur.from_ical(rrule)
-            except Exception:
-                return "ERROR: invalid RRULE"
-            if not parsed_rrule:
-                # e.g. "garbage" parses to an empty vRecur; a valid recur
-                # requires at least a frequency.
+            if not _validate_rrule(rrule):
                 return "ERROR: invalid RRULE"
             event.add("rrule", rrule)
 
