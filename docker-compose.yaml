@@ -11,6 +11,8 @@ services:
     environment:
       CALDAV_MCP_PORT: "8080"
       CALDAV_MCP_PATH: "/mcp"
+      # Shared API token; set in a local .env file or host environment.
+      CALDAV_MCP_API_KEY: "${CALDAV_MCP_API_KEY:-}"
       TZ: Europe/Vienna
     healthcheck:
       test: ["CMD", "python3", "-c", "import socket; s=socket.socket(); s.settimeout(3); s.connect(('127.0.0.1',8080)); s.close()"]
