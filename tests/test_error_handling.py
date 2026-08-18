@@ -32,7 +32,7 @@ class NotFoundClassificationTest(unittest.TestCase):
     def test_missing_calendar_returns_not_found(self):
         with mock.patch.object(
             server, "_resolve_credentials", return_value=("u", "p", "w")
-        ), mock.patch.object(server, "_client", return_value=object()), mock.patch.object(
+        ), mock.patch.object(server, "DAVClient", return_value=object()), mock.patch.object(
             server,
             "_get_calendar",
             side_effect=server.NotFoundError("Calendar 'x' not found"),

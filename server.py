@@ -131,10 +131,6 @@ def _resolve_credentials() -> tuple:
     return url, username, password
 
 
-def _client(url, username, password):
-    return DAVClient(url=url, username=username, password=password)
-
-
 def _get_calendar(client, calendar_name=None):
     calendars = client.principal().calendars()
     if not calendars:
@@ -279,7 +275,7 @@ def caldav_list_calendars() -> str:
         if error:
             return error
         url, user, pw = _resolve_credentials()
-        calendars = _client(url, user, pw).principal().calendars()
+        calendars = DAVClient(url=url, username=user, password=pw).principal().calendars()
         if not calendars:
             return "No calendars found"
         return "\n".join("- %s (url: %s)" % (c.name, c.url) for c in calendars)
@@ -299,7 +295,7 @@ def caldav_get_events(calendar_name: str = "", start: str = "", end: str = "") -
         if error:
             return error
         url, user, pw = _resolve_credentials()
-        client = _client(url, user, pw)
+        client = DAVClient(url=url, username=user, password=pw)
         cal = _get_calendar(client, calendar_name or None)
         start_dt = _parse_dt(start) if start else _start_of_day(_now())
         end_dt = _parse_dt(end) if end else (start_dt + timedelta(days=1))
@@ -354,7 +350,7 @@ def caldav_get_event_by_uid(uid: str, calendar_name: str = "") -> str:
         if error:
             return error
         url, user, pw = _resolve_credentials()
-        client = _client(url, user, pw)
+        client = DAVClient(url=url, username=user, password=pw)
         cal = _get_calendar(client, calendar_name or None)
         event = cal.event_by_uid(uid)
         d = _event_to_dict(event)
@@ -395,7 +391,7 @@ def caldav_create_event(
         if error:
             return error
         url, user, pw = _resolve_credentials()
-        client = _client(url, user, pw)
+        client = DAVClient(url=url, username=user, password=pw)
         cal = _get_calendar(client, calendar_name or None)
         start_dt = _parse_dt(start)
         end_dt = _parse_dt(end) if end else (start_dt + timedelta(hours=1))
@@ -480,7 +476,7 @@ def caldav_update_event(
         if error:
             return error
         url, user, pw = _resolve_credentials()
-        client = _client(url, user, pw)
+        client = DAVClient(url=url, username=user, password=pw)
         cal = _get_calendar(client, calendar_name or None)
         event = cal.event_by_uid(uid)
         comp = _comp(event)
@@ -515,7 +511,7 @@ def caldav_add_attendee(uid: str, email: str, calendar_name: str = "", role: str
         if error:
             return error
         url, user, pw = _resolve_credentials()
-        client = _client(url, user, pw)
+        client = DAVClient(url=url, username=user, password=pw)
         cal = _get_calendar(client, calendar_name or None)
         event = cal.event_by_uid(uid)
         attendee_line = "ATTENDEE;ROLE=%s;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:%s" % (role, email)
@@ -543,7 +539,7 @@ def caldav_remove_attendee(uid: str, email: str, calendar_name: str = "") -> str
         if error:
             return error
         url, user, pw = _resolve_credentials()
-        client = _client(url, user, pw)
+        client = DAVClient(url=url, username=user, password=pw)
         cal = _get_calendar(client, calendar_name or None)
         event = cal.event_by_uid(uid)
         target = "mailto:" + email
@@ -575,7 +571,7 @@ def caldav_list_attendees(uid: str, calendar_name: str = "") -> str:
         if error:
             return error
         url, user, pw = _resolve_credentials()
-        client = _client(url, user, pw)
+        client = DAVClient(url=url, username=user, password=pw)
         cal = _get_calendar(client, calendar_name or None)
         event = cal.event_by_uid(uid)
         d = _event_to_dict(event)
@@ -598,7 +594,7 @@ def caldav_delete_event(uid: str, calendar_name: str = "") -> str:
         if error:
             return error
         url, user, pw = _resolve_credentials()
-        client = _client(url, user, pw)
+        client = DAVClient(url=url, username=user, password=pw)
         cal = _get_calendar(client, calendar_name or None)
         event = cal.event_by_uid(uid)
         event.delete()
@@ -619,7 +615,7 @@ def caldav_move_event(uid: str, target_calendar: str, source_calendar: str = "")
         if error:
             return error
         url, user, pw = _resolve_credentials()
-        client = _client(url, user, pw)
+        client = DAVClient(url=url, username=user, password=pw)
         src_cal = _get_calendar(client, source_calendar or None)
         dst_cal = _get_calendar(client, target_calendar)
         event = src_cal.event_by_uid(uid)
@@ -645,7 +641,7 @@ def caldav_search_events(query: str, calendar_name: str = "") -> str:
         if error:
             return error
         url, user, pw = _resolve_credentials()
-        client = _client(url, user, pw)
+        client = DAVClient(url=url, username=user, password=pw)
         cal = _get_calendar(client, calendar_name or None)
         events = cal.search()
         q = query.lower()
@@ -674,7 +670,7 @@ def caldav_get_freebusy(start: str = "", end: str = "", calendar_name: str = "")
         if error:
             return error
         url, user, pw = _resolve_credentials()
-        client = _client(url, user, pw)
+        client = DAVClient(url=url, username=user, password=pw)
         cal = _get_calendar(client, calendar_name or None)
         start_dt = _parse_dt(start) if start else _start_of_day(_now())
         end_dt = _parse_dt(end) if end else (start_dt + timedelta(days=1))

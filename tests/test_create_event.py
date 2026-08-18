@@ -43,7 +43,7 @@ def patch_network(fake_cal):
     """Patch the CalDAV boundaries so create_event uses a fake calendar."""
     return [
         mock.patch.object(server, "_resolve_credentials", return_value=("u", "p", "w")),
-        mock.patch.object(server, "_client", return_value=FakeClient([fake_cal])),
+        mock.patch.object(server, "DAVClient", return_value=FakeClient([fake_cal])),
         mock.patch.object(server, "_get_calendar", return_value=fake_cal),
     ]
 
