@@ -266,6 +266,23 @@ def _attendee_str(attendee):
     return " ".join(bits)
 
 
+def _validate_priority(priority: str) -> tuple[int | None, str | None]:
+    """Validate a priority value.
+
+    Return `(priority_int, None)` on success, or `(None, error_message)` on failure.
+    An empty value is skipped and returns `(None, None)`.
+    """
+    if not priority:
+        return None, None
+    try:
+        priority_int = int(priority)
+    except (TypeError, ValueError):
+        return None, "priority must be an integer"
+    if not 0 <= priority_int <= 9:
+        return None, "priority must be between 0 and 9"
+    return priority_int, None
+
+
 @mcp.tool()
 def caldav_list_calendars() -> str:
     """List all calendars available for the configured account."""
@@ -416,12 +433,9 @@ def caldav_create_event(
             event.add("categories", categories)
 
         if priority:
-            try:
-                priority_int = int(priority)
-            except (TypeError, ValueError):
-                return "ERROR: priority must be an integer"
-            if not 0 <= priority_int <= 9:
-                return "ERROR: priority must be between 0 and 9"
+            priority_int, err = _validate_priority(priority)
+            if err:
+                return "ERROR: " + err
             event.add("priority", priority_int)
 
         if rrule:
