@@ -135,7 +135,7 @@ def _client(url, username, password):
     return DAVClient(url=url, username=username, password=password)
 
 
-def _get_calendar(client, calendar_name=""):
+def _get_calendar(client, calendar_name=None):
     calendars = client.principal().calendars()
     if not calendars:
         raise NotFoundError("No calendars found for this principal")
