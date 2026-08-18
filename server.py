@@ -2,6 +2,7 @@ import os
 import uuid
 import asyncio
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from caldav import DAVClient
 from icalendar import Calendar, Event
@@ -15,6 +16,24 @@ DEFAULT_PATH = os.environ.get("CALDAV_MCP_PATH", "/mcp")
 HDR_URL = "x-caldav-url"
 HDR_USERNAME = "x-caldav-username"
 HDR_PASSWORD = "x-caldav-password"
+
+
+def _server_tz() -> timezone:
+    """Return the configured server timezone.
+
+    Reads the TZ environment variable (e.g. 'Europe/Vienna'); falls back to
+    UTC when TZ is unset, empty, or invalid.
+    """
+    tz_name = os.environ.get("TZ", "").strip()
+    if tz_name:
+        try:
+            return ZoneInfo(tz_name)
+        except Exception:
+            pass
+    return timezone.utc
+
+
+SERVER_TZ = _server_tz()
 
 
 mcp = FastMCP(
@@ -63,6 +82,16 @@ def _get_calendar(client, calendar_name=""):
             + ", ".join(c.name for c in calendars)
         )
     return calendars[0]
+
+
+def _now():
+    """Return the current time in the server timezone."""
+    return datetime.now(SERVER_TZ)
+
+
+def _start_of_day(dt):
+    """Return the local midnight (start of day) for the given datetime in the server timezone."""
+    return dt.replace(hour=0, minute=0, second=0, microsecond=0)
 
 
 def _parse_dt(value):
