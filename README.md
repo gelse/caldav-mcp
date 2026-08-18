@@ -22,6 +22,7 @@ on a custom port.
 |---|---|---|
 | `CALDAV_MCP_PORT` | `8080` | Listen port (inside container) |
 | `CALDAV_MCP_PATH` | `/mcp` | Streamable HTTP path |
+| `TZ` | `UTC` | IANA timezone used for "today"/"week" boundaries and date-only inputs (e.g. `Europe/Vienna`) |
 
 ## Tools
 
