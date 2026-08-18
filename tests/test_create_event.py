@@ -5,9 +5,11 @@ round-trip the serialized iCal payload without a live server.
 """
 
 import unittest
+from datetime import datetime
 from unittest import mock
 
 from icalendar import Calendar
+from zoneinfo import ZoneInfo
 
 import server
 
@@ -149,6 +151,27 @@ class CreateEventEscapingTest(unittest.TestCase):
     def test_valid_rrule(self):
         parsed = self._create(summary="s", start="2026-01-01T10:00:00Z", rrule="FREQ=DAILY;COUNT=5")
         self.assertIn("rrule", self._event(parsed))
+
+    def test_dtstamp_uses_timezone_aware_now(self):
+        """DTSTAMP must derive from the tz-aware _now() in the server timezone.
+
+        Previously this used a hardcoded datetime.now(timezone.utc). After the
+        fix the value comes from _now(), which carries SERVER_TZ, and when
+        serialized to iCal it must match the corresponding UTC instant.
+        """
+        vienna = ZoneInfo("Europe/Vienna")
+        fake_now = datetime(2026, 1, 1, 10, 0, 0, tzinfo=vienna)
+        with mock.patch.object(server, "SERVER_TZ", vienna):
+            with mock.patch.object(server, "_now", lambda: fake_now):
+                result = server.caldav_create_event(
+                    summary="s", start="2026-01-01T10:00:00Z"
+                )
+        self.assertTrue(result.startswith("OK:"), msg="call failed: %r" % result)
+        payload = self.fake_cal.saved
+        if payload is None:
+            self.fail("no payload was saved")
+        # 10:00 in Europe/Vienna (UTC+1 in January) == 09:00Z.
+        self.assertIn("DTSTAMP:20260101T090000Z", payload)
 
 
 if __name__ == "__main__":

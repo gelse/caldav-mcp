@@ -404,7 +404,7 @@ def caldav_create_event(
 
         event = Event()
         event.add("uid", uid)
-        event.add("dtstamp", datetime.now(timezone.utc))
+        event.add("dtstamp", _now())
         event.add("dtstart", start_dt)
         event.add("dtend", end_dt)
         event.add("summary", summary)
