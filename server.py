@@ -457,7 +457,9 @@ def caldav_create_event(
         if rrule:
             if not _validate_rrule(rrule):
                 return "ERROR: invalid RRULE"
-            event.add("rrule", rrule)
+            # Add the parsed vRecur so the recurrence value is typed/escaped via
+            # the component API rather than injected as a raw string.
+            event.add("rrule", vRecur.from_ical(rrule))
 
         if attendees:
             for email in attendees.split(","):
