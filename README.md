@@ -9,7 +9,10 @@ on a custom port.
 ## Design
 
 - **Transport**: Streamable HTTP (`/mcp` by default).
-- **No authentication** on the MCP endpoint.
+- **Token authentication** on the MCP endpoint: requests must present a valid
+  `Authorization: Bearer <token>` or `X-Api-Key: <token>` header matching the
+  `CALDAV_MCP_API_KEY` environment variable. Auth is disabled when that variable
+  is unset.
 - **CalDAV credentials per request** via HTTP headers:
   - `X-Caldav-Url`
   - `X-Caldav-Username`
@@ -22,6 +25,7 @@ on a custom port.
 |---|---|---|
 | `CALDAV_MCP_PORT` | `8080` | Listen port (inside container) |
 | `CALDAV_MCP_PATH` | `/mcp` | Streamable HTTP path |
+| `CALDAV_MCP_API_KEY` | *(none)* | Shared secret API token. When set, requests must include a matching `Authorization: Bearer <token>` or `X-Api-Key: <token>` header. |
 | `TZ` | `UTC` | IANA timezone used for "today"/"week" boundaries and date-only inputs (e.g. `Europe/Vienna`) |
 
 ## Tools
@@ -78,16 +82,27 @@ docker compose up -d
 
 Connect your MCP client to `http://<host>:8600/mcp`.
 
+## Security note
+
+The server binds `0.0.0.0` and is published via the Docker Compose port mapping.
+When exposing it beyond `localhost`, place it behind a reverse proxy that
+terminates TLS (HTTPS) so the API token is not transmitted in cleartext. Always set
+a strong `CALDAV_MCP_API_KEY`.
+
 ## Example call
 
 ```bash
 curl -X POST http://localhost:8600/mcp \
   -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer CHANGE_ME' \
   -H 'X-Caldav-Url: https://cloud.example.com/remote.php/dav/calendars/user/' \
   -H 'X-Caldav-Username: user' \
   -H 'X-Caldav-Password: app-pass' \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}'
 ```
+
+Replace `CHANGE_ME` with the value of `CALDAV_MCP_API_KEY`. You may use
+`-H 'X-Api-Key: CHANGE_ME'` as an alternative.
 
 ## License
 
