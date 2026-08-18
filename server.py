@@ -249,6 +249,9 @@ def _attendee_str(attendee):
 def caldav_list_calendars() -> str:
     """List all calendars available for the configured account."""
     try:
+        error = _require_auth()
+        if error:
+            return error
         url, user, pw = _resolve_credentials()
         calendars = _client(url, user, pw).principal().calendars()
         if not calendars:
@@ -262,6 +265,9 @@ def caldav_list_calendars() -> str:
 def caldav_get_events(calendar_name: str = "", start: str = "", end: str = "") -> str:
     """Get events in a date range for a calendar."""
     try:
+        error = _require_auth()
+        if error:
+            return error
         url, user, pw = _resolve_credentials()
         client = _client(url, user, pw)
         cal = _get_calendar(client, calendar_name or None)
@@ -281,6 +287,9 @@ def caldav_get_events(calendar_name: str = "", start: str = "", end: str = "") -
 @mcp.tool()
 def caldav_get_today_events(calendar_name: str = "") -> str:
     """Get events for today (00:00 to 24:00)."""
+    error = _require_auth()
+    if error:
+        return error
     today = _start_of_day(_now())
     return caldav_get_events(
         calendar_name=calendar_name,
@@ -292,6 +301,9 @@ def caldav_get_today_events(calendar_name: str = "") -> str:
 @mcp.tool()
 def caldav_get_week_events(calendar_name: str = "") -> str:
     """Get events for the next 7 days."""
+    error = _require_auth()
+    if error:
+        return error
     now = _start_of_day(_now())
     return caldav_get_events(
         calendar_name=calendar_name,
@@ -304,6 +316,9 @@ def caldav_get_week_events(calendar_name: str = "") -> str:
 def caldav_get_event_by_uid(uid: str, calendar_name: str = "") -> str:
     """Get a specific event by its UID."""
     try:
+        error = _require_auth()
+        if error:
+            return error
         url, user, pw = _resolve_credentials()
         client = _client(url, user, pw)
         cal = _get_calendar(client, calendar_name or None)
@@ -338,6 +353,9 @@ def caldav_create_event(
 ) -> str:
     """Create a new calendar event."""
     try:
+        error = _require_auth()
+        if error:
+            return error
         url, user, pw = _resolve_credentials()
         client = _client(url, user, pw)
         cal = _get_calendar(client, calendar_name or None)
@@ -416,6 +434,9 @@ def caldav_update_event(
 ) -> str:
     """Update an existing event by UID. Only provided fields are updated."""
     try:
+        error = _require_auth()
+        if error:
+            return error
         url, user, pw = _resolve_credentials()
         client = _client(url, user, pw)
         cal = _get_calendar(client, calendar_name or None)
@@ -445,6 +466,9 @@ def caldav_update_event(
 def caldav_add_attendee(uid: str, email: str, calendar_name: str = "", role: str = "REQ-PARTICIPANT") -> str:
     """Add an attendee to an existing event."""
     try:
+        error = _require_auth()
+        if error:
+            return error
         url, user, pw = _resolve_credentials()
         client = _client(url, user, pw)
         cal = _get_calendar(client, calendar_name or None)
@@ -466,6 +490,9 @@ def caldav_add_attendee(uid: str, email: str, calendar_name: str = "", role: str
 def caldav_remove_attendee(uid: str, email: str, calendar_name: str = "") -> str:
     """Remove an attendee from an existing event."""
     try:
+        error = _require_auth()
+        if error:
+            return error
         url, user, pw = _resolve_credentials()
         client = _client(url, user, pw)
         cal = _get_calendar(client, calendar_name or None)
@@ -491,6 +518,9 @@ def caldav_remove_attendee(uid: str, email: str, calendar_name: str = "") -> str
 def caldav_list_attendees(uid: str, calendar_name: str = "") -> str:
     """List attendees of an event."""
     try:
+        error = _require_auth()
+        if error:
+            return error
         url, user, pw = _resolve_credentials()
         client = _client(url, user, pw)
         cal = _get_calendar(client, calendar_name or None)
@@ -507,6 +537,9 @@ def caldav_list_attendees(uid: str, calendar_name: str = "") -> str:
 def caldav_delete_event(uid: str, calendar_name: str = "") -> str:
     """Delete an event by UID."""
     try:
+        error = _require_auth()
+        if error:
+            return error
         url, user, pw = _resolve_credentials()
         client = _client(url, user, pw)
         cal = _get_calendar(client, calendar_name or None)
@@ -521,6 +554,9 @@ def caldav_delete_event(uid: str, calendar_name: str = "") -> str:
 def caldav_move_event(uid: str, target_calendar: str, source_calendar: str = "") -> str:
     """Move an event to another calendar (copy to target with new UID, delete original)."""
     try:
+        error = _require_auth()
+        if error:
+            return error
         url, user, pw = _resolve_credentials()
         client = _client(url, user, pw)
         src_cal = _get_calendar(client, source_calendar or None)
@@ -540,6 +576,9 @@ def caldav_move_event(uid: str, target_calendar: str, source_calendar: str = "")
 def caldav_search_events(query: str, calendar_name: str = "") -> str:
     """Search events by text (summary/description/location)."""
     try:
+        error = _require_auth()
+        if error:
+            return error
         url, user, pw = _resolve_credentials()
         client = _client(url, user, pw)
         cal = _get_calendar(client, calendar_name or None)
@@ -562,6 +601,9 @@ def caldav_search_events(query: str, calendar_name: str = "") -> str:
 def caldav_get_freebusy(start: str = "", end: str = "", calendar_name: str = "") -> str:
     """Get free/busy information for a time range."""
     try:
+        error = _require_auth()
+        if error:
+            return error
         url, user, pw = _resolve_credentials()
         client = _client(url, user, pw)
         cal = _get_calendar(client, calendar_name or None)
