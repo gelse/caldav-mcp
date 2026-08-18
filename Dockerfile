@@ -6,6 +6,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY server.py .
+COPY caldav_mcp/ ./caldav_mcp/
 
 EXPOSE 8080
 
