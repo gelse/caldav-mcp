@@ -105,6 +105,10 @@ def _parse_dt(value):
         "%Y-%m-%dT%H:%M%z",
         "%Y-%m-%d %H:%M:%S%z",
         "%Y-%m-%d %H:%M%z",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%dT%H:%M",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
         "%Y-%m-%d",
     ):
         try:
