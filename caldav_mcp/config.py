@@ -5,9 +5,12 @@ time. Runtime consumers reference these through the ``server`` namespace so they
 observe the same values that tests patch.
 """
 
+import logging
 import os
 from datetime import UTC, tzinfo
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_PORT = int(os.environ.get("CALDAV_MCP_PORT", "8080"))
 DEFAULT_PATH = os.environ.get("CALDAV_MCP_PATH", "/mcp")
@@ -31,8 +34,9 @@ def _server_tz() -> tzinfo:
     if tz_name:
         try:
             return ZoneInfo(tz_name)
-        except Exception:
-            pass
+        except (ZoneInfoNotFoundError, ValueError):
+            logger.warning("Unknown timezone %r, falling back to UTC", tz_name)
+            return ZoneInfo("UTC")
     return UTC
 
 

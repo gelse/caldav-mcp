@@ -15,6 +15,8 @@ mock.patch.object on _resolve_credentials, _client, and _get_calendar.
 import unittest
 from unittest import mock
 
+from caldav.lib.error import DAVError
+
 import server
 from server import Status
 
@@ -46,21 +48,32 @@ class NotFoundClassificationTest(unittest.TestCase):
 
 
 class ServerErrorClassificationTest(unittest.TestCase):
-    def test_unexpected_exception_logged_and_sanitized(self):
+    def test_unexpected_exception_propagates(self):
+        """Unexpected exceptions are no longer swallowed by the handler."""
         with mock.patch.object(
             server, "_resolve_credentials", side_effect=RuntimeError("boom")
+        ):
+            with self.assertRaises(RuntimeError):
+                server.caldav_list_calendars()
+
+    def test_dav_error_is_caught_and_logged(self):
+        """Expected remote (DAVError) failures are still caught and rendered."""
+        with mock.patch.object(
+            server,
+            "_resolve_credentials",
+            side_effect=DAVError(url="https://caldav.example", reason="boom"),
         ), mock.patch.object(server.log, "exception") as log_exc:
             result = server.caldav_list_calendars()
         self.assertEqual(result.status, Status.ERROR)
         self.assertEqual(result.message, "Internal error")
         log_exc.assert_called_once_with("Unhandled error in %s", "caldav_list_calendars")
 
-    def test_unexpected_exception_does_not_leak_raw_message(self):
+    def test_dav_error_does_not_leak_raw_message(self):
         secret = "hunter2-supersecret-password"
         with mock.patch.object(
             server,
             "_resolve_credentials",
-            side_effect=RuntimeError(f"connection failed with password={secret}"),
+            side_effect=DAVError(url=f"https://caldav.example/{secret}", reason="boom"),
         ):
             result = server.caldav_list_calendars()
         self.assertEqual(result.status, Status.ERROR)
