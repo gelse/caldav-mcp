@@ -110,7 +110,7 @@ class GetTodayHelpersTest(unittest.TestCase):
         with mock.patch.object(server, "SERVER_TZ", tz):
             with mock.patch.object(server, "_now", lambda: fake_now):
                 with mock.patch.object(server, "caldav_get_events") as get_events:
-                    get_events.return_value = "OK"
+                    get_events.return_value = server.ToolResult.success("ok")
                     server.caldav_get_today_events()
         _, kwargs = get_events.call_args
         self.assertEqual(kwargs["start"], "2026-08-18T00:00:00+02:00")
@@ -122,7 +122,7 @@ class GetTodayHelpersTest(unittest.TestCase):
         with mock.patch.object(server, "SERVER_TZ", tz):
             with mock.patch.object(server, "_now", lambda: fake_now):
                 with mock.patch.object(server, "caldav_get_events") as get_events:
-                    get_events.return_value = "OK"
+                    get_events.return_value = server.ToolResult.success("ok")
                     server.caldav_get_week_events()
         _, kwargs = get_events.call_args
         self.assertEqual(kwargs["start"], "2026-08-18T00:00:00+02:00")

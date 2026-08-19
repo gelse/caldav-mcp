@@ -27,6 +27,8 @@ from caldav_mcp import (
     CalDAVError,
     NotFoundError,
     ServerError,
+    Status,
+    ToolResult,
     _attendee_str,
     _comp,
     _const_eq,
@@ -36,6 +38,7 @@ from caldav_mcp import (
     _log_exception,
     _now,
     _parse_dt,
+    _render_error,
     _require_auth,
     _resolve_credentials,
     _server_tz,
@@ -65,11 +68,14 @@ from caldav_mcp import (
 __all__ = [
     "mcp",
     # errors
+    "Status",
     "AuthError",
     "CalDAVError",
     "NotFoundError",
     "ServerError",
+    "ToolResult",
     "_log_exception",
+    "_render_error",
     "log",
     # config
     "API_KEY",

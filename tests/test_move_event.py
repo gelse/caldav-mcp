@@ -12,6 +12,7 @@ from unittest import mock
 from icalendar import Calendar, Event
 
 import server
+from server import Status
 
 
 class FakeEvent:
@@ -103,7 +104,7 @@ class MoveEventComponentTest(unittest.TestCase):
             uid="move-uid@caldav-mcp",
             target_calendar="dst",
         )
-        self.assertTrue(result.startswith("OK:"), msg=result)
+        self.assertEqual(result.status, Status.OK, msg=result)
         # The component's UID changed away from the original.
         ev = self.event.icalendar_component
         new_uid = ev.get("uid")
@@ -121,7 +122,7 @@ class MoveEventComponentTest(unittest.TestCase):
             uid="move-uid@caldav-mcp",
             target_calendar="dst",
         )
-        self.assertTrue(result.startswith("OK:"), msg=result)
+        self.assertEqual(result.status, Status.OK, msg=result)
         # Saved data must parse back into a VEVENT carrying the new UID.
         parsed = Calendar.from_ical(self.dst_cal.saved[0])
         ev = parsed.walk("VEVENT")[0]
@@ -134,7 +135,7 @@ class MoveEventComponentTest(unittest.TestCase):
             target_calendar="dst",
         )
         ev = self.event.icalendar_component
-        self.assertIn(f"new uid={ev.get('uid')}", result)
+        self.assertIn(f"new uid={ev.get('uid')}", result.message)
 
     def test_move_no_component_returns_error(self):
         self.event.icalendar_component = None
@@ -142,7 +143,8 @@ class MoveEventComponentTest(unittest.TestCase):
             uid="move-uid@caldav-mcp",
             target_calendar="dst",
         )
-        self.assertIn("no icalendar component", result)
+        self.assertEqual(result.status, Status.ERROR)
+        self.assertIn("no icalendar component", result.message)
         # Nothing was saved or deleted.
         self.assertEqual(self.dst_cal.saved, [])
         self.assertFalse(self.event.deleted)

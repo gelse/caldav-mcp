@@ -20,16 +20,16 @@ def _const_eq(a: str, b: str) -> bool:
     return result == 0
 
 
-def _require_auth() -> str:
+def _require_auth() -> "server.ToolResult | None":
     """Enforce the shared API token, if configured.
 
-    Returns an empty string on success, or an auth error string to return to the
-    client when authentication fails. Authentication is disabled (returns "") when
-    CALDAV_MCP_API_KEY is not set.
+    Returns ``None`` on success, or a structured auth :class:`ToolResult` to
+    return to the client when authentication fails. Authentication is disabled
+    (returns ``None``) when CALDAV_MCP_API_KEY is not set.
     """
     expected = server.API_KEY
     if not expected:
-        return ""
+        return None
 
     headers = server.get_http_headers()
     provided = ""
@@ -42,8 +42,10 @@ def _require_auth() -> str:
         provided = headers.get(server.HDR_API_KEY, "").strip()
 
     if provided and _const_eq(provided, expected):
-        return ""
-    return "ERROR: unauthorized - missing or invalid API token"
+        return None
+    return server.ToolResult.failure(
+        server.Status.AUTH, "unauthorized - missing or invalid API token"
+    )
 
 
 def _resolve_credentials() -> tuple:

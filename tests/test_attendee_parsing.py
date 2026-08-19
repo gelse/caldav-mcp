@@ -13,6 +13,7 @@ from unittest import mock
 from icalendar import Calendar, Event, vCalAddress, vText
 
 import server
+from server import Status
 
 
 class FakeEvent:
@@ -148,7 +149,7 @@ class AddAttendeeRoundtripTest(unittest.TestCase):
             uid="roundtrip-uid@caldav-mcp",
             email="new@example.com",
         )
-        self.assertTrue(result.startswith("OK:"), msg=result)
+        self.assertEqual(result.status, Status.OK, msg=result)
         self.event.save()  # simulate server persisting the serialized payload
         attendees = attendees_of(self.event)
         emails = sorted(str(a) for a in attendees)
@@ -171,7 +172,7 @@ class AddAttendeeRoundtripTest(unittest.TestCase):
             email="carol@example.com",
             role="OPT-PARTICIPANT",
         )
-        self.assertTrue(result.startswith("OK:"), msg=result)
+        self.assertEqual(result.status, Status.OK, msg=result)
         self.assertGreater(self.event.saves, 0)
         payload = self.event.data
         self.assertIn("ATTENDEE", payload)
@@ -203,7 +204,7 @@ class RemoveAttendeeRoundtripTest(unittest.TestCase):
             uid="roundtrip-uid@caldav-mcp",
             email="remove@example.com",
         )
-        self.assertTrue(result.startswith("OK:"), msg=result)
+        self.assertEqual(result.status, Status.OK, msg=result)
         self.event.save()
         attendees = attendees_of(self.event)
         emails = [str(a) for a in attendees]
@@ -224,7 +225,8 @@ class RemoveAttendeeRoundtripTest(unittest.TestCase):
             uid="roundtrip-uid@caldav-mcp",
             email="nobody@example.com",
         )
-        self.assertIn("not found", result)
+        self.assertEqual(result.status, Status.NOT_FOUND)
+        self.assertIn("not found", result.message)
         self.event.save()
         emails = [str(a) for a in attendees_of(self.event)]
         self.assertEqual(
@@ -250,7 +252,7 @@ class MoveEventRoundtripTest(unittest.TestCase):
             uid="move-uid@caldav-mcp",
             target_calendar="dst",
         )
-        self.assertTrue(result.startswith("OK:"), msg=result)
+        self.assertEqual(result.status, Status.OK, msg=result)
         self.assertEqual(len(self.dst_cal.saved), 1)
         # Destination payload must re-parse to a VEVENT with a fresh UID that
         # still carries the original attendee.

@@ -17,6 +17,7 @@ from unittest import mock
 from icalendar import Calendar
 
 import server
+from server import Status
 
 
 class FakeObject:
@@ -90,7 +91,8 @@ class EventRoundtripTest(unittest.TestCase):
         """Create an event and return the re-parsed VEVENT component."""
         summary = kwargs.get("summary", "s")
         result = server.caldav_create_event(**kwargs)
-        self.assertTrue(result.startswith(f"OK: Event '{summary}'"), msg=result)
+        self.assertEqual(result.status, Status.OK, msg=result)
+        self.assertIn(f"Event '{summary}'", result.message)
         return self.fake_cal.last_event()
 
     def _event_from_payload(self, index=-1):

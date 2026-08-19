@@ -12,6 +12,7 @@ from unittest import mock
 from icalendar import Calendar, Event
 
 import server
+from server import Status
 
 
 class FakeEvent:
@@ -102,7 +103,7 @@ class AddAttendeeComponentTest(unittest.TestCase):
             uid="test-uid@caldav-mcp",
             email="alice@example.com",
         )
-        self.assertTrue(result.startswith("OK:"), msg=result)
+        self.assertEqual(result.status, Status.OK, msg=result)
         attendees = self._attendees()
         self.assertEqual(len(attendees), 1)
         a = attendees[0]
@@ -140,7 +141,8 @@ class AddAttendeeComponentTest(unittest.TestCase):
             uid="test-uid@caldav-mcp",
             email="nobody@example.com",
         )
-        self.assertIn("no icalendar component", result)
+        self.assertEqual(result.status, Status.ERROR)
+        self.assertIn("no icalendar component", result.message)
 
     def test_already_mailto_attendee_not_duplicated(self):
         server.caldav_add_attendee(uid="test-uid@caldav-mcp", email="a@example.com")
@@ -177,7 +179,7 @@ class RemoveAttendeeComponentTest(unittest.TestCase):
             uid="test-uid@caldav-mcp",
             email="alice@example.com",
         )
-        self.assertTrue(result.startswith("OK:"), msg=result)
+        self.assertEqual(result.status, Status.OK, msg=result)
         self.assertEqual(self._attendees(), [])
 
     def test_remove_handles_mailto_prefix(self):
@@ -186,7 +188,7 @@ class RemoveAttendeeComponentTest(unittest.TestCase):
             uid="test-uid@caldav-mcp",
             email="mailto:alice@example.com",
         )
-        self.assertTrue(result.startswith("OK:"), msg=result)
+        self.assertEqual(result.status, Status.OK, msg=result)
         self.assertEqual(self._attendees(), [])
 
     def test_remove_is_case_insensitive(self):
@@ -195,7 +197,7 @@ class RemoveAttendeeComponentTest(unittest.TestCase):
             uid="test-uid@caldav-mcp",
             email="ALICE@example.com",
         )
-        self.assertTrue(result.startswith("OK:"), msg=result)
+        self.assertEqual(result.status, Status.OK, msg=result)
         self.assertEqual(self._attendees(), [])
 
     def test_remove_leaves_other_attendees(self):
@@ -205,7 +207,7 @@ class RemoveAttendeeComponentTest(unittest.TestCase):
             uid="test-uid@caldav-mcp",
             email="alice@example.com",
         )
-        self.assertTrue(result.startswith("OK:"), msg=result)
+        self.assertEqual(result.status, Status.OK, msg=result)
         emails = sorted(str(a) for a in self._attendees())
         self.assertEqual(emails, ["mailto:bob@example.com"])
 
@@ -215,7 +217,8 @@ class RemoveAttendeeComponentTest(unittest.TestCase):
             uid="test-uid@caldav-mcp",
             email="nobody@example.com",
         )
-        self.assertIn("not found", result)
+        self.assertEqual(result.status, Status.NOT_FOUND)
+        self.assertIn("not found", result.message)
         self.assertEqual(len(self._attendees()), 1)
 
     def test_remove_no_attendees_not_found(self):
@@ -223,7 +226,8 @@ class RemoveAttendeeComponentTest(unittest.TestCase):
             uid="test-uid@caldav-mcp",
             email="alice@example.com",
         )
-        self.assertIn("not found", result)
+        self.assertEqual(result.status, Status.NOT_FOUND)
+        self.assertIn("not found", result.message)
 
     def test_remove_no_component_returns_error(self):
         self.event.icalendar_component = None
@@ -231,7 +235,8 @@ class RemoveAttendeeComponentTest(unittest.TestCase):
             uid="test-uid@caldav-mcp",
             email="alice@example.com",
         )
-        self.assertIn("no icalendar component", result)
+        self.assertEqual(result.status, Status.ERROR)
+        self.assertIn("no icalendar component", result.message)
 
 
 if __name__ == "__main__":

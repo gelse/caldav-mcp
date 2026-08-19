@@ -12,7 +12,7 @@ from fastmcp import FastMCP
 # Create the shared FastMCP instance first: :mod:`caldav_mcp.tools` does
 # ``from caldav_mcp import mcp`` at import time and will fail if ``mcp`` is not
 # already defined during the partial package initialisation.
-mcp = FastMCP(
+mcp: FastMCP = FastMCP(
     "caldav-mcp",
     instructions=(
         "CalDAV calendar access tool. Can list calendars, search events, "
@@ -73,7 +73,10 @@ from caldav_mcp.errors import (  # noqa: E402
     CalDAVError,
     NotFoundError,
     ServerError,
+    Status,
+    ToolResult,
     _log_exception,
+    _render_error,
     log,
 )
 from caldav_mcp.tools import (  # noqa: F401, E402
@@ -96,11 +99,14 @@ from caldav_mcp.tools import (  # noqa: F401, E402
 __all__ = [
     "mcp",
     # errors
+    "Status",
     "AuthError",
     "CalDAVError",
     "NotFoundError",
     "ServerError",
+    "ToolResult",
     "_log_exception",
+    "_render_error",
     "log",
     # config
     "API_KEY",

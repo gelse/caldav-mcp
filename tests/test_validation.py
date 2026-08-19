@@ -11,6 +11,7 @@ import unittest
 from unittest import mock
 
 import server
+from server import Status
 
 
 class ValidatePriorityTest(unittest.TestCase):
@@ -101,21 +102,24 @@ class CreateEventValidationTest(unittest.TestCase):
         result = server.caldav_create_event(
             summary="s", start="2026-01-01T10:00:00Z", priority="abc"
         )
-        self.assertEqual(result, "ERROR: priority must be an integer")
+        self.assertEqual(result.status, Status.ERROR)
+        self.assertIn("priority must be an integer", result.message)
         self.assertIsNone(self.fake_cal.saved)
 
     def test_invalid_priority_out_of_range_returns_error(self):
         result = server.caldav_create_event(
             summary="s", start="2026-01-01T10:00:00Z", priority="10"
         )
-        self.assertEqual(result, "ERROR: priority must be between 0 and 9")
+        self.assertEqual(result.status, Status.ERROR)
+        self.assertIn("priority must be between 0 and 9", result.message)
         self.assertIsNone(self.fake_cal.saved)
 
     def test_invalid_rrule_returns_error(self):
         result = server.caldav_create_event(
             summary="s", start="2026-01-01T10:00:00Z", rrule="NOT-A-RRULE;;"
         )
-        self.assertEqual(result, "ERROR: invalid RRULE")
+        self.assertEqual(result.status, Status.ERROR)
+        self.assertIn("invalid RRULE", result.message)
         self.assertIsNone(self.fake_cal.saved)
 
     def test_valid_priority_and_rrule_succeed(self):
@@ -125,14 +129,14 @@ class CreateEventValidationTest(unittest.TestCase):
             priority="5",
             rrule="FREQ=DAILY;COUNT=5",
         )
-        self.assertTrue(result.startswith("OK:"), msg=f"call failed: {result!r}")
+        self.assertEqual(result.status, Status.OK, msg=f"call failed: {result!r}")
         self.assertIsNotNone(self.fake_cal.saved)
 
     def test_empty_priority_and_empty_rrule_succeed(self):
         result = server.caldav_create_event(
             summary="s", start="2026-01-01T10:00:00Z"
         )
-        self.assertTrue(result.startswith("OK:"), msg=f"call failed: {result!r}")
+        self.assertEqual(result.status, Status.OK, msg=f"call failed: {result!r}")
         self.assertIsNotNone(self.fake_cal.saved)
 
 

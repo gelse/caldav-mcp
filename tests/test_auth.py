@@ -1,7 +1,7 @@
 """Unit tests for the shared API-token auth guard in server.py.
 
 These tests verify _const_eq() and _require_auth(), plus the fact that
-guarded tools short-circuit to the unauthorized error before resolving
+guarded tools short-circuit to the unauthorized result before resolving
 CalDAV credentials. Auth headers are simulated by patching
 server.get_http_headers() to return a dict of lowercase header keys.
 """
@@ -10,8 +10,7 @@ import unittest
 from unittest import mock
 
 import server
-
-UNAUTHORIZED = "ERROR: unauthorized - missing or invalid API token"
+from server import Status
 
 
 class ConstEqTest(unittest.TestCase):
@@ -35,7 +34,7 @@ class RequireAuthTest(unittest.TestCase):
     def test_disabled_auth_passes(self):
         with mock.patch.object(server, "API_KEY", ""):
             result = server._require_auth()
-        self.assertEqual(result, "")
+        self.assertIsNone(result)
 
     def test_valid_authorization_bearer_passes(self):
         with mock.patch.object(server, "API_KEY", "secret-token"):
@@ -45,7 +44,7 @@ class RequireAuthTest(unittest.TestCase):
                 return_value={"authorization": "Bearer secret-token"},
             ):
                 result = server._require_auth()
-        self.assertEqual(result, "")
+        self.assertIsNone(result)
 
     def test_valid_x_api_key_passes(self):
         with mock.patch.object(server, "API_KEY", "secret-token"):
@@ -55,13 +54,13 @@ class RequireAuthTest(unittest.TestCase):
                 return_value={"x-api-key": "secret-token"},
             ):
                 result = server._require_auth()
-        self.assertEqual(result, "")
+        self.assertIsNone(result)
 
     def test_missing_token_fails(self):
         with mock.patch.object(server, "API_KEY", "secret-token"):
             with mock.patch.object(server, "get_http_headers", return_value={}):
                 result = server._require_auth()
-        self.assertEqual(result, UNAUTHORIZED)
+        self.assertEqual(result.status, Status.AUTH)
 
     def test_wrong_token_fails(self):
         with mock.patch.object(server, "API_KEY", "secret-token"):
@@ -71,7 +70,7 @@ class RequireAuthTest(unittest.TestCase):
                 return_value={"authorization": "Bearer wrong"},
             ):
                 result = server._require_auth()
-        self.assertEqual(result, UNAUTHORIZED)
+        self.assertEqual(result.status, Status.AUTH)
 
     def test_bearer_scheme_case_insensitive_passes(self):
         with mock.patch.object(server, "API_KEY", "secret-token"):
@@ -81,7 +80,7 @@ class RequireAuthTest(unittest.TestCase):
                 return_value={"authorization": "bearer secret-token"},
             ):
                 result = server._require_auth()
-        self.assertEqual(result, "")
+        self.assertIsNone(result)
 
     def test_malformed_authorization_falls_back_to_api_key(self):
         with mock.patch.object(server, "API_KEY", "secret-token"):
@@ -94,7 +93,7 @@ class RequireAuthTest(unittest.TestCase):
                 },
             ):
                 result = server._require_auth()
-        self.assertEqual(result, "")
+        self.assertIsNone(result)
 
 
 class GuardedToolRejectsUnauthenticatedTest(unittest.TestCase):
@@ -107,7 +106,7 @@ class GuardedToolRejectsUnauthenticatedTest(unittest.TestCase):
                     side_effect=AssertionError("credentials must not be resolved"),
                 ):
                     result = server.caldav_list_calendars()
-        self.assertEqual(result, UNAUTHORIZED)
+        self.assertEqual(result.status, Status.AUTH)
 
 
 if __name__ == "__main__":
