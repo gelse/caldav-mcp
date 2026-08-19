@@ -1,19 +1,22 @@
 IMAGE_NAME := caldav-mcp
 IMAGE_TAG := latest
 
+# Active Python interpreter; set to a local venv for development (e.g. .venv/bin/python)
+PYTHON ?= python3
+
 .PHONY: build
 build:
 	docker build -t $(IMAGE_NAME):$(IMAGE_TAG) .
 
 .PHONY: test
 test:
-	./.venv/bin/pytest tests/
+	$(PYTHON) -m pytest tests/
 
 .PHONY: lint
-lint: ; ./.venv/bin/ruff check . && ./.venv/bin/ruff format --check .
+lint: ; $(PYTHON) -m ruff check . && $(PYTHON) -m ruff format --check .
 
 .PHONY: typecheck
-typecheck: ; ./.venv/bin/mypy server.py caldav_mcp/
+typecheck: ; $(PYTHON) -m mypy server.py caldav_mcp/
 
 .PHONY: deps-check
 deps-check:
