@@ -7,52 +7,43 @@ that a fixed "now" produces a contiguous 24-hour day window through
 wall clock) and network-free.
 """
 
-import unittest
 from datetime import UTC, datetime, timedelta
 from unittest import mock
 
 import server
 
 
-class DayBoundaryTest(unittest.TestCase):
-    """Day-boundary correctness for _start_of_day / _now."""
+def test_start_of_day_preserves_tz_and_zeroes_time():
+    dt = datetime(2026, 8, 17, 15, 30, 45, 123456, tzinfo=UTC)
+    sd = server._start_of_day(dt)
+    assert sd == datetime(2026, 8, 17, 0, 0, 0, 0, tzinfo=UTC)
+    assert sd.tzinfo is not None
+    assert sd.hour == 0
+    assert sd.minute == 0
+    assert sd.second == 0
+    assert sd.microsecond == 0
 
-    def test_start_of_day_preserves_tz_and_zeroes_time(self):
-        dt = datetime(2026, 8, 17, 15, 30, 45, 123456, tzinfo=UTC)
-        sd = server._start_of_day(dt)
-        self.assertEqual(
-            sd,
-            datetime(2026, 8, 17, 0, 0, 0, 0, tzinfo=UTC),
-        )
-        self.assertIsNotNone(sd.tzinfo)
-        self.assertEqual(sd.hour, 0)
-        self.assertEqual(sd.minute, 0)
-        self.assertEqual(sd.second, 0)
-        self.assertEqual(sd.microsecond, 0)
 
-    def test_now_is_timezone_aware(self):
+def test_now_is_timezone_aware():
+    now = server._now()
+    assert now.tzinfo is not None
+
+
+def test_fixed_now_contiguous_24h_day_window():
+    fixed_now = datetime(2026, 8, 17, 15, 30, 45, 123456, tzinfo=UTC)
+    with mock.patch.object(server, "_now", return_value=fixed_now):
         now = server._now()
-        self.assertIsNotNone(now.tzinfo)
-
-    def test_fixed_now_contiguous_24h_day_window(self):
-        fixed_now = datetime(2026, 8, 17, 15, 30, 45, 123456, tzinfo=UTC)
-        with mock.patch.object(server, "_now", return_value=fixed_now):
-            now = server._now()
-            start = server._start_of_day(now)
-            end = start + timedelta(days=1)
-        # Boundary: start at local midnight with all time fields zeroed.
-        self.assertEqual(start.hour, 0)
-        self.assertEqual(start.minute, 0)
-        self.assertEqual(start.second, 0)
-        self.assertEqual(start.microsecond, 0)
-        # Contiguous 24-hour window: end == start + 1 day with same tz.
-        self.assertEqual(end - start, timedelta(days=1))
-        self.assertEqual(end.hour, 0)
-        self.assertEqual(end.minute, 0)
-        self.assertEqual(end.second, 0)
-        self.assertEqual(end.microsecond, 0)
-        self.assertEqual(end.tzinfo, start.tzinfo)
-
-
-if __name__ == "__main__":
-    unittest.main()
+        start = server._start_of_day(now)
+        end = start + timedelta(days=1)
+    # Boundary: start at local midnight with all time fields zeroed.
+    assert start.hour == 0
+    assert start.minute == 0
+    assert start.second == 0
+    assert start.microsecond == 0
+    # Contiguous 24-hour window: end == start + 1 day with same tz.
+    assert end - start == timedelta(days=1)
+    assert end.hour == 0
+    assert end.minute == 0
+    assert end.second == 0
+    assert end.microsecond == 0
+    assert end.tzinfo == start.tzinfo
