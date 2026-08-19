@@ -75,8 +75,8 @@ to the public internet.**
 - **Dependencies**: installed from [`requirements.txt`](./requirements.txt) (or via the
   `dependencies` list in [`pyproject.toml`](./pyproject.toml)). Includes `icalendar`, which is used
   to build and correctly RFC 5545-escape event payloads.
-  Dependency versions are **pinned** in `requirements.txt` and `pyproject.toml` for reproducible
-  builds; update both files together when bumping a dependency.
+  Dependency versions are **pinned** in both files for reproducible builds;
+  `make deps-check` verifies they stay in sync.
 - **Tests**: unit tests live in [`tests/`](./tests) and run with `pytest` via
   the Makefile:
 
