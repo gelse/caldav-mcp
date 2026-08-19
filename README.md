@@ -77,22 +77,24 @@ to the public internet.**
   to build and correctly RFC 5545-escape event payloads.
   Dependency versions are **pinned** in `requirements.txt` and `pyproject.toml` for reproducible
   builds; update both files together when bumping a dependency.
-- **Tests**: unit tests live in [`tests/`](./tests) and run with `pytest` via the Makefile:
+- **Tests**: unit tests live in [`tests/`](./tests) and run with `pytest` via
+  the Makefile:
 
   ```bash
   make test
   ```
 
-  This uses the project virtual environment at `./.venv` (`./.venv/bin/pytest`). Tests can also
-  be run directly with the standard library if preferred:
+  This uses the project virtual environment at `./.venv`
+  (`./.venv/bin/pytest`). The standard library `unittest` runner also works
+  but is not used in CI:
 
   ```bash
   python -m unittest discover -s tests -v
   ```
 
-  The suite covers escaping of special characters (`\`, `,`, `;`, newlines), attendees,
-  priority/rrule validation, and edge cases (emoji, empty optional fields) for
-  `caldav_create_event`.
+  The suite covers escaping of special characters (`\`, `,`, `;`, newlines),
+  attendees, priority/rrule validation, and edge cases (emoji, empty optional
+  fields) for `caldav_create_event`.
 
 ## Docker Compose
 
