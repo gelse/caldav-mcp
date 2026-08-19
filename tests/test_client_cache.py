@@ -15,6 +15,7 @@ from caldav_mcp.client_cache import ClientCache
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 class _FakeSession:
     """Minimal stand-in for ``requests.Session`` used by ``DAVClient``."""
 
@@ -37,6 +38,7 @@ class _FakeDAVClient:
 # ---------------------------------------------------------------------------
 # ClientCache unit tests
 # ---------------------------------------------------------------------------
+
 
 def test_empty_cache_returns_none():
     cache = ClientCache(max_size=4, ttl_seconds=60)
@@ -235,6 +237,7 @@ def test_size_does_not_grow_on_replace():
 # ---------------------------------------------------------------------------
 # Integration test: with_caldav_client decorator uses the cache
 # ---------------------------------------------------------------------------
+
 
 def test_decorator_uses_cache_on_second_call():
     """Second call with same credentials reuses the cached client."""

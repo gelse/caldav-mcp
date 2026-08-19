@@ -21,6 +21,7 @@ def _setup():
 
 # ── caldav_add_attendee ────────────────────────────────────────────────
 
+
 def test_adds_attendee_with_component_api():
     fake_cal, patchers = _setup()
     try:
@@ -109,6 +110,7 @@ def test_already_mailto_attendee_not_duplicated():
 
 
 # ── caldav_remove_attendee ─────────────────────────────────────────────
+
 
 def test_removes_attendee():
     fake_cal, patchers = _setup()

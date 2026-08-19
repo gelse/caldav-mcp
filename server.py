@@ -10,7 +10,9 @@ provides the ``main()`` entrypoint that launches the FastMCP HTTP server.
 import asyncio
 import os  # noqa: F401  (re-exported; tests assert ``server.os.environ``)
 
-from caldav import DAVClient  # noqa: F401  (re-exported)  # type: ignore[attr-defined]
+from caldav import (
+    DAVClient,  # noqa: F401  (re-exported)  # type: ignore[attr-defined]  # caldav has no type stubs
+)
 from fastmcp.server.dependencies import get_http_headers  # noqa: F401  (re-exported)
 
 from caldav_mcp import (

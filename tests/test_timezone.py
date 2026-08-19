@@ -43,14 +43,13 @@ def test_tz_invalid_returns_utc():
 def test_tz_invalid_logs_warning_and_falls_back_to_utc():
     from caldav_mcp import config as config_module
 
-    with mock.patch.dict(server.os.environ, {"TZ": "Not/AZone"}), mock.patch.object(
-        config_module.logger, "warning"
-    ) as log_warning:
+    with (
+        mock.patch.dict(server.os.environ, {"TZ": "Not/AZone"}),
+        mock.patch.object(config_module.logger, "warning") as log_warning,
+    ):
         tz = server._server_tz()
     assert tz == ZoneInfo("UTC")
-    log_warning.assert_called_once_with(
-        "Unknown timezone %r, falling back to UTC", "Not/AZone"
-    )
+    log_warning.assert_called_once_with("Unknown timezone %r, falling back to UTC", "Not/AZone")
 
 
 def test_now_carries_server_timezone():

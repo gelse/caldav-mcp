@@ -56,8 +56,14 @@ def test_event_to_dict_maps_all_fields():
 
     assert isinstance(result, dict)
     assert list(result.keys()) == [
-        "uid", "summary", "dtstart", "dtend", "location", "description",
-        "categories", "attendees",
+        "uid",
+        "summary",
+        "dtstart",
+        "dtend",
+        "location",
+        "description",
+        "categories",
+        "attendees",
     ]
     assert result["uid"] == "event-123"
     assert result["summary"] == "Team standup"
@@ -125,9 +131,7 @@ def test_attendee_str_with_role_only():
     attendee = vCalAddress("mailto:bob@example.com")
     attendee.params["ROLE"] = "REQ-PARTICIPANT"
 
-    assert server._attendee_str(attendee) == (
-        "mailto:bob@example.com ROLE=REQ-PARTICIPANT"
-    )
+    assert server._attendee_str(attendee) == ("mailto:bob@example.com ROLE=REQ-PARTICIPANT")
 
 
 def test_attendee_str_no_params():

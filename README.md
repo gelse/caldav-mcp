@@ -63,6 +63,15 @@ to the public internet.**
 
 ## Development
 
+- **Checks**: linting, type checking and tests are enforced via the Makefile and run
+  automatically in CI:
+
+  ```bash
+  make lint  # runs ruff linter and format check
+  make typecheck  # runs mypy type checker
+  make check  # runs all checks (lint + typecheck + tests)
+  ```
+
 - **Dependencies**: installed from [`requirements.txt`](./requirements.txt) (or via the
   `dependencies` list in [`pyproject.toml`](./pyproject.toml)). Includes `icalendar`, which is used
   to build and correctly RFC 5545-escape event payloads.

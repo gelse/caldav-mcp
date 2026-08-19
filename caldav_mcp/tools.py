@@ -50,6 +50,7 @@ _REMOTE_ERRORS = (
 # Internal helpers
 # ---------------------------------------------------------------------------
 
+
 def _ok(message: str = "", data=None) -> ToolResult:
     return server.ToolResult.success(message=message, data=data)
 
@@ -81,7 +82,8 @@ def with_caldav_client(needs_calendar=True):
         # Build a public signature: original params minus 'client' and 'cal'.
         sig = inspect.signature(fn)
         public_params = [
-            p for name, p in sig.parameters.items()
+            p
+            for name, p in sig.parameters.items()
             if name != "client" and (not needs_calendar or name != "cal")
         ]
 
@@ -95,7 +97,7 @@ def with_caldav_client(needs_calendar=True):
                 # Try to get a cached DAVClient first; create a new one on miss.
                 client = client_cache.get(url, user)
                 if client is None:
-                    client = server.DAVClient(url=url, username=user, password=pw)  # type: ignore[operator]
+                    client = server.DAVClient(url=url, username=user, password=pw)  # type: ignore[operator]  # DAVClient accepts dynamic kwargs
                     client_cache.put(url, user, client)
 
                 if needs_calendar:
@@ -108,18 +110,21 @@ def with_caldav_client(needs_calendar=True):
         wrapper.__name__ = fn.__name__
         wrapper.__doc__ = fn.__doc__
         wrapper.__annotations__ = {
-            k: v for k, v in fn.__annotations__.items()
+            k: v
+            for k, v in fn.__annotations__.items()
             if k != "return" and (k != "client") and (not needs_calendar or k != "cal")
         }
         wrapper.__annotations__["return"] = fn.__annotations__.get("return")
-        wrapper.__signature__ = sig.replace(parameters=public_params)  # type: ignore[attr-defined]
+        wrapper.__signature__ = sig.replace(parameters=public_params)  # type: ignore[attr-defined]  # caldav internals used for auth
         return wrapper
+
     return decorator
 
 
 # ---------------------------------------------------------------------------
 # Tool handlers
 # ---------------------------------------------------------------------------
+
 
 @mcp.tool()
 @with_caldav_client(needs_calendar=False)
@@ -148,8 +153,7 @@ def caldav_get_events(
         return _empty("No events in range")
     return _ok(
         message="\n".join(
-            f"- [{d['uid']}] {d['summary']} @ {d['dtstart']} -> {d['dtend']}"
-            for d in data
+            f"- [{d['uid']}] {d['summary']} @ {d['dtstart']} -> {d['dtend']}" for d in data
         ),
         data=data,
     )
@@ -162,7 +166,7 @@ def caldav_get_today_events(calendar_name: str = "") -> ToolResult:
     if error:
         return error
     today = server._start_of_day(server._now())
-    return server.caldav_get_events(  # type: ignore[call-arg]
+    return server.caldav_get_events(  # type: ignore[call-arg]  # caldav API undocumented params
         calendar_name=calendar_name,
         start=today.isoformat(),
         end=(today + timedelta(days=1)).isoformat(),
@@ -176,7 +180,7 @@ def caldav_get_week_events(calendar_name: str = "") -> ToolResult:
     if error:
         return error
     now = server._start_of_day(server._now())
-    return server.caldav_get_events(  # type: ignore[call-arg]
+    return server.caldav_get_events(  # type: ignore[call-arg]  # caldav API undocumented params
         calendar_name=calendar_name,
         start=now.isoformat(),
         end=(now + timedelta(days=7)).isoformat(),
@@ -334,9 +338,7 @@ def caldav_add_attendee(
     comp.add("attendee", attendee, encode=False)
     event.data = comp.to_ical().decode("utf-8")
     event.save()
-    return _ok(
-        message=f"Added attendee {email} to event {uid}", data={"uid": uid, "email": email}
-    )
+    return _ok(message=f"Added attendee {email} to event {uid}", data={"uid": uid, "email": email})
 
 
 @mcp.tool()
@@ -381,9 +383,7 @@ def caldav_remove_attendee(
 
 @mcp.tool()
 @with_caldav_client()
-def caldav_list_attendees(
-    client, cal, uid: str, calendar_name: str = ""
-) -> ToolResult:
+def caldav_list_attendees(client, cal, uid: str, calendar_name: str = "") -> ToolResult:
     """List attendees of an event."""
     event = cal.event_by_uid(uid)
     d = server._event_to_dict(event)
@@ -398,9 +398,7 @@ def caldav_list_attendees(
 
 @mcp.tool()
 @with_caldav_client()
-def caldav_delete_event(
-    client, cal, uid: str, calendar_name: str = ""
-) -> ToolResult:
+def caldav_delete_event(client, cal, uid: str, calendar_name: str = "") -> ToolResult:
     """Delete an event by UID."""
     event = cal.event_by_uid(uid)
     event.delete()
@@ -419,7 +417,7 @@ def caldav_move_event(uid: str, target_calendar: str, source_calendar: str = "")
         # Use cached DAVClient (same pattern as with_caldav_client).
         client = client_cache.get(url, user)
         if client is None:
-            client = server.DAVClient(url=url, username=user, password=pw)  # type: ignore[operator]
+            client = server.DAVClient(url=url, username=user, password=pw)  # type: ignore[operator]  # DAVClient accepts dynamic kwargs
             client_cache.put(url, user, client)
 
         src_cal = server._get_calendar(client, source_calendar or None)
@@ -442,26 +440,20 @@ def caldav_move_event(uid: str, target_calendar: str, source_calendar: str = "")
 
 @mcp.tool()
 @with_caldav_client()
-def caldav_search_events(
-    client, cal, query: str, calendar_name: str = ""
-) -> ToolResult:
+def caldav_search_events(client, cal, query: str, calendar_name: str = "") -> ToolResult:
     """Search events by text (summary/description/location)."""
     events = cal.search()
     q = query.lower()
     matches = []
     for event in events:
         d = server._event_to_dict(event)
-        blob = " ".join(
-            [d["summary"], d["description"], d["location"], d["categories"]]
-        ).lower()
+        blob = " ".join([d["summary"], d["description"], d["location"], d["categories"]]).lower()
         if q in blob:
             matches.append(d)
     if not matches:
         return _empty(f"No events matching '{query}'")
     return _ok(
-        message="\n".join(
-            f"- [{d['uid']}] {d['summary']} @ {d['dtstart']}" for d in matches
-        ),
+        message="\n".join(f"- [{d['uid']}] {d['summary']} @ {d['dtstart']}" for d in matches),
         data=matches,
     )
 
