@@ -7,138 +7,117 @@ The end-to-end tests reuse the fake-network pattern from
 ``tests/test_create_event.py`` so everything stays network-free and deterministic.
 """
 
-import unittest
-from unittest import mock
+
+from conftest import FakeCalendar, patch_caldav
 
 import server
 from server import Status
 
 
-class ValidatePriorityTest(unittest.TestCase):
-    """Behavior of ``_validate_priority`` (returns ``(int|None, str|None)``)."""
-
-    def test_empty_returns_none(self):
-        self.assertEqual(server._validate_priority(""), (None, None))
-
-    def test_valid(self):
-        self.assertEqual(server._validate_priority("0"), (0, None))
-        self.assertEqual(server._validate_priority("9"), (9, None))
-
-    def test_non_integer(self):
-        _, err = server._validate_priority("abc")
-        self.assertEqual(err, "priority must be an integer")
-
-    def test_out_of_range(self):
-        _, err = server._validate_priority("10")
-        self.assertEqual(err, "priority must be between 0 and 9")
-        _, err = server._validate_priority("-1")
-        self.assertEqual(err, "priority must be between 0 and 9")
+def test_priority_empty_returns_none():
+    assert server._validate_priority("") == (None, None)
 
 
-class ValidateRruleTest(unittest.TestCase):
-    """Behavior of ``_validate_rrule`` (returns bool, True = empty or valid)."""
-
-    def test_empty_is_true(self):
-        self.assertTrue(server._validate_rrule(""))
-
-    def test_valid_daily(self):
-        self.assertTrue(server._validate_rrule("FREQ=DAILY"))
-
-    def test_invalid(self):
-        self.assertFalse(server._validate_rrule("NOT-A-RRULE;;"))
+def test_priority_valid():
+    assert server._validate_priority("0") == (0, None)
+    assert server._validate_priority("9") == (9, None)
 
 
-class FakeCalendar:
-    """Minimal stand-in for a caldav Calendar object that records saved payloads."""
-
-    def __init__(self, name=""):
-        self.name = name
-        self.saved = None
-
-    def save_event(self, data):
-        self.saved = data
+def test_priority_non_integer():
+    _, err = server._validate_priority("abc")
+    assert err == "priority must be an integer"
 
 
-class FakePrincipal:
-    def __init__(self, calendars):
-        self._calendars = calendars
-
-    def calendars(self):
-        return self._calendars
-
-
-class FakeClient:
-    def __init__(self, calendars):
-        self._calendars = calendars
-
-    def principal(self):
-        return FakePrincipal(self._calendars)
+def test_priority_out_of_range():
+    _, err = server._validate_priority("10")
+    assert err == "priority must be between 0 and 9"
+    _, err = server._validate_priority("-1")
+    assert err == "priority must be between 0 and 9"
 
 
-def patch_network(fake_cal):
-    """Patch the CalDAV boundaries so create_event uses a fake calendar."""
-    return [
-        mock.patch.object(server, "_resolve_credentials", return_value=("u", "p", "w")),
-        mock.patch.object(server, "DAVClient", return_value=FakeClient([fake_cal])),
-        mock.patch.object(server, "_get_calendar", return_value=fake_cal),
-    ]
+def test_rrule_empty_is_true():
+    assert server._validate_rrule("") is True
 
 
-class CreateEventValidationTest(unittest.TestCase):
-    """End-to-end rejection and success through ``caldav_create_event``."""
+def test_rrule_valid_daily():
+    assert server._validate_rrule("FREQ=DAILY") is True
 
-    def setUp(self):
-        self.fake_cal = FakeCalendar()
-        self.patchers = patch_network(self.fake_cal)
-        for p in self.patchers:
-            p.start()
-        self.addCleanup(self._stop_patchers)
 
-    def _stop_patchers(self):
-        for p in self.patchers:
-            p.stop()
+def test_rrule_invalid():
+    assert server._validate_rrule("NOT-A-RRULE;;") is False
 
-    def test_invalid_priority_non_integer_returns_error(self):
+
+def test_invalid_priority_non_integer_returns_error():
+    fake_cal = FakeCalendar()
+    patchers = patch_caldav(fake_cal)
+    try:
         result = server.caldav_create_event(
             summary="s", start="2026-01-01T10:00:00Z", priority="abc"
         )
-        self.assertEqual(result.status, Status.ERROR)
-        self.assertIn("priority must be an integer", result.message)
-        self.assertIsNone(self.fake_cal.saved)
+        assert result.status == Status.ERROR
+        assert "priority must be an integer" in result.message
+        assert fake_cal.saved == []
+    finally:
+        for p in patchers:
+            p.stop()
 
-    def test_invalid_priority_out_of_range_returns_error(self):
+
+def test_invalid_priority_out_of_range_returns_error():
+    fake_cal = FakeCalendar()
+    patchers = patch_caldav(fake_cal)
+    try:
         result = server.caldav_create_event(
             summary="s", start="2026-01-01T10:00:00Z", priority="10"
         )
-        self.assertEqual(result.status, Status.ERROR)
-        self.assertIn("priority must be between 0 and 9", result.message)
-        self.assertIsNone(self.fake_cal.saved)
+        assert result.status == Status.ERROR
+        assert "priority must be between 0 and 9" in result.message
+        assert fake_cal.saved == []
+    finally:
+        for p in patchers:
+            p.stop()
 
-    def test_invalid_rrule_returns_error(self):
+
+def test_invalid_rrule_returns_error():
+    fake_cal = FakeCalendar()
+    patchers = patch_caldav(fake_cal)
+    try:
         result = server.caldav_create_event(
             summary="s", start="2026-01-01T10:00:00Z", rrule="NOT-A-RRULE;;"
         )
-        self.assertEqual(result.status, Status.ERROR)
-        self.assertIn("invalid RRULE", result.message)
-        self.assertIsNone(self.fake_cal.saved)
+        assert result.status == Status.ERROR
+        assert "invalid RRULE" in result.message
+        assert fake_cal.saved == []
+    finally:
+        for p in patchers:
+            p.stop()
 
-    def test_valid_priority_and_rrule_succeed(self):
+
+def test_valid_priority_and_rrule_succeed():
+    fake_cal = FakeCalendar()
+    patchers = patch_caldav(fake_cal)
+    try:
         result = server.caldav_create_event(
             summary="s",
             start="2026-01-01T10:00:00Z",
             priority="5",
             rrule="FREQ=DAILY;COUNT=5",
         )
-        self.assertEqual(result.status, Status.OK, msg=f"call failed: {result!r}")
-        self.assertIsNotNone(self.fake_cal.saved)
+        assert result.status == Status.OK, f"call failed: {result!r}"
+        assert fake_cal.saved
+    finally:
+        for p in patchers:
+            p.stop()
 
-    def test_empty_priority_and_empty_rrule_succeed(self):
+
+def test_empty_priority_and_empty_rrule_succeed():
+    fake_cal = FakeCalendar()
+    patchers = patch_caldav(fake_cal)
+    try:
         result = server.caldav_create_event(
             summary="s", start="2026-01-01T10:00:00Z"
         )
-        self.assertEqual(result.status, Status.OK, msg=f"call failed: {result!r}")
-        self.assertIsNotNone(self.fake_cal.saved)
-
-
-if __name__ == "__main__":
-    unittest.main()
+        assert result.status == Status.OK, f"call failed: {result!r}"
+        assert fake_cal.saved
+    finally:
+        for p in patchers:
+            p.stop()
