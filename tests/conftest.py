@@ -23,9 +23,11 @@ class FakeEvent:
     ``delete()`` records the call for later assertions.
     """
 
-    def __init__(self, ical):
+    def __init__(self, ical, uid=None):
         events = ical.walk("VEVENT")
         self.icalendar_component = events[0]  # _comp reads this attribute
+        if uid is not None:
+            self.icalendar_component["uid"] = uid
         self.data = self.icalendar_component.to_ical().decode("utf-8")
         self.saves = 0
         self.deleted = False
@@ -42,17 +44,43 @@ class FakeEvent:
 
 
 class FakeCalendar:
-    """Stand-in for a caldav Calendar: returns an event by UID, or saves data.
+    """Stand-in for a caldav Calendar: returns events by UID or a search, or saves.
 
+    Events are stored internally as a list (``_events``). ``event_by_uid()``
+    looks up events by UID via a pre-built ``_events_by_uid`` dict and raises
+    ``NotFoundError`` for unknown UIDs. ``search()`` returns all stored events.
     ``saved`` is a list of payloads written via ``save_event()``. ``last_saved``
     is a convenience accessor for the most recent payload (or ``None`` when
     nothing has been saved yet), which keeps single-payload assertions simple.
     """
 
-    def __init__(self, event=None, name=""):
-        self._event = event
+    def __init__(self, event=None, name="", url="", events=None):
+        if events is not None:
+            raw = list(events)
+        elif event is not None:
+            raw = [event]
+        else:
+            raw = []
+        # Accept either FakeEvent instances or raw icalendar Calendar objects;
+        # wrap the latter so every stored event exposes ``icalendar_component``.
+        self._events = [self._coerce(e) for e in raw]
+        self._event = self._events[0] if self._events else None
+        self._events_by_uid = {}
+        for ev in self._events:
+            uid_comp = getattr(ev, "icalendar_component", None)
+            if uid_comp is not None:
+                uid_val = uid_comp.get("uid")
+                if uid_val is not None:
+                    self._events_by_uid[str(uid_val)] = ev
         self.name = name
+        self.url = url
         self.saved = []
+
+    @staticmethod
+    def _coerce(ev):
+        if getattr(ev, "icalendar_component", None) is None:
+            return FakeEvent(ev)
+        return ev
 
     @property
     def last_saved(self):
@@ -61,10 +89,16 @@ class FakeCalendar:
         return self.saved[-1]
 
     def event_by_uid(self, uid):
-        return self._event
+        ev = self._events_by_uid.get(uid)
+        if ev is None:
+            raise server.NotFoundError(f"Event '{uid}' not found")
+        return ev
 
     def save_event(self, data):
         self.saved.append(data)
+
+    def search(self, **kwargs):
+        return list(self._events)
 
 
 class FakePrincipal:
@@ -122,6 +156,8 @@ def patch_caldav(fake_cal):
     Returns the started patchers; callers stop them when no longer needed
     (typically via a ``yield`` in a fixture-autouse wrapper or a ``finally``).
     """
+    from caldav_mcp.client_cache import client_cache
+    client_cache.clear()
     patchers = [
         mock.patch.object(server, "_resolve_credentials", return_value=("u", "p", "w")),
         mock.patch.object(server, "DAVClient", return_value=FakeClient([fake_cal])),
@@ -138,6 +174,8 @@ def patch_caldav_move(src_cal, dst_cal):
     ``_get_calendar`` is faked to return ``dst_cal`` when the requested name
     matches the destination calendar, otherwise ``src_cal``.
     """
+    from caldav_mcp.client_cache import client_cache
+    client_cache.clear()
     patchers = [
         mock.patch.object(server, "_resolve_credentials", return_value=("u", "p", "w")),
         mock.patch.object(server, "DAVClient", return_value=FakeClient()),
