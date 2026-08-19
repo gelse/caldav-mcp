@@ -6,238 +6,212 @@ component API (vCalAddress with ROLE/PARTSTAT/RSVP params) rather than raw text
 manipulation.
 """
 
-import unittest
-from unittest import mock
-
-from icalendar import Calendar, Event
+from conftest import FakeCalendar, FakeEvent, attendees_of, make_event, patch_caldav
 
 import server
 from server import Status
 
 
-class FakeEvent:
-    """Stand-in for a caldav Event whose icalendar_component is the VEVENT."""
-
-    def __init__(self, ical):
-        self._ical = ical
-        self.data = ical.to_ical().decode("utf-8")
-        events = ical.walk("VEVENT")
-        self.icalendar_component = events[0]  # _comp reads this attribute
-
-    def save(self):
-        # Re-parse the serialized data so icalendar_component reflects new state.
-        parsed = Calendar.from_ical(self.data)
-        events = parsed.walk("VEVENT")
-        self.icalendar_component = events[0]
+def _setup():
+    """Build a fake event + calendar, start the network patchers."""
+    fake_cal = FakeCalendar(event=FakeEvent(make_event()))
+    patchers = patch_caldav(fake_cal)
+    return fake_cal, patchers
 
 
-class FakeCalendar:
-    def __init__(self, event):
-        self._event = event
+# ── caldav_add_attendee ────────────────────────────────────────────────
 
-    def event_by_uid(self, uid):
-        return self._event
-
-
-class FakePrincipal:
-    def __init__(self, calendars):
-        self._calendars = calendars
-
-    def calendars(self):
-        return self._calendars
-
-
-class FakeClient:
-    def __init__(self, calendars):
-        self._calendars = calendars
-
-    def principal(self):
-        return FakePrincipal(self._calendars)
-
-
-def patch_network(fake_cal):
-    return [
-        mock.patch.object(server, "_resolve_credentials", return_value=("u", "p", "w")),
-        mock.patch.object(server, "DAVClient", return_value=FakeClient([fake_cal])),
-        mock.patch.object(server, "_get_calendar", return_value=fake_cal),
-    ]
-
-
-def make_event():
-    """Build a Calendar with one VEVENT and return the parsed ical."""
-    cal = Calendar()
-    cal.add("prodid", "-//caldav-mcp//EN")
-    cal.add("version", "2.0")
-    ev = Event()
-    ev.add("uid", "test-uid@caldav-mcp")
-    ev.add("summary", "Meeting")
-    cal.add_component(ev)
-    return cal
-
-
-class AddAttendeeComponentTest(unittest.TestCase):
-    def setUp(self):
-        self.ical = make_event()
-        self.event = FakeEvent(self.ical)
-        self.fake_cal = FakeCalendar(self.event)
-        self.patchers = patch_network(self.fake_cal)
-        for p in self.patchers:
-            p.start()
-        self.addCleanup(self._stop_patchers)
-
-    def _stop_patchers(self):
-        for p in self.patchers:
-            p.stop()
-
-    def _attendees(self):
-        ev = self.event.icalendar_component
-        attendees = ev.get("attendee")
-        if attendees is None:
-            return []
-        if not isinstance(attendees, (list, tuple)):
-            return [attendees]
-        return list(attendees)
-
-    def test_adds_attendee_with_component_api(self):
+def test_adds_attendee_with_component_api():
+    fake_cal, patchers = _setup()
+    try:
         result = server.caldav_add_attendee(
             uid="test-uid@caldav-mcp",
             email="alice@example.com",
         )
-        self.assertEqual(result.status, Status.OK, msg=result)
-        attendees = self._attendees()
-        self.assertEqual(len(attendees), 1)
+        assert result.status == Status.OK, result
+        attendees = attendees_of(fake_cal._event)
+        assert len(attendees) == 1
         a = attendees[0]
-        self.assertEqual(str(a), "mailto:alice@example.com")
-        self.assertEqual(a.params.get("PARTSTAT"), "NEEDS-ACTION")
-        self.assertEqual(a.params.get("RSVP"), "TRUE")
-        self.assertEqual(a.params.get("ROLE"), "REQ-PARTICIPANT")
+        assert str(a) == "mailto:alice@example.com"
+        assert a.params.get("PARTSTAT") == "NEEDS-ACTION"
+        assert a.params.get("RSVP") == "TRUE"
+        assert a.params.get("ROLE") == "REQ-PARTICIPANT"
+    finally:
+        for p in patchers:
+            p.stop()
 
-    def test_respects_custom_role(self):
+
+def test_respects_custom_role():
+    fake_cal, patchers = _setup()
+    try:
         server.caldav_add_attendee(
             uid="test-uid@caldav-mcp",
             email="bob@example.com",
             role="OPT-PARTICIPANT",
         )
-        a = self._attendees()[0]
-        self.assertEqual(a.params.get("ROLE"), "OPT-PARTICIPANT")
+        a = attendees_of(fake_cal._event)[0]
+        assert a.params.get("ROLE") == "OPT-PARTICIPANT"
+    finally:
+        for p in patchers:
+            p.stop()
 
-    def test_normalizes_email_with_mailto_prefix(self):
+
+def test_normalizes_email_with_mailto_prefix():
+    fake_cal, patchers = _setup()
+    try:
         server.caldav_add_attendee(
             uid="test-uid@caldav-mcp",
             email="mailto:carol@example.com",
         )
-        a = self._attendees()[0]
-        self.assertEqual(str(a), "mailto:carol@example.com")
+        a = attendees_of(fake_cal._event)[0]
+        assert str(a) == "mailto:carol@example.com"
+    finally:
+        for p in patchers:
+            p.stop()
 
-    def test_appends_multiple_attendees(self):
+
+def test_appends_multiple_attendees():
+    fake_cal, patchers = _setup()
+    try:
         server.caldav_add_attendee(uid="test-uid@caldav-mcp", email="a@example.com")
         server.caldav_add_attendee(uid="test-uid@caldav-mcp", email="b@example.com")
-        emails = sorted(str(a) for a in self._attendees())
-        self.assertEqual(emails, ["mailto:a@example.com", "mailto:b@example.com"])
+        emails = sorted(str(a) for a in attendees_of(fake_cal._event))
+        assert emails == ["mailto:a@example.com", "mailto:b@example.com"]
+    finally:
+        for p in patchers:
+            p.stop()
 
-    def test_no_component_returns_error(self):
-        self.event.icalendar_component = None
+
+def test_no_component_returns_error():
+    fake_cal, patchers = _setup()
+    try:
+        fake_cal._event.icalendar_component = None
         result = server.caldav_add_attendee(
             uid="test-uid@caldav-mcp",
             email="nobody@example.com",
         )
-        self.assertEqual(result.status, Status.ERROR)
-        self.assertIn("no icalendar component", result.message)
-
-    def test_already_mailto_attendee_not_duplicated(self):
-        server.caldav_add_attendee(uid="test-uid@caldav-mcp", email="a@example.com")
-        server.caldav_add_attendee(uid="test-uid@caldav-mcp", email="a@example.com")
-        self.assertEqual(len(self._attendees()), 2)
-
-
-class RemoveAttendeeComponentTest(unittest.TestCase):
-    def setUp(self):
-        self.ical = make_event()
-        self.event = FakeEvent(self.ical)
-        self.fake_cal = FakeCalendar(self.event)
-        self.patchers = patch_network(self.fake_cal)
-        for p in self.patchers:
-            p.start()
-        self.addCleanup(self._stop_patchers)
-
-    def _stop_patchers(self):
-        for p in self.patchers:
+        assert result.status == Status.ERROR
+        assert "no icalendar component" in result.message
+    finally:
+        for p in patchers:
             p.stop()
 
-    def _attendees(self):
-        ev = self.event.icalendar_component
-        attendees = ev.get("attendee")
-        if attendees is None:
-            return []
-        if not isinstance(attendees, (list, tuple)):
-            return [attendees]
-        return list(attendees)
 
-    def test_removes_attendee(self):
+def test_already_mailto_attendee_not_duplicated():
+    fake_cal, patchers = _setup()
+    try:
+        server.caldav_add_attendee(uid="test-uid@caldav-mcp", email="a@example.com")
+        server.caldav_add_attendee(uid="test-uid@caldav-mcp", email="a@example.com")
+        assert len(attendees_of(fake_cal._event)) == 2
+    finally:
+        for p in patchers:
+            p.stop()
+
+
+# ── caldav_remove_attendee ─────────────────────────────────────────────
+
+def test_removes_attendee():
+    fake_cal, patchers = _setup()
+    try:
         server.caldav_add_attendee(uid="test-uid@caldav-mcp", email="alice@example.com")
         result = server.caldav_remove_attendee(
             uid="test-uid@caldav-mcp",
             email="alice@example.com",
         )
-        self.assertEqual(result.status, Status.OK, msg=result)
-        self.assertEqual(self._attendees(), [])
+        assert result.status == Status.OK, result
+        assert attendees_of(fake_cal._event) == []
+    finally:
+        for p in patchers:
+            p.stop()
 
-    def test_remove_handles_mailto_prefix(self):
+
+def test_remove_handles_mailto_prefix():
+    fake_cal, patchers = _setup()
+    try:
         server.caldav_add_attendee(uid="test-uid@caldav-mcp", email="alice@example.com")
         result = server.caldav_remove_attendee(
             uid="test-uid@caldav-mcp",
             email="mailto:alice@example.com",
         )
-        self.assertEqual(result.status, Status.OK, msg=result)
-        self.assertEqual(self._attendees(), [])
+        assert result.status == Status.OK, result
+        assert attendees_of(fake_cal._event) == []
+    finally:
+        for p in patchers:
+            p.stop()
 
-    def test_remove_is_case_insensitive(self):
+
+def test_remove_is_case_insensitive():
+    fake_cal, patchers = _setup()
+    try:
         server.caldav_add_attendee(uid="test-uid@caldav-mcp", email="alice@example.com")
         result = server.caldav_remove_attendee(
             uid="test-uid@caldav-mcp",
             email="ALICE@example.com",
         )
-        self.assertEqual(result.status, Status.OK, msg=result)
-        self.assertEqual(self._attendees(), [])
+        assert result.status == Status.OK, result
+        assert attendees_of(fake_cal._event) == []
+    finally:
+        for p in patchers:
+            p.stop()
 
-    def test_remove_leaves_other_attendees(self):
+
+def test_remove_leaves_other_attendees():
+    fake_cal, patchers = _setup()
+    try:
         server.caldav_add_attendee(uid="test-uid@caldav-mcp", email="alice@example.com")
         server.caldav_add_attendee(uid="test-uid@caldav-mcp", email="bob@example.com")
         result = server.caldav_remove_attendee(
             uid="test-uid@caldav-mcp",
             email="alice@example.com",
         )
-        self.assertEqual(result.status, Status.OK, msg=result)
-        emails = sorted(str(a) for a in self._attendees())
-        self.assertEqual(emails, ["mailto:bob@example.com"])
+        assert result.status == Status.OK, result
+        emails = sorted(str(a) for a in attendees_of(fake_cal._event))
+        assert emails == ["mailto:bob@example.com"]
+    finally:
+        for p in patchers:
+            p.stop()
 
-    def test_remove_not_found(self):
+
+def test_remove_not_found():
+    fake_cal, patchers = _setup()
+    try:
         server.caldav_add_attendee(uid="test-uid@caldav-mcp", email="alice@example.com")
         result = server.caldav_remove_attendee(
             uid="test-uid@caldav-mcp",
             email="nobody@example.com",
         )
-        self.assertEqual(result.status, Status.NOT_FOUND)
-        self.assertIn("not found", result.message)
-        self.assertEqual(len(self._attendees()), 1)
+        assert result.status == Status.NOT_FOUND
+        assert "not found" in result.message
+        assert len(attendees_of(fake_cal._event)) == 1
+    finally:
+        for p in patchers:
+            p.stop()
 
-    def test_remove_no_attendees_not_found(self):
+
+def test_remove_no_attendees_not_found():
+    fake_cal, patchers = _setup()
+    try:
         result = server.caldav_remove_attendee(
             uid="test-uid@caldav-mcp",
             email="alice@example.com",
         )
-        self.assertEqual(result.status, Status.NOT_FOUND)
-        self.assertIn("not found", result.message)
+        assert result.status == Status.NOT_FOUND
+        assert "not found" in result.message
+    finally:
+        for p in patchers:
+            p.stop()
 
-    def test_remove_no_component_returns_error(self):
-        self.event.icalendar_component = None
+
+def test_remove_no_component_returns_error():
+    fake_cal, patchers = _setup()
+    try:
+        fake_cal._event.icalendar_component = None
         result = server.caldav_remove_attendee(
             uid="test-uid@caldav-mcp",
             email="alice@example.com",
         )
-        self.assertEqual(result.status, Status.ERROR)
-        self.assertIn("no icalendar component", result.message)
-
-
-if __name__ == "__main__":
-    unittest.main()
+        assert result.status == Status.ERROR
+        assert "no icalendar component" in result.message
+    finally:
+        for p in patchers:
+            p.stop()
