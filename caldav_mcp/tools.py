@@ -18,16 +18,32 @@ than imported directly.
 """
 
 import inspect
+import ssl
 import uuid
 from datetime import timedelta
 
+import requests.exceptions
+from caldav.lib.error import DAVError
 from icalendar import Calendar, Event, vCalAddress, vText
 from icalendar.prop import vRecur
 
 import server
 from caldav_mcp import mcp
 from caldav_mcp.client_cache import client_cache
-from caldav_mcp.errors import ToolResult
+from caldav_mcp.errors import AuthError, NotFoundError, ToolResult
+
+# ---------------------------------------------------------------------------
+# Errors considered "expected" CalDAV/transport failures.  These are caught and
+# classified by the handlers below; anything not in this tuple is an unexpected
+# internal fault and is allowed to propagate.
+# ---------------------------------------------------------------------------
+_REMOTE_ERRORS = (
+    AuthError,
+    NotFoundError,
+    DAVError,
+    requests.exceptions.RequestException,
+    ssl.SSLError,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -86,7 +102,7 @@ def with_caldav_client(needs_calendar=True):
                     cal = server._get_calendar(client, kwargs.get("calendar_name") or None)
                     return fn(client=client, cal=cal, **kwargs)
                 return fn(client=client, **kwargs)
-            except Exception as e:
+            except _REMOTE_ERRORS as e:
                 return server._render_error(e, fn.__name__)
 
         wrapper.__name__ = fn.__name__
@@ -420,7 +436,7 @@ def caldav_move_event(uid: str, target_calendar: str, source_calendar: str = "")
             message=f"Moved event {uid} -> {target_calendar} (new uid={new_uid})",
             data={"uid": uid, "new_uid": new_uid, "target_calendar": target_calendar},
         )
-    except Exception as e:
+    except _REMOTE_ERRORS as e:
         return server._render_error(e, "caldav_move_event")
 
 

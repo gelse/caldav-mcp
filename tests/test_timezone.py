@@ -33,10 +33,24 @@ class ServerTzResolutionTest(unittest.TestCase):
             tz = server._server_tz()
         self.assertIs(tz, UTC)
 
-    def test_tz_invalid_falls_back_to_utc(self):
+    def test_tz_invalid_returns_utc(self):
+        """An invalid TZ falls back to a UTC zone (ZoneInfo('UTC'))."""
         with mock.patch.dict(server.os.environ, {"TZ": "Not/AZone"}):
             tz = server._server_tz()
-        self.assertIs(tz, UTC)
+        self.assertEqual(tz, ZoneInfo("UTC"))
+        self.assertEqual(tz.utcoffset(None), timedelta(0))
+
+    def test_tz_invalid_logs_warning_and_falls_back_to_utc(self):
+        from caldav_mcp import config as config_module
+
+        with mock.patch.dict(server.os.environ, {"TZ": "Not/AZone"}), mock.patch.object(
+            config_module.logger, "warning"
+        ) as log_warning:
+            tz = server._server_tz()
+        self.assertEqual(tz, ZoneInfo("UTC"))
+        log_warning.assert_called_once_with(
+            "Unknown timezone %r, falling back to UTC", "Not/AZone"
+        )
 
 
 class NowAndStartOfDayTest(unittest.TestCase):
