@@ -16,6 +16,7 @@ import server
 
 # ── CalDAV boundary fakes ─────────────────────────────────────────────
 
+
 class FakeEvent:
     """Stand-in for a caldav Event whose icalendar_component is the VEVENT.
 
@@ -121,6 +122,7 @@ class FakeClient:
 
 # ── Helper functions (not fixtures) ───────────────────────────────────
 
+
 def make_event(uid="test-uid@caldav-mcp", summary="Meeting", attendees=()):
     """Build a Calendar with one VEVENT carrying optional ATTENDEE entries."""
     cal = Calendar()
@@ -157,6 +159,7 @@ def patch_caldav(fake_cal):
     (typically via a ``yield`` in a fixture-autouse wrapper or a ``finally``).
     """
     from caldav_mcp.client_cache import client_cache
+
     client_cache.clear()
     patchers = [
         mock.patch.object(server, "_resolve_credentials", return_value=("u", "p", "w")),
@@ -175,6 +178,7 @@ def patch_caldav_move(src_cal, dst_cal):
     matches the destination calendar, otherwise ``src_cal``.
     """
     from caldav_mcp.client_cache import client_cache
+
     client_cache.clear()
     patchers = [
         mock.patch.object(server, "_resolve_credentials", return_value=("u", "p", "w")),

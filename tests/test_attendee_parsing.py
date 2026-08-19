@@ -46,9 +46,7 @@ def test_added_attendee_survives_roundtrip():
         assert new.params.get("ROLE") == "REQ-PARTICIPANT"
         # The serialized data must re-parse into the same attendee set.
         reparsed = Calendar.from_ical(event.data)
-        reparsed_emails = sorted(
-            str(a) for a in reparsed.walk("VEVENT")[0].get("attendee", [])
-        )
+        reparsed_emails = sorted(str(a) for a in reparsed.walk("VEVENT")[0].get("attendee", []))
         assert reparsed_emails == emails
     finally:
         for p in patchers:
@@ -81,11 +79,7 @@ def test_added_attendee_serializes_with_mailto_and_params():
             reparsed_attendees = []
         elif not isinstance(reparsed_attendees, (list, tuple)):
             reparsed_attendees = [reparsed_attendees]
-        carol = next(
-            a
-            for a in reparsed_attendees
-            if str(a) == "mailto:carol@example.com"
-        )
+        carol = next(a for a in reparsed_attendees if str(a) == "mailto:carol@example.com")
         assert carol.params.get("ROLE") == "OPT-PARTICIPANT"
         assert carol.params.get("PARTSTAT") == "NEEDS-ACTION"
         assert carol.params.get("RSVP") == "TRUE"
@@ -146,9 +140,7 @@ def test_remove_not_found_returns_not_found():
         assert "not found" in result.message
         event.save()
         emails = [str(a) for a in attendees_of(event)]
-        assert sorted(emails) == sorted(
-            ["mailto:remove@example.com", "mailto:keep@example.com"]
-        )
+        assert sorted(emails) == sorted(["mailto:remove@example.com", "mailto:keep@example.com"])
     finally:
         for p in patchers:
             p.stop()

@@ -53,6 +53,10 @@ from caldav_mcp.calendar import (  # noqa: F401, E402
     _validate_priority,
     _validate_rrule,
 )
+from caldav_mcp.client_cache import (  # noqa: E402
+    ClientCache,
+    client_cache,
+)
 from caldav_mcp.config import (  # noqa: E402
     API_KEY,
     DEFAULT_PATH,
@@ -71,10 +75,7 @@ from caldav_mcp.datetime_utils import (  # noqa: F401, E402
     _parse_dt,
     _start_of_day,
 )
-from caldav_mcp.client_cache import (  # noqa: E402
-    ClientCache,
-    client_cache,
-)
+
 # Re-export the names server.py previously exposed at module level.  Doing this
 # in __init__ lets server.py import a single flat set of names.
 from caldav_mcp.errors import (  # noqa: E402
@@ -104,6 +105,7 @@ from caldav_mcp.tools import (  # noqa: F401, E402
     caldav_search_events,
     caldav_update_event,
 )
+
 __all__ = [
     "mcp",
     # errors

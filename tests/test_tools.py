@@ -7,11 +7,9 @@ get_today_events, get_week_events, move_event.
 All tests use the fake-network pattern from conftest.py.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from unittest import mock
 from zoneinfo import ZoneInfo
-
-from icalendar import Calendar, Event
 
 from conftest import (
     FakeCalendar,
@@ -21,9 +19,10 @@ from conftest import (
     patch_caldav,
     patch_caldav_move,
 )
-from caldav_mcp.client_cache import client_cache
+from icalendar import Calendar, Event
 
 import server
+from caldav_mcp.client_cache import client_cache
 from server import Status
 
 
@@ -49,6 +48,7 @@ def _build_event(uid="test-uid", summary="Meeting", location="", description="",
 
 # ── Section 1: caldav_list_calendars ────────────────────────────────────
 
+
 def test_list_calendars_returns_names_and_urls():
     fake_cal = FakeCalendar(name="Work", url="https://cal.example/work")
     patchers = patch_caldav(fake_cal)
@@ -64,8 +64,10 @@ def test_list_calendars_returns_names_and_urls():
 
 def test_list_calendars_empty():
     client_cache.clear()
-    with mock.patch.object(server, "_resolve_credentials", return_value=("u", "p", "w")), \
-         mock.patch.object(server, "DAVClient", return_value=FakeClient(calendars=[])):
+    with (
+        mock.patch.object(server, "_resolve_credentials", return_value=("u", "p", "w")),
+        mock.patch.object(server, "DAVClient", return_value=FakeClient(calendars=[])),
+    ):
         result = server.caldav_list_calendars()
     assert result.status == Status.EMPTY
 
@@ -79,14 +81,21 @@ def test_list_calendars_auth_error():
 
 # ── Section 2: caldav_get_events ─────────────────────────────────────────
 
+
 def test_get_events_returns_matching_events():
     fake_cal = FakeCalendar(event=_build_event(uid="ev-1", summary="Standup"))
     patchers = patch_caldav(fake_cal)
     tz = ZoneInfo("UTC")
     fake_now = datetime(2026, 1, 15, 8, 0, tzinfo=tz)
     try:
-        with mock.patch.object(server, "_now", lambda: fake_now), \
-             mock.patch.object(server, "_start_of_day", lambda dt: dt.replace(hour=0, minute=0, second=0, microsecond=0)):
+        with (
+            mock.patch.object(server, "_now", lambda: fake_now),
+            mock.patch.object(
+                server,
+                "_start_of_day",
+                lambda dt: dt.replace(hour=0, minute=0, second=0, microsecond=0),
+            ),
+        ):
             result = server.caldav_get_events()
         assert result.status == Status.OK
         assert len(result.data) == 1
@@ -117,8 +126,14 @@ def test_get_events_empty_range():
     tz = ZoneInfo("UTC")
     fake_now = datetime(2026, 1, 15, 8, 0, tzinfo=tz)
     try:
-        with mock.patch.object(server, "_now", lambda: fake_now), \
-             mock.patch.object(server, "_start_of_day", lambda dt: dt.replace(hour=0, minute=0, second=0, microsecond=0)):
+        with (
+            mock.patch.object(server, "_now", lambda: fake_now),
+            mock.patch.object(
+                server,
+                "_start_of_day",
+                lambda dt: dt.replace(hour=0, minute=0, second=0, microsecond=0),
+            ),
+        ):
             result = server.caldav_get_events()
         assert result.status == Status.EMPTY
     finally:
@@ -127,6 +142,7 @@ def test_get_events_empty_range():
 
 
 # ── Section 3: caldav_get_event_by_uid ───────────────────────────────────
+
 
 def test_get_event_by_uid_success():
     fake_cal = FakeCalendar(event=_build_event(uid="uid-1", summary="Standup"))
@@ -161,6 +177,7 @@ def test_get_event_by_uid_auth_error():
 
 
 # ── Section 4: caldav_search_events ──────────────────────────────────────
+
 
 def test_search_events_match():
     ev1 = FakeEvent(_build_event(uid="ev-1", summary="Team Standup"))
@@ -213,14 +230,21 @@ def test_search_events_case_insensitive():
 
 # ── Section 5: caldav_get_freebusy ───────────────────────────────────────
 
+
 def test_get_freebusy_busy():
     fake_cal = FakeCalendar(event=_build_event(uid="ev-1", summary="Standup"))
     patchers = patch_caldav(fake_cal)
     tz = ZoneInfo("UTC")
     fake_now = datetime(2026, 1, 15, 8, 0, tzinfo=tz)
     try:
-        with mock.patch.object(server, "_now", lambda: fake_now), \
-             mock.patch.object(server, "_start_of_day", lambda dt: dt.replace(hour=0, minute=0, second=0, microsecond=0)):
+        with (
+            mock.patch.object(server, "_now", lambda: fake_now),
+            mock.patch.object(
+                server,
+                "_start_of_day",
+                lambda dt: dt.replace(hour=0, minute=0, second=0, microsecond=0),
+            ),
+        ):
             result = server.caldav_get_freebusy()
         assert result.status == Status.OK
         assert "Busy" in result.message
@@ -236,8 +260,14 @@ def test_get_freebusy_free():
     tz = ZoneInfo("UTC")
     fake_now = datetime(2026, 1, 15, 8, 0, tzinfo=tz)
     try:
-        with mock.patch.object(server, "_now", lambda: fake_now), \
-             mock.patch.object(server, "_start_of_day", lambda dt: dt.replace(hour=0, minute=0, second=0, microsecond=0)):
+        with (
+            mock.patch.object(server, "_now", lambda: fake_now),
+            mock.patch.object(
+                server,
+                "_start_of_day",
+                lambda dt: dt.replace(hour=0, minute=0, second=0, microsecond=0),
+            ),
+        ):
             result = server.caldav_get_freebusy()
         assert result.status == Status.OK
         assert "Free" in result.message
@@ -263,6 +293,7 @@ def test_get_freebusy_explicit_range():
 
 
 # ── Section 6: caldav_update_event ───────────────────────────────────────
+
 
 def test_update_event_summary():
     fake_cal = FakeCalendar(event=_build_event(uid="uid-1", summary="Old Title"))
@@ -311,6 +342,7 @@ def test_update_event_multiple_fields():
 
 # ── Section 7: caldav_delete_event ───────────────────────────────────────
 
+
 def test_delete_event_success():
     fake_cal = FakeCalendar(event=_build_event(uid="uid-1"))
     patchers = patch_caldav(fake_cal)
@@ -335,6 +367,7 @@ def test_delete_event_not_found():
 
 
 # ── Section 8: caldav_list_attendees ─────────────────────────────────────
+
 
 def test_list_attendees_with_attendees():
     event = FakeEvent(make_event(attendees=["a@ex.com", "b@ex.com"]))
@@ -370,10 +403,13 @@ def test_list_attendees_auth_error():
 
 # ── Section 9: caldav_get_today_events ───────────────────────────────────
 
+
 def test_get_today_events_delegates():
     mock_result = server.ToolResult.success(message="ok", data=[{"uid": "x"}])
-    with mock.patch.object(server, "_require_auth", return_value=None), \
-         mock.patch.object(server, "caldav_get_events", return_value=mock_result) as mock_get:
+    with (
+        mock.patch.object(server, "_require_auth", return_value=None),
+        mock.patch.object(server, "caldav_get_events", return_value=mock_result) as mock_get,
+    ):
         result = server.caldav_get_today_events(calendar_name="Work")
     assert result is mock_result
     mock_get.assert_called_once()
@@ -392,10 +428,13 @@ def test_get_today_events_auth_error():
 
 # ── Section 10: caldav_get_week_events ───────────────────────────────────
 
+
 def test_get_week_events_delegates():
     mock_result = server.ToolResult.success(message="ok", data=[{"uid": "x"}])
-    with mock.patch.object(server, "_require_auth", return_value=None), \
-         mock.patch.object(server, "caldav_get_events", return_value=mock_result) as mock_get:
+    with (
+        mock.patch.object(server, "_require_auth", return_value=None),
+        mock.patch.object(server, "caldav_get_events", return_value=mock_result) as mock_get,
+    ):
         result = server.caldav_get_week_events(calendar_name="Work")
     assert result is mock_result
     mock_get.assert_called_once()
@@ -413,6 +452,7 @@ def test_get_week_events_auth_error():
 
 
 # ── Section 11: caldav_move_event additional tests ───────────────────────
+
 
 def test_move_event_not_found():
     src_cal = FakeCalendar(event=FakeEvent(_build_event(uid="uid-1")), name="src")

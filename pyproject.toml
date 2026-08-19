@@ -41,4 +41,7 @@ select = ["E", "F", "I", "UP"]
 
 [tool.mypy]
 python_version = "3.11"
+
+[[tool.mypy.overrides]]
+module = ["caldav", "fastmcp.*"]
 ignore_missing_imports = true

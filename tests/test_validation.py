@@ -7,7 +7,6 @@ The end-to-end tests reuse the fake-network pattern from
 ``tests/test_create_event.py`` so everything stays network-free and deterministic.
 """
 
-
 from conftest import FakeCalendar, patch_caldav
 
 import server
@@ -113,9 +112,7 @@ def test_empty_priority_and_empty_rrule_succeed():
     fake_cal = FakeCalendar()
     patchers = patch_caldav(fake_cal)
     try:
-        result = server.caldav_create_event(
-            summary="s", start="2026-01-01T10:00:00Z"
-        )
+        result = server.caldav_create_event(summary="s", start="2026-01-01T10:00:00Z")
         assert result.status == Status.OK, f"call failed: {result!r}"
         assert fake_cal.saved
     finally:
