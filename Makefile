@@ -22,16 +22,9 @@ typecheck: ; $(PYTHON) -m mypy server.py caldav_mcp/
 deps-check:
 	@echo "Checking dependency consistency …"
 	@# Extract pinned runtime deps from pyproject.toml (lines inside dependencies = [...])
-	@PY_DEPS=$$(python3 -c "\
-	 import tomllib, json; \
-	 f=open('pyproject.toml','rb'); \
-	 d=tomllib.load(f); \
-	 print(json.dumps(sorted(d['project']['dependencies'])))" 2>/dev/null || \
-	 python3 -c "\
-	 import toml; \
-	 d=toml.load('pyproject.toml'); \
-	 print(json.dumps(sorted(d['project']['dependencies'])))" 2>/dev/null); \
-	REQ_DEPS=$$(python3 -c "import json; lines=[l.strip() for l in open('requirements.txt') if l.strip()]; print(json.dumps(sorted(lines)))"); \
+	@# Requires Python >= 3.11 (tomllib is stdlib); use $(PYTHON) so the venv interpreter is used.
+	@PY_DEPS=$$($(PYTHON) -c "import tomllib, json; print(json.dumps(sorted(tomllib.load(open('pyproject.toml','rb'))['project']['dependencies'])))"); \
+	REQ_DEPS=$$($(PYTHON) -c "import json; lines=[l.strip() for l in open('requirements.txt') if l.strip()]; print(json.dumps(sorted(lines)))"); \
 	if [ "$$PY_DEPS" = "$$REQ_DEPS" ]; then \
 	 echo "✓ dependencies match"; \
 	else \
