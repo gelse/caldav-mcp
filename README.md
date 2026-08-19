@@ -37,8 +37,8 @@ to the public internet.**
 | `CALDAV_URL` | *(none)* | CalDAV server URL. Env fallback for the `X-Caldav-Url` request header. |
 | `CALDAV_USERNAME` | *(none)* | CalDAV username. Env fallback for the `X-Caldav-Username` request header. |
 | `CALDAV_PASSWORD` | *(none)* | CalDAV password. Env fallback for the `X-Caldav-Password` request header. |
-| `CALDAV_MCP_PORT` | `8080` | Listen port (inside container) |
-| `CALDAV_MCP_PATH` | `/mcp` | Streamable HTTP path |
+| `CALDAV_MCP_PORT` | `8080` | Listen port (inside container). **Startup only** — changing at runtime has no effect. |
+| `CALDAV_MCP_PATH` | `/mcp` | Streamable HTTP path. **Startup only** — changing at runtime has no effect. |
 | `CALDAV_MCP_API_KEY` | *(none)* | Shared secret API token. When set, requests must include a matching `Authorization: Bearer <token>` or `X-Api-Key: <token>` header. |
 | `TZ` | `UTC` | Server timezone (e.g. `Europe/Vienna`) used for "today"/"week" boundaries and date-only inputs. Reads the `TZ` env var via `zoneinfo`; falls back to `UTC` when unset, empty, or invalid. |
 

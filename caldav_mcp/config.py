@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 logger = logging.getLogger(__name__)
 
+# NOTE: resolved once at import time — env changes after startup are ignored.
 DEFAULT_PORT = int(os.environ.get("CALDAV_MCP_PORT", "8080"))
 DEFAULT_PATH = os.environ.get("CALDAV_MCP_PATH", "/mcp")
 
