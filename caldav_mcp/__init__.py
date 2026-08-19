@@ -24,6 +24,12 @@ mcp: FastMCP = FastMCP(
 # Import submodules to register the @mcp.tool() handlers and expose the helper
 # names.  Order matters: errors/config/auth/datetime_utils/calendar carry no
 # side effects that need mcp; tools registers the handlers on ``mcp``.
+#
+# NOTE: ``auth`` and ``datetime_utils`` both ``import server`` at module level,
+# and ``server.py`` does ``from caldav_mcp import (…)``.  This circular chain
+# only resolves when ``server`` is the *first* entry-point into the package
+# (i.e. ``import server`` before ``import caldav_mcp``).  All existing tests and
+# the production entrypoint follow this convention.
 from caldav_mcp import (  # noqa: E402, F401  (submodule imports; see comment above)
     auth,
     calendar,
@@ -65,7 +71,10 @@ from caldav_mcp.datetime_utils import (  # noqa: F401, E402
     _parse_dt,
     _start_of_day,
 )
-
+from caldav_mcp.client_cache import (  # noqa: E402
+    ClientCache,
+    client_cache,
+)
 # Re-export the names server.py previously exposed at module level.  Doing this
 # in __init__ lets server.py import a single flat set of names.
 from caldav_mcp.errors import (  # noqa: E402
@@ -95,7 +104,6 @@ from caldav_mcp.tools import (  # noqa: F401, E402
     caldav_search_events,
     caldav_update_event,
 )
-
 __all__ = [
     "mcp",
     # errors
@@ -108,6 +116,9 @@ __all__ = [
     "_log_exception",
     "_render_error",
     "log",
+    # client_cache
+    "ClientCache",
+    "client_cache",
     # config
     "API_KEY",
     "DEFAULT_PATH",
