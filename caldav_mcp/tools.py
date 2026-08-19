@@ -26,6 +26,7 @@ from icalendar.prop import vRecur
 
 import server
 from caldav_mcp import mcp
+from caldav_mcp.client_cache import client_cache
 from caldav_mcp.errors import ToolResult
 
 
@@ -74,7 +75,13 @@ def with_caldav_client(needs_calendar=True):
                 if error:
                     return error
                 url, user, pw = server._resolve_credentials()
-                client = server.DAVClient(url=url, username=user, password=pw)  # type: ignore[operator]
+
+                # Try to get a cached DAVClient first; create a new one on miss.
+                client = client_cache.get(url, user)
+                if client is None:
+                    client = server.DAVClient(url=url, username=user, password=pw)  # type: ignore[operator]
+                    client_cache.put(url, user, client)
+
                 if needs_calendar:
                     cal = server._get_calendar(client, kwargs.get("calendar_name") or None)
                     return fn(client=client, cal=cal, **kwargs)
@@ -392,7 +399,13 @@ def caldav_move_event(uid: str, target_calendar: str, source_calendar: str = "")
         if error:
             return error
         url, user, pw = server._resolve_credentials()
-        client = server.DAVClient(url=url, username=user, password=pw)  # type: ignore[operator]
+
+        # Use cached DAVClient (same pattern as with_caldav_client).
+        client = client_cache.get(url, user)
+        if client is None:
+            client = server.DAVClient(url=url, username=user, password=pw)  # type: ignore[operator]
+            client_cache.put(url, user, client)
+
         src_cal = server._get_calendar(client, source_calendar or None)
         dst_cal = server._get_calendar(client, target_calendar)
         event = src_cal.event_by_uid(uid)
