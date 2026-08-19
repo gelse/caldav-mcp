@@ -37,8 +37,8 @@ to the public internet.**
 | `CALDAV_URL` | *(none)* | CalDAV server URL. Env fallback for the `X-Caldav-Url` request header. |
 | `CALDAV_USERNAME` | *(none)* | CalDAV username. Env fallback for the `X-Caldav-Username` request header. |
 | `CALDAV_PASSWORD` | *(none)* | CalDAV password. Env fallback for the `X-Caldav-Password` request header. |
-| `CALDAV_MCP_PORT` | `8080` | Listen port (inside container) |
-| `CALDAV_MCP_PATH` | `/mcp` | Streamable HTTP path |
+| `CALDAV_MCP_PORT` | `8080` | Listen port (inside container). **Startup only** — changing at runtime has no effect. |
+| `CALDAV_MCP_PATH` | `/mcp` | Streamable HTTP path. **Startup only** — changing at runtime has no effect. |
 | `CALDAV_MCP_API_KEY` | *(none)* | Shared secret API token. When set, requests must include a matching `Authorization: Bearer <token>` or `X-Api-Key: <token>` header. |
 | `TZ` | `UTC` | Server timezone (e.g. `Europe/Vienna`) used for "today"/"week" boundaries and date-only inputs. Reads the `TZ` env var via `zoneinfo`; falls back to `UTC` when unset, empty, or invalid. |
 
@@ -75,24 +75,26 @@ to the public internet.**
 - **Dependencies**: installed from [`requirements.txt`](./requirements.txt) (or via the
   `dependencies` list in [`pyproject.toml`](./pyproject.toml)). Includes `icalendar`, which is used
   to build and correctly RFC 5545-escape event payloads.
-  Dependency versions are **pinned** in `requirements.txt` and `pyproject.toml` for reproducible
-  builds; update both files together when bumping a dependency.
-- **Tests**: unit tests live in [`tests/`](./tests) and run with `pytest` via the Makefile:
+  Dependency versions are **pinned** in both files for reproducible builds;
+  `make deps-check` verifies they stay in sync.
+- **Tests**: unit tests live in [`tests/`](./tests) and run with `pytest` via
+  the Makefile:
 
   ```bash
   make test
   ```
 
-  This uses the project virtual environment at `./.venv` (`./.venv/bin/pytest`). Tests can also
-  be run directly with the standard library if preferred:
+  This uses the project virtual environment at `./.venv`
+  (`./.venv/bin/pytest`). The standard library `unittest` runner also works
+  but is not used in CI:
 
   ```bash
   python -m unittest discover -s tests -v
   ```
 
-  The suite covers escaping of special characters (`\`, `,`, `;`, newlines), attendees,
-  priority/rrule validation, and edge cases (emoji, empty optional fields) for
-  `caldav_create_event`.
+  The suite covers escaping of special characters (`\`, `,`, `;`, newlines),
+  attendees, priority/rrule validation, and edge cases (emoji, empty optional
+  fields) for `caldav_create_event`.
 
 ## Docker Compose
 
