@@ -22,7 +22,7 @@ from conftest import (
 from icalendar import Calendar, Event
 
 import server
-from caldav_mcp.client_cache import client_cache
+from caldav_mcp.client_cache import get_cache
 from server import Status
 
 
@@ -63,7 +63,7 @@ def test_list_calendars_returns_names_and_urls():
 
 
 def test_list_calendars_empty():
-    client_cache.clear()
+    get_cache().clear()
     with (
         mock.patch("caldav_mcp.tools._resolve_credentials", return_value=("u", "p", "w")),
         mock.patch("caldav_mcp.tools.DAVClient", return_value=FakeClient(calendars=[])),

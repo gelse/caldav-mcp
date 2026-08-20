@@ -124,6 +124,25 @@ class ClientCache:
 
 
 # ------------------------------------------------------------------
-# Module-level singleton – import and use directly.
+# Module-level singleton with injectable accessor.
 # ------------------------------------------------------------------
-client_cache = ClientCache()
+_default_cache = ClientCache()
+
+
+def get_cache() -> ClientCache:
+    """Return the active cache instance."""
+    return _default_cache
+
+
+def set_cache(cache: ClientCache) -> None:
+    """Replace the active cache instance (useful for testing)."""
+    global _default_cache
+    _default_cache = cache
+
+
+def __getattr__(name: str):
+    """Allow ``from caldav_mcp.client_cache import client_cache`` to keep
+    working by dynamically resolving to the current ``_default_cache``."""
+    if name == "client_cache":
+        return _default_cache
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

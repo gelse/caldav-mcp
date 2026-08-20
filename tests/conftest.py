@@ -158,9 +158,9 @@ def patch_caldav(fake_cal):
     Returns the started patchers; callers stop them when no longer needed
     (typically via a ``yield`` in a fixture-autouse wrapper or a ``finally``).
     """
-    from caldav_mcp.client_cache import client_cache
+    from caldav_mcp.client_cache import get_cache
 
-    client_cache.clear()
+    get_cache().clear()
     patchers = [
         mock.patch("caldav_mcp.tools._resolve_credentials", return_value=("u", "p", "w")),
         mock.patch("caldav_mcp.tools.DAVClient", return_value=FakeClient([fake_cal])),
@@ -177,9 +177,9 @@ def patch_caldav_move(src_cal, dst_cal):
     ``_get_calendar`` is faked to return ``dst_cal`` when the requested name
     matches the destination calendar, otherwise ``src_cal``.
     """
-    from caldav_mcp.client_cache import client_cache
+    from caldav_mcp.client_cache import get_cache
 
-    client_cache.clear()
+    get_cache().clear()
     patchers = [
         mock.patch("caldav_mcp.tools.mutations._resolve_credentials", return_value=("u", "p", "w")),
         mock.patch("caldav_mcp.tools.mutations.DAVClient", return_value=FakeClient()),

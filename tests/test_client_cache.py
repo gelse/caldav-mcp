@@ -247,15 +247,16 @@ def test_decorator_uses_cache_on_second_call():
     real_cache = ClientCache(max_size=4, ttl_seconds=3600)
     mock_client = _FakeDAVClient()
 
-    with mock.patch.object(_tools, "client_cache", real_cache):
+    with mock.patch("caldav_mcp.tools.get_cache", return_value=real_cache):
         # Simulate first call: cache miss -> create -> put
         url, user = "https://caldav.test", "alice"
-        cached = _tools.client_cache.get(url, user)
+        cache = _tools.get_cache()
+        cached = cache.get(url, user)
         assert cached is None
-        _tools.client_cache.put(url, user, mock_client)
+        cache.put(url, user, mock_client)
 
         # Simulate second call: cache hit
-        cached = _tools.client_cache.get(url, user)
+        cached = cache.get(url, user)
         assert cached is mock_client
         assert len(real_cache) == 1
 

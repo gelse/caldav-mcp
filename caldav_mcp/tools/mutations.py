@@ -16,7 +16,7 @@ from caldav_mcp.calendar import (
     _validate_priority,
     _validate_rrule,
 )
-from caldav_mcp.client_cache import client_cache
+from caldav_mcp.client_cache import get_cache
 from caldav_mcp.datetime_utils import _now, _parse_dt
 from caldav_mcp.errors import Status, ToolResult
 from caldav_mcp.tools import _REMOTE_ERRORS, _ok, _render_error, with_caldav_client
@@ -145,10 +145,11 @@ def caldav_move_event(uid: str, target_calendar: str, source_calendar: str = "")
             return error
         url, user, pw = _resolve_credentials()
 
-        client = client_cache.get(url, user)
+        cache = get_cache()
+        client = cache.get(url, user)
         if client is None:
             client = DAVClient(url=url, username=user, password=pw)  # type: ignore[operator]
-            client_cache.put(url, user, client)
+            cache.put(url, user, client)
 
         src_cal = _get_calendar(client, source_calendar or None)
         dst_cal = _get_calendar(client, target_calendar)

@@ -57,6 +57,8 @@ from caldav_mcp.calendar import (  # noqa: F401, E402
 from caldav_mcp.client_cache import (  # noqa: E402
     ClientCache,
     client_cache,
+    get_cache,
+    set_cache,
 )
 from caldav_mcp.config import (  # noqa: E402
     API_KEY,
@@ -122,6 +124,8 @@ __all__ = [
     # client_cache
     "ClientCache",
     "client_cache",
+    "get_cache",
+    "set_cache",
     # config
     "API_KEY",
     "DEFAULT_PATH",

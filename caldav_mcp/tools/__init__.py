@@ -23,7 +23,7 @@ from fastmcp.server.dependencies import get_http_headers
 from caldav_mcp import mcp
 from caldav_mcp.auth import _require_auth, _resolve_credentials
 from caldav_mcp.calendar import _get_calendar
-from caldav_mcp.client_cache import client_cache
+from caldav_mcp.client_cache import get_cache
 from caldav_mcp.errors import (
     AuthError,
     NotFoundError,
@@ -81,10 +81,11 @@ def with_caldav_client(needs_calendar=True):
                     return error
                 url, user, pw = _resolve_credentials()
 
-                cached = client_cache.get(url, user)
+                cache = get_cache()
+                cached = cache.get(url, user)
                 if cached is None:
                     cached = DAVClient(url=url, username=user, password=pw)  # type: ignore[operator]
-                    client_cache.put(url, user, cached)
+                    cache.put(url, user, cached)
 
                 if needs_calendar:
                     cal = _get_calendar(cached, kwargs.get("calendar_name") or None)
