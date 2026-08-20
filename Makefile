@@ -10,7 +10,22 @@ build:
 
 .PHONY: test
 test:
-	$(PYTHON) -m pytest tests/
+	$(PYTHON) -m pytest tests/unit/
+
+.PHONY: test-unit
+test-unit:
+	$(PYTHON) -m pytest tests/unit/
+
+.PHONY: test-integration
+test-integration:
+	$(PYTHON) -m pytest tests/integration/ -m integration --timeout=60
+
+.PHONY: test-performance
+test-performance:
+	$(PYTHON) -m pytest tests/performance/ -m performance --benchmark-only
+
+.PHONY: test-all
+test-all: test-unit test-integration test-performance
 
 .PHONY: lint
 lint: ; $(PYTHON) -m ruff check . && $(PYTHON) -m ruff format --check .

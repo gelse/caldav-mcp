@@ -13,6 +13,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0.0",
+    "pytest-benchmark>=4.0.0",
     "ruff>=0.6.0",
     "mypy>=1.10.0",
     "types-requests>=2.31.0",
@@ -31,6 +32,12 @@ Repository = "https://github.com/<org>/caldav-mcp"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "unit: pure unit tests with no external dependencies",
+    "integration: tests against a live CalDAV server (Radicale via Docker)",
+    "performance: benchmarks and load tests",
+    "slow: tests that take more than a few seconds",
+]
 
 [build-system]
 requires = ["hatchling"]

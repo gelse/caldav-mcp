@@ -1,0 +1,19 @@
+# docker-compose.test.yaml
+# CalDAV integration test infrastructure.
+# Usage: docker compose -f docker-compose.test.yaml up -d
+services:
+  radicale:
+    image: tomsquest/docker-radicale:latest
+    container_name: radicale-test
+    ports:
+      - "5232:5232"
+    volumes:
+      - ./tests/integration/radicale-config:/etc/radicale
+      - ./tests/integration/radicale-data:/data
+    environment:
+      - TZ=UTC
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5232/"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
