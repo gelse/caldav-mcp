@@ -83,7 +83,7 @@ Two independent layers — both are optional but recommended:
 
 1. **MCP Endpoint Auth** (`CALDAV_MCP_API_KEY` env var): Bearer token or `X-Api-Key` header. Constant-time comparison, per-IP rate limiting. Protects the MCP endpoint itself.
 
-2. **CalDAV Credentials**: HTTP headers (`X-Caldav-Url`, `X-Caldav-Username`, `X-Caldav-Password`) take precedence over env vars (`CALDAV_URL`, `USERNAME`, `PASSWORD`). These authenticate against the actual CalDAV server.
+2. **CalDAV Credentials**: HTTP headers (`X-Caldav-Url`, `X-Caldav-Username`, `X-Caldav-Password`) take precedence over env vars (`CALDAV_URL`, `CALDAV_USERNAME`, `CALDAV_PASSWORD`). These authenticate against the actual CalDAV server.
 
 **Key design**: Server is stateless. Only in-memory state is the LRU client cache and rate limiter.
 
@@ -95,19 +95,25 @@ All config via environment variables, validated at startup with Pydantic:
 |----------|-------------|
 | `CALDAV_MCP_API_KEY` | API key for MCP endpoint auth (optional) |
 | `CALDAV_URL` | CalDAV server URL (fallback, headers take precedence) |
-| `USERNAME` | CalDAV username (fallback) |
-| `PASSWORD` | CalDAV password (fallback) |
+| `CALDAV_USERNAME` | CalDAV username (fallback) |
+| `CALDAV_PASSWORD` | CalDAV password (fallback) |
 | `CALDAV_MCP_TLS_CERT` | TLS certificate path (optional) |
 | `CALDAV_MCP_TLS_KEY` | TLS key path (optional) |
-| `CALDAV_MCP_VERIFY_SSL` | SSL verification toggle |
-| `CALDAV_MCP_AUDIT_FORMAT` | Audit log format: `text` or `json` |
+| `CALDAV_MCP_TLS_CA_BUNDLE` | Optional CA bundle for custom certificate authorities |
+| `CALDAV_MCP_CALDAV_VERIFY_SSL` | Verify CalDAV server SSL certificates |
+| `CALDAV_MCP_LOG_FORMAT` | Audit log format: `text` or `json` |
+| `CALDAV_MCP_PORT` | HTTP server port (default `8080`) |
+| `CALDAV_MCP_PATH` | Streamable HTTP endpoint path (default `/mcp`) |
+| `TZ` | IANA timezone for today/week boundaries (default UTC) |
+| `CALDAV_MCP_RATE_LIMIT_MAX_FAILURES` | Max failed auth attempts per IP before rate limiting (default `10`) |
+| `CALDAV_MCP_RATE_LIMIT_WINDOW_SECONDS` | Sliding window for rate limiting in seconds (default `60`) |
 
 ## Deployment
 
 - **Docker**: Multi-stage build (`python:3.13.5-alpine3.21`), non-root user, healthcheck
 - **docker-compose**: Host port `8600` → container port `8080`, env vars from `.env`
 - **TLS**: Optional, configured via `CALDAV_MCP_TLS_CERT` / `CALDAV_MCP_TLS_KEY`
-- **Audit**: Structured JSON or text logging, controlled by `CALDAV_MCP_AUDIT_FORMAT`
+- **Audit**: Structured JSON or text logging, controlled by `CALDAV_MCP_LOG_FORMAT`
 
 ## Development
 
