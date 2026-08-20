@@ -19,6 +19,37 @@ on a custom port.
   - `X-Caldav-Password`
 - Env fallback (`CALDAV_URL` / `CALDAV_USERNAME` / `CALDAV_PASSWORD`) if headers absent.
 
+## Architecture
+
+```
+┌─────────────────────────────────────────────────┐
+│                 server.py                        │
+│            (thin entrypoint)                     │
+└──────────────────────┬──────────────────────────┘
+                       │ imports
+┌──────────────────────▼──────────────────────────┐
+│              caldav_mcp/ package                 │
+│                                                  │
+│  ┌──────────┐  ┌──────────┐  ┌───────────────┐ │
+│  │ config   │  │ errors   │  │ client_cache  │ │
+│  │ (env,    │  │ (typed   │  │ (LRU cache    │ │
+│  │  TZ)     │  │  results)│  │  for DAVClient│ │
+│  └──────────┘  └──────────┘  └───────────────┘ │
+│                                                  │
+│  ┌──────────┐  ┌──────────┐  ┌───────────────┐ │
+│  │ auth     │  │ datetime │  │ calendar      │ │
+│  │ (guards) │  │ _utils   │  │ (event I/O)   │ │
+│  └──────────┘  └──────────┘  └───────────────┘ │
+│                                                  │
+│  ┌─────────────────────────────────────────────┐│
+│  │              tools/                          ││
+│  │  @mcp.tool() handlers + with_caldav_client  ││
+│  └─────────────────────────────────────────────┘│
+└─────────────────────────────────────────────────┘
+```
+
+See [`docs/architecture.md`](./docs/architecture.md) for the full design document.
+
 ## Security
 
 The MCP endpoint **has no built-in authentication by default** and grants
@@ -134,6 +165,55 @@ The server binds `0.0.0.0` and is published via the Docker Compose port mapping.
 When exposing it beyond `localhost`, place it behind a reverse proxy that
 terminates TLS (HTTPS) so the API token is not transmitted in cleartext. Always set
 a strong `CALDAV_MCP_API_KEY`.
+
+## Troubleshooting
+
+### Connection Errors
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `Connection refused` | CalDAV server unreachable | Verify `CALDAV_URL` is correct and the server is running. Check firewall rules. |
+| `SSL: CERTIFICATE_VERIFY_FAILED` | Self-signed or invalid TLS cert | The `caldav` library uses system CA certs. Import your server's CA into the system trust store, or use a valid certificate. |
+| `Timeout` | Network latency or server overload | Increase the timeout on your CalDAV server, or check network connectivity. |
+
+### Authentication Failures
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `ERROR:[auth] unauthorized` | Missing or invalid API token | Set `CALDAV_MCP_API_KEY` and send it as `Authorization: Bearer <token>` or `X-Api-Key: <token>`. |
+| `Missing CalDAV credentials` | No CalDAV headers or env-vars | Provide `X-Caldav-Url`, `X-Caldav-Username`, `X-Caldav-Password` headers, or set `CALDAV_URL`, `CALDAV_USERNAME`, `CALDAV_PASSWORD` env-vars. |
+| `401 Unauthorized` from CalDAV server | Wrong CalDAV username/password | Verify your CalDAV app password is correct. Some providers require app-specific passwords. |
+
+### Calendar Not Found
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `Calendar 'X' not found` | Typo or wrong calendar name | Run `caldav_list_calendars` to see available names. Names are case-sensitive. |
+| `No calendars found for this principal` | CalDAV URL points to wrong path | Ensure `CALDAV_URL` ends with the correct calendar root (e.g. `/remote.php/dav/calendars/user/`). |
+
+### Timezone Problems
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| Events show wrong time | Server timezone not configured | Set the `TZ` env-var to your IANA timezone (e.g. `Europe/Vienna`). Defaults to UTC. |
+| Date-only inputs return wrong range | Date interpreted in UTC | Set `TZ` to your local timezone so "today" boundaries match your expectations. |
+
+## FAQ
+
+**Q: Can I use this with multiple CalDAV accounts?**
+A: Yes — send different `X-Caldav-Url`/`X-Caldav-Username`/`X-Caldav-Password` headers per request. The client cache keys on `(url, username)`.
+
+**Q: Is the API token transmitted securely?**
+A: Only if you use HTTPS. Always place the server behind a TLS-terminating reverse proxy.
+
+**Q: What CalDAV servers are supported?**
+A: Any server implementing the CalDAV standard: Nextcloud, ownCloud, iCloud, Fastmail, Baikal, Radicale, etc.
+
+**Q: How do I generate a CalDAV app password?**
+A: This depends on your provider. Nextcloud: Settings → Security → App Passwords. iCloud: Use an app-specific password from appleid.apple.com.
+
+**Q: Can I use the MCP tools over stdio instead of HTTP?**
+A: The current server uses Streamable HTTP transport only. To use stdio, you would need to modify `server.py` to call `mcp.run()` instead of `mcp.run_http_async()`.
 
 ## Example call
 
