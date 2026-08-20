@@ -118,6 +118,8 @@ def _render_error(exc: Exception, context: str) -> ToolResult:
         return ToolResult.failure(Status.AUTH, str(exc))
     if isinstance(exc, NotFoundError):
         return ToolResult.failure(Status.NOT_FOUND, str(exc))
+    if isinstance(exc, ValueError):
+        return ToolResult.failure(Status.ERROR, str(exc))
     return _log_exception(exc, context)
 
 

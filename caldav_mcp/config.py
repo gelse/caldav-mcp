@@ -44,3 +44,16 @@ def _server_tz() -> tzinfo:
 
 
 SERVER_TZ = _server_tz()
+
+# Rate limiting for authentication attempts
+RATE_LIMIT_MAX_FAILURES = int(os.environ.get("CALDAV_MCP_RATE_LIMIT_MAX_FAILURES", "10"))
+RATE_LIMIT_WINDOW_SECONDS = int(os.environ.get("CALDAV_MCP_RATE_LIMIT_WINDOW_SECONDS", "60"))
+
+# TLS / HTTPS configuration
+TLS_CERT_PATH = os.environ.get("CALDAV_MCP_TLS_CERT", "")
+TLS_KEY_PATH = os.environ.get("CALDAV_MCP_TLS_KEY", "")
+TLS_CA_BUNDLE = os.environ.get("CALDAV_MCP_TLS_CA_BUNDLE", "")
+CALDAV_VERIFY_SSL = os.environ.get("CALDAV_MCP_CALDAV_VERIFY_SSL", "true").lower() in ("true", "1", "yes")
+
+# Log format: "text" or "json"
+LOG_FORMAT = os.environ.get("CALDAV_MCP_LOG_FORMAT", "text")

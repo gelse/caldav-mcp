@@ -57,21 +57,88 @@ read/write access to any CalDAV calendar you configure. It may be left fully
 unauthenticated when `CALDAV_MCP_API_KEY` is unset. **Do not expose it directly
 to the public internet.**
 
-- Put the server behind a reverse proxy (e.g. Traefik, Caddy, nginx) that terminates **TLS**.
+### Built-in Security Features
+
+- **Rate limiting** — Failed authentication attempts are tracked per client IP
+  using a sliding-window counter. After `CALDAV_MCP_RATE_LIMIT_MAX_FAILURES`
+  failures within `CALDAV_MCP_RATE_LIMIT_WINDOW_SECONDS`, the client is locked
+  out for an exponentially increasing backoff period.
+- **Input sanitization** — All text parameters (summaries, locations,
+  descriptions, categories, search queries) are stripped of control characters
+  and truncated to safe maximum lengths. Email addresses are validated before
+  processing.
+- **Audit logging** — Every authentication attempt and tool execution is logged
+  as structured JSON (never including credentials). The log format is controlled
+  by `CALDAV_MCP_LOG_FORMAT`.
+- **CalDAV SSL verification** — Connections to CalDAV servers verify TLS
+  certificates by default. Disable only for testing with self-signed certs via
+  `CALDAV_MCP_CALDAV_VERIFY_SSL=false`.
+
+### TLS/HTTPS
+
+The server supports **built-in TLS** without a reverse proxy. Set the
+`CALDAV_MCP_TLS_CERT` and `CALDAV_MCP_TLS_KEY` environment variables to
+enable HTTPS directly:
+
+```bash
+CALDAV_MCP_TLS_CERT=/path/to/cert.pem
+CALDAV_MCP_TLS_KEY=/path/to/key.pem
+# Optional: custom CA bundle
+CALDAV_MCP_TLS_CA_BUNDLE=/path/to/ca.pem
+```
+
+When TLS is enabled, the server listens on HTTPS. When these variables are
+unset, the server runs plain HTTP and should be placed behind a reverse proxy
+(e.g. Traefik, Caddy, nginx) that terminates TLS.
+
+### Security Checklist
+
+- Put the server behind a reverse proxy (e.g. Traefik, Caddy, nginx) that terminates **TLS**, or enable built-in TLS.
+- Set a strong `CALDAV_MCP_API_KEY`.
 - Restrict access at the network/firewall layer to trusted hosts or a private VPN.
 - Prefer binding the container port to `127.0.0.1` unless you explicitly need remote access.
 - Never place CalDAV app passwords or the endpoint in public configuration or logs.
 
 ## Config
+
+### CalDAV Settings
+
 | Env | Default | Description |
 |---|---|---|
 | `CALDAV_URL` | *(none)* | CalDAV server URL. Env fallback for the `X-Caldav-Url` request header. |
 | `CALDAV_USERNAME` | *(none)* | CalDAV username. Env fallback for the `X-Caldav-Username` request header. |
 | `CALDAV_PASSWORD` | *(none)* | CalDAV password. Env fallback for the `X-Caldav-Password` request header. |
+| `CALDAV_MCP_CALDAV_VERIFY_SSL` | `true` | Verify TLS certificates when connecting to CalDAV servers. Set to `false` only for testing with self-signed certs. |
+
+### Server Settings
+
+| Env | Default | Description |
+|---|---|---|
 | `CALDAV_MCP_PORT` | `8080` | Listen port (inside container). **Startup only** — changing at runtime has no effect. |
 | `CALDAV_MCP_PATH` | `/mcp` | Streamable HTTP path. **Startup only** — changing at runtime has no effect. |
 | `CALDAV_MCP_API_KEY` | *(none)* | Shared secret API token. When set, requests must include a matching `Authorization: Bearer <token>` or `X-Api-Key: <token>` header. |
 | `TZ` | `UTC` | Server timezone (e.g. `Europe/Vienna`) used for "today"/"week" boundaries and date-only inputs. Reads the `TZ` env var via `zoneinfo`; falls back to `UTC` when unset, empty, or invalid. |
+
+### Rate Limiting
+
+| Env | Default | Description |
+|---|---|---|
+| `CALDAV_MCP_RATE_LIMIT_MAX_FAILURES` | `5` | Max failed auth attempts per IP within the window before lockout. |
+| `CALDAV_MCP_RATE_LIMIT_WINDOW_SECONDS` | `900` | Sliding window in seconds (default: 15 minutes). |
+
+### TLS / HTTPS
+
+| Env | Default | Description |
+|---|---|---|
+| `CALDAV_MCP_TLS_CERT` | *(none)* | Path to the TLS certificate PEM file. Enables HTTPS when set together with `CALDAV_MCP_TLS_KEY`. |
+| `CALDAV_MCP_TLS_KEY` | *(none)* | Path to the TLS private key PEM file. |
+| `CALDAV_MCP_TLS_CA_BUNDLE` | *(none)* | Optional path to a CA bundle PEM file for client certificate verification. |
+
+### Logging
+
+| Env | Default | Description |
+|---|---|---|
+| `CALDAV_MCP_LOG_FORMAT` | `%(message)s` | Python logging format string. Set to `json` for structured JSON audit logs. |
 
 ## Tools
 
@@ -162,9 +229,9 @@ Connect your MCP client to `http://<host>:8600/mcp`.
 ## Security note
 
 The server binds `0.0.0.0` and is published via the Docker Compose port mapping.
-When exposing it beyond `localhost`, place it behind a reverse proxy that
-terminates TLS (HTTPS) so the API token is not transmitted in cleartext. Always set
-a strong `CALDAV_MCP_API_KEY`.
+When exposing it beyond `localhost`, enable built-in TLS (see [TLS/HTTPS](#tlshttps))
+or place it behind a reverse proxy that terminates TLS (HTTPS) so the API token is not
+transmitted in cleartext. Always set a strong `CALDAV_MCP_API_KEY`.
 
 ## Troubleshooting
 

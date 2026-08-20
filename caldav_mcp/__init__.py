@@ -32,16 +32,20 @@ mcp: FastMCP = FastMCP(
 # mocking.  This breaks the previous circular chain:
 #   server.py → __init__.py → auth/calendar/datetime_utils → server
 from caldav_mcp import (  # noqa: E402, F401  (submodule imports; see comment above)
+    audit,
     auth,
     calendar,
     config,
     constants,
     datetime_utils,
     errors,
+    rate_limit,
+    sanitizers,
     tools,
 )
 from caldav_mcp.auth import (  # noqa: F401, E402
     _const_eq,
+    _get_client_ip,
     _require_auth,
     _resolve_credentials,
 )
@@ -63,6 +67,7 @@ from caldav_mcp.client_cache import (  # noqa: E402
 )
 from caldav_mcp.config import (  # noqa: E402
     API_KEY,
+    CALDAV_VERIFY_SSL,
     DEFAULT_PATH,
     DEFAULT_PORT,
     HDR_API_KEY,
@@ -70,7 +75,13 @@ from caldav_mcp.config import (  # noqa: E402
     HDR_PASSWORD,
     HDR_URL,
     HDR_USERNAME,
+    RATE_LIMIT_MAX_FAILURES,
+    RATE_LIMIT_WINDOW_SECONDS,
     SERVER_TZ,
+    TLS_CA_BUNDLE,
+    TLS_CERT_PATH,
+    TLS_KEY_PATH,
+    LOG_FORMAT,
     _server_tz,
 )
 from caldav_mcp.datetime_utils import (  # noqa: F401, E402
@@ -98,6 +109,11 @@ from caldav_mcp.event_builder import (  # noqa: E402
     parse_attendee_emails,
 )
 from caldav_mcp.types import CalDAVClient  # noqa: E402
+from caldav_mcp.audit import (  # noqa: E402
+    log_auth_attempt,
+    log_error,
+    log_operation,
+)
 from caldav_mcp.errors import (  # noqa: E402
     AuthError,
     CalDAVError,
@@ -108,6 +124,22 @@ from caldav_mcp.errors import (  # noqa: E402
     _log_exception,
     _render_error,
     log,
+)
+from caldav_mcp.rate_limit import (  # noqa: E402
+    RateLimiter,
+    auth_rate_limiter,
+)
+from caldav_mcp.sanitizers import (  # noqa: E402
+    MAX_CALENDAR_NAME_LENGTH,
+    MAX_CATEGORIES_LENGTH,
+    MAX_DESCRIPTION_LENGTH,
+    MAX_LOCATION_LENGTH,
+    MAX_QUERY_LENGTH,
+    MAX_SUMMARY_LENGTH,
+    sanitize_text,
+    validate_calendar_name,
+    validate_email,
+    limit_string_length,
 )
 from caldav_mcp.tools import (  # noqa: F401, E402
     caldav_add_attendee,
@@ -128,6 +160,30 @@ from caldav_mcp.tools import (  # noqa: F401, E402
 
 __all__ = [
     "mcp",
+    # security
+    "log_auth_attempt",
+    "log_error",
+    "log_operation",
+    "RateLimiter",
+    "auth_rate_limiter",
+    "sanitize_text",
+    "validate_calendar_name",
+    "validate_email",
+    "limit_string_length",
+    "MAX_SUMMARY_LENGTH",
+    "MAX_LOCATION_LENGTH",
+    "MAX_DESCRIPTION_LENGTH",
+    "MAX_CATEGORIES_LENGTH",
+    "MAX_CALENDAR_NAME_LENGTH",
+    "MAX_QUERY_LENGTH",
+    "CALDAV_VERIFY_SSL",
+    "RATE_LIMIT_MAX_FAILURES",
+    "RATE_LIMIT_WINDOW_SECONDS",
+    "TLS_CERT_PATH",
+    "TLS_KEY_PATH",
+    "TLS_CA_BUNDLE",
+    "LOG_FORMAT",
+    "_get_client_ip",
     # constants
     "DEFAULT_ATTENDEE_ROLE",
     "DEFAULT_PARTSTAT",

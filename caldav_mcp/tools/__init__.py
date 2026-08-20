@@ -28,6 +28,7 @@ human-readable text.
 
 import inspect
 import ssl
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -37,9 +38,11 @@ from caldav.lib.error import DAVError
 from fastmcp.server.dependencies import get_http_headers
 
 from caldav_mcp import mcp
-from caldav_mcp.auth import _require_auth, _resolve_credentials
+from caldav_mcp.audit import log_error, log_operation
+from caldav_mcp.auth import _get_client_ip, _require_auth, _resolve_credentials
 from caldav_mcp.calendar import _get_calendar
 from caldav_mcp.client_cache import get_cache
+from caldav_mcp.config import CALDAV_VERIFY_SSL
 from caldav_mcp.errors import (
     AuthError,
     NotFoundError,
@@ -56,6 +59,7 @@ _REMOTE_ERRORS = (
     DAVError,
     requests.exceptions.RequestException,
     ssl.SSLError,
+    ValueError,
 )
 
 
@@ -113,7 +117,10 @@ def _resolve_client_and_calendar(
     cache = get_cache()
     client = cache.get(url, user)
     if client is None:
-        client = DAVClient(url=url, username=user, password=pw)  # type: ignore[operator]
+        client = DAVClient(  # type: ignore[operator]
+            url=url, username=user, password=pw,
+            ssl_verify=CALDAV_VERIFY_SSL,
+        )
         cache.put(url, user, client)
 
     cal = None
@@ -136,15 +143,33 @@ def with_caldav_client(needs_calendar=True):
         public_params = _filter_public_params(sig, needs_calendar)
 
         def wrapper(*_args, **kwargs):
+            start_time = time.monotonic()
             try:
                 error = _require_auth()
                 if error:
                     return error
                 client, cal = _resolve_client_and_calendar(needs_calendar, kwargs)
                 if needs_calendar:
-                    return fn(client=client, cal=cal, **kwargs)
-                return fn(client=client, **kwargs)
+                    result = fn(client=client, cal=cal, **kwargs)
+                else:
+                    result = fn(client=client, **kwargs)
+                duration_ms = (time.monotonic() - start_time) * 1000
+                log_operation(
+                    tool_name=fn.__name__,
+                    status=result.status.value if hasattr(result, "status") else "unknown",
+                    duration_ms=duration_ms,
+                    calendar_name=kwargs.get("calendar_name", ""),
+                )
+                return result
             except _REMOTE_ERRORS as e:
+                duration_ms = (time.monotonic() - start_time) * 1000
+                log_error(fn.__name__, type(e).__name__, str(e))
+                log_operation(
+                    tool_name=fn.__name__,
+                    status="error",
+                    duration_ms=duration_ms,
+                    calendar_name=kwargs.get("calendar_name", ""),
+                )
                 return _render_error(e, fn.__name__)
 
         wrapper.__name__ = fn.__name__

@@ -40,6 +40,32 @@ def caldav_create_event(
 ):
     """Create a new calendar event."""
     from caldav_mcp.event_builder import build_event, parse_attendee_emails
+    from caldav_mcp.sanitizers import (
+        MAX_CATEGORIES_LENGTH,
+        MAX_DESCRIPTION_LENGTH,
+        MAX_LOCATION_LENGTH,
+        MAX_SUMMARY_LENGTH,
+        sanitize_text,
+        validate_email,
+    )
+
+    summary = sanitize_text(summary, MAX_SUMMARY_LENGTH)
+    if location:
+        location = sanitize_text(location, MAX_LOCATION_LENGTH)
+    if description:
+        description = sanitize_text(description, MAX_DESCRIPTION_LENGTH)
+    if categories:
+        categories = sanitize_text(categories, MAX_CATEGORIES_LENGTH)
+
+    # Validate attendee emails before building the event.
+    if attendees:
+        from caldav_mcp.event_builder import parse_attendee_emails as _parse_ae
+        raw_emails = _parse_ae(attendees)
+        for addr in raw_emails:
+            validate_email(addr)
+        attendee_emails = raw_emails
+    else:
+        attendee_emails = []
 
     start_dt = _parse_dt(start)
     end_dt = _parse_dt(end) if end else (start_dt + timedelta(hours=1))
@@ -58,10 +84,6 @@ def caldav_create_event(
             return ToolResult.failure(Status.ERROR, ERR_INVALID_RRULE)
         rrule_parsed = vRecur.from_ical(rrule)
 
-    # RFC 5545 §3.3.4: ATTENDEE values are vCalAddress with PARAMS.
-    # We set PARTSTAT=NEEDS-ACTION and RSVP=TRUE as sensible defaults for
-    # newly-invited attendees.  encode=False lets icalendar handle escaping.
-    attendee_emails = parse_attendee_emails(attendees)
     ical, uid = build_event(
         summary=summary,
         start_dt=start_dt,
@@ -96,6 +118,20 @@ def caldav_update_event(
     description: str = "",
 ):
     """Update an existing event by UID. Only provided fields are updated."""
+    from caldav_mcp.sanitizers import (
+        MAX_DESCRIPTION_LENGTH,
+        MAX_LOCATION_LENGTH,
+        MAX_SUMMARY_LENGTH,
+        sanitize_text,
+    )
+
+    if summary:
+        summary = sanitize_text(summary, MAX_SUMMARY_LENGTH)
+    if location:
+        location = sanitize_text(location, MAX_LOCATION_LENGTH)
+    if description:
+        description = sanitize_text(description, MAX_DESCRIPTION_LENGTH)
+
     event = cal.event_by_uid(uid)
     comp = _comp(event)
     if comp is None:

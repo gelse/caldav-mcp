@@ -13,4 +13,19 @@ services:
       CALDAV_MCP_PATH: "/mcp"
       # Shared API token; set in a local .env file or host environment.
       CALDAV_MCP_API_KEY: "${CALDAV_MCP_API_KEY:-}"
+      # TLS / HTTPS (optional; mount cert/key into the container)
+      CALDAV_MCP_TLS_CERT: "${CALDAV_MCP_TLS_CERT:-}"
+      CALDAV_MCP_TLS_KEY: "${CALDAV_MCP_TLS_KEY:-}"
+      CALDAV_MCP_TLS_CA_BUNDLE: "${CALDAV_MCP_TLS_CA_BUNDLE:-}"
+      # CalDAV server SSL verification (set to false only for testing)
+      CALDAV_MCP_CALDAV_VERIFY_SSL: "${CALDAV_MCP_CALDAV_VERIFY_SSL:-true}"
+      # Rate limiting
+      CALDAV_MCP_RATE_LIMIT_MAX_FAILURES: "${CALDAV_MCP_RATE_LIMIT_MAX_FAILURES:-10}"
+      CALDAV_MCP_RATE_LIMIT_WINDOW_SECONDS: "${CALDAV_MCP_RATE_LIMIT_WINDOW_SECONDS:-60}"
+      # Audit log format (text or json)
+      CALDAV_MCP_LOG_FORMAT: "${CALDAV_MCP_LOG_FORMAT:-text}"
       TZ: Europe/Vienna
+    volumes:
+      # Mount TLS certificate and key (optional)
+      - ${CALDAV_MCP_TLS_CERT:-/dev/null}:/app/tls/cert.pem:ro
+      - ${CALDAV_MCP_TLS_KEY:-/dev/null}:/app/tls/key.pem:ro

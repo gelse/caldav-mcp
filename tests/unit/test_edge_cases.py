@@ -85,7 +85,7 @@ class TestLongStrings:
     """Tests for very long string values in event fields."""
 
     def test_create_event_long_summary(self):
-        """Summary with 1000+ characters."""
+        """Summary exceeding MAX_SUMMARY_LENGTH is rejected by sanitization."""
         long_summary = "A" * 1000
         fake_cal = FakeCalendar()
         patchers = patch_caldav(fake_cal)
@@ -94,13 +94,13 @@ class TestLongStrings:
                 summary=long_summary,
                 start="2026-01-01T10:00:00Z",
             )
-            assert result.status == Status.OK
+            assert result.status == Status.ERROR
         finally:
             for p in patchers:
                 p.stop()
 
     def test_create_event_long_description(self):
-        """Description with 5000+ characters."""
+        """Description exceeding MAX_DESCRIPTION_LENGTH is rejected by sanitization."""
         long_desc = "x" * 5000
         fake_cal = FakeCalendar()
         patchers = patch_caldav(fake_cal)
@@ -110,7 +110,7 @@ class TestLongStrings:
                 start="2026-01-01T10:00:00Z",
                 description=long_desc,
             )
-            assert result.status == Status.OK
+            assert result.status == Status.ERROR
         finally:
             for p in patchers:
                 p.stop()

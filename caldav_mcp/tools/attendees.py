@@ -26,6 +26,14 @@ def caldav_add_attendee(
     role: str = DEFAULT_ATTENDEE_ROLE,
 ):
     """Add an attendee to an existing event."""
+    from caldav_mcp.sanitizers import validate_email
+
+    # Strip mailto: prefix before validation (users may pass "mailto:user@example.com").
+    email_for_validation = email.strip()
+    if email_for_validation.lower().startswith("mailto:"):
+        email_for_validation = email_for_validation[7:]
+    validate_email(email_for_validation)
+
     event = cal.event_by_uid(uid)
     comp = _comp(event)
     if comp is None:

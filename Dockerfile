@@ -14,6 +14,15 @@ COPY --chown=app:app caldav_mcp/ ./caldav_mcp/
 
 EXPOSE 8080
 
+# TLS / HTTPS configuration (optional)
+ENV CALDAV_MCP_TLS_CERT=""
+ENV CALDAV_MCP_TLS_KEY=""
+ENV CALDAV_MCP_TLS_CA_BUNDLE=""
+# CalDAV server SSL verification (set to false only for testing with self-signed certs)
+ENV CALDAV_MCP_CALDAV_VERIFY_SSL="true"
+# Audit log format (text or json)
+ENV CALDAV_MCP_LOG_FORMAT="text"
+
 USER app
 
 # Streamable HTTP endpoint on /mcp

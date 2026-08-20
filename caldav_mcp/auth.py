@@ -21,7 +21,9 @@ patches are observed at call time.
 
 import os
 
+from caldav_mcp.audit import log_auth_attempt
 from caldav_mcp.errors import AuthError, Status, ToolResult
+from caldav_mcp.rate_limit import auth_rate_limiter
 # Header-name constants are never patched in tests, so direct import is fine.
 from caldav_mcp.config import (
     HDR_API_KEY,
@@ -44,6 +46,26 @@ def _hdrs():
     return get_http_headers
 
 
+def _get_client_ip() -> str:
+    """Extract client IP from request headers or return 'unknown'.
+
+    Checks ``X-Forwarded-For`` and ``X-Real-IP`` headers first (for
+    reverse-proxy setups), then falls back to 'unknown'.
+    """
+    try:
+        headers = _hdrs()()
+        forwarded = headers.get("X-Forwarded-For", "")
+        if forwarded:
+            # X-Forwarded-For may contain a comma-separated list; take the first.
+            return forwarded.split(",")[0].strip()
+        real_ip = headers.get("X-Real-IP", "")
+        if real_ip:
+            return real_ip.strip()
+    except Exception:
+        pass
+    return "unknown"
+
+
 # NOTE: We use constant-time comparison to prevent timing side-channel
 # attacks that could leak the API token byte-by-byte.
 def _const_eq(a: str, b: str) -> bool:
@@ -62,23 +84,52 @@ def _require_auth() -> "ToolResult | None":
     Returns ``None`` on success, or a structured auth :class:`ToolResult` to
     return to the client when authentication fails. Authentication is disabled
     (returns ``None``) when CALDAV_MCP_API_KEY is not set.
+
+    Integrates rate limiting (per client IP) and structured audit logging.
     """
     expected = _cfg().API_KEY
     if not expected:
         return None
 
+    client_ip = _get_client_ip()
+
+    # Check rate limit before attempting authentication.
+    if auth_rate_limiter.is_rate_limited(client_ip):
+        backoff = auth_rate_limiter.get_backoff_seconds(client_ip)
+        log_auth_attempt(
+            success=False, client_ip=client_ip, method="none",
+            reason=f"rate limited (backoff {backoff}s)",
+        )
+        return ToolResult.failure(
+            Status.AUTH,
+            f"rate limited - too many failed attempts, retry in {backoff}s",
+        )
+
     headers = _hdrs()()
     provided = ""
+    auth_method = "none"
     auth = headers.get(HDR_AUTHORIZATION, "")
     if auth:
         scheme, _, token = auth.partition(" ")
         if scheme.lower() == "bearer":
             provided = token.strip()
+            auth_method = "bearer"
     if not provided:
-        provided = headers.get(HDR_API_KEY, "").strip()
+        key = headers.get(HDR_API_KEY, "").strip()
+        if key:
+            provided = key
+            auth_method = "api-key"
 
     if provided and _const_eq(provided, expected):
+        auth_rate_limiter.reset(client_ip)
+        log_auth_attempt(success=True, client_ip=client_ip, method=auth_method)
         return None
+
+    auth_rate_limiter.record_failure(client_ip)
+    log_auth_attempt(
+        success=False, client_ip=client_ip, method=auth_method,
+        reason="invalid token",
+    )
     return ToolResult.failure(
         Status.AUTH, "unauthorized - missing or invalid API token"
     )

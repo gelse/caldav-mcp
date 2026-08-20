@@ -95,6 +95,10 @@ def caldav_get_event_by_uid(client, cal, uid: str, calendar_name: str = ""):
 @with_caldav_client()
 def caldav_search_events(client, cal, query: str, calendar_name: str = ""):
     """Search events by text (summary/description/location)."""
+    from caldav_mcp.sanitizers import MAX_QUERY_LENGTH, sanitize_text
+
+    query = sanitize_text(query, MAX_QUERY_LENGTH)
+
     # NOTE: CalDAV SEARCH (REPORT) is not universally supported, so we
     # fetch all events and filter client-side.  This is adequate for small
     # to medium calendars but may need optimization for large ones.
