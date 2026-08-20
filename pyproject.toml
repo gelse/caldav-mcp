@@ -17,9 +17,17 @@ dev = [
     "mypy>=1.10.0",
     "types-requests>=2.31.0",
 ]
+docs = [
+    "sphinx>=7.0",
+    "sphinx-rtd-theme>=2.0",
+]
 
 [project.scripts]
 caldav-mcp = "server:main"
+
+[project.urls]
+Documentation = "https://github.com/<org>/caldav-mcp/tree/main/docs"
+Repository = "https://github.com/<org>/caldav-mcp"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

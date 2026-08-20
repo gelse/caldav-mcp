@@ -36,3 +36,14 @@ deps-check:
 
 .PHONY: check
 check: lint typecheck deps-check test
+
+.PHONY: docs-serve
+docs-serve:
+	@echo "Opening docs/ directory — view with any Markdown renderer"
+	@echo "  e.g. code docs/architecture.md"
+
+.PHONY: docs-check
+docs-check:
+	@test -f docs/architecture.md && echo "✓ docs/architecture.md exists" || (echo "✗ docs/architecture.md missing" && exit 1)
+	@test -f docs/api.md && echo "✓ docs/api.md exists" || (echo "✗ docs/api.md missing" && exit 1)
+	@test -f docs/contributing.md && echo "✓ docs/contributing.md exists" || (echo "✗ docs/contributing.md missing" && exit 1)
