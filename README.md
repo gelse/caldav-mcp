@@ -316,4 +316,4 @@ A: The current server uses Streamable HTTP transport only. To use stdio, modify 
 
 ## License
 
-[Apache-2.0](LICENSE)
+[MIT](LICENSE)
