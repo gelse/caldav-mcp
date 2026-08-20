@@ -14,17 +14,17 @@ def _srv():
     return server
 
 
-def _now():
+def _now() -> datetime:
     """Return the current time in the server timezone."""
     return datetime.now(_srv().SERVER_TZ)
 
 
-def _start_of_day(dt):
+def _start_of_day(dt: datetime) -> datetime:
     """Return the local midnight (start of day) for the given datetime in the server timezone."""
     return dt.replace(hour=0, minute=0, second=0, microsecond=0)
 
 
-def _parse_dt(value):
+def _parse_dt(value: str) -> datetime:
     srv = _srv()
     value = value.strip()
     if not value:
@@ -52,7 +52,7 @@ def _parse_dt(value):
     raise ValueError(f"Could not parse datetime: {value!r}")
 
 
-def _format_ical_dt(dt):
+def _format_ical_dt(dt: datetime) -> str:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=UTC)
     return dt.astimezone(UTC).strftime("%Y%m%dT%H%M%SZ")

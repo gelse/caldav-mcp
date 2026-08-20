@@ -3,20 +3,20 @@
 import uuid
 from datetime import timedelta
 
-from caldav import DAVClient  # type: ignore[attr-defined]
-from icalendar import Calendar, Event, vCalAddress, vText
-from icalendar.prop import vRecur
+from icalendar import vRecur
 
 from caldav_mcp import mcp
-from caldav_mcp.auth import _resolve_credentials
 from caldav_mcp.calendar import (
     _comp,
-    _event_to_dict,
     _get_calendar,
     _validate_priority,
     _validate_rrule,
 )
-from caldav_mcp.client_cache import get_cache
+from caldav_mcp.constants import (
+    ERR_INVALID_RRULE,
+    ERR_NO_COMPONENT,
+    UID_DOMAIN,
+)
 from caldav_mcp.datetime_utils import _now, _parse_dt
 from caldav_mcp.errors import Status, ToolResult
 from caldav_mcp.tools import _REMOTE_ERRORS, _ok, _render_error, with_caldav_client
@@ -39,52 +39,40 @@ def caldav_create_event(
     attendees: str = "",
 ):
     """Create a new calendar event."""
+    from caldav_mcp.event_builder import build_event, parse_attendee_emails
+
     start_dt = _parse_dt(start)
     end_dt = _parse_dt(end) if end else (start_dt + timedelta(hours=1))
 
-    uid = f"{uuid.uuid4()}@caldav-mcp"
-
-    ical = Calendar()
-    ical.add("prodid", "-//caldav-mcp//EN")
-    ical.add("version", "2.0")
-
-    event = Event()
-    event.add("uid", uid)
-    event.add("dtstamp", _now())
-    event.add("dtstart", start_dt)
-    event.add("dtend", end_dt)
-    event.add("summary", summary)
-
-    if location:
-        event.add("location", location)
-    if description:
-        event.add("description", description)
-    if categories:
-        event.add("categories", categories)
-
+    # Validate priority
+    priority_int = None
     if priority:
         priority_int, err = _validate_priority(priority)
         if err:
             return ToolResult.failure(Status.ERROR, err)
-        event.add("priority", priority_int)
 
+    # Validate rrule
+    rrule_parsed = None
     if rrule:
         if not _validate_rrule(rrule):
-            return ToolResult.failure(Status.ERROR, "invalid RRULE")
-        event.add("rrule", vRecur.from_ical(rrule))
+            return ToolResult.failure(Status.ERROR, ERR_INVALID_RRULE)
+        rrule_parsed = vRecur.from_ical(rrule)
 
-    if attendees:
-        for email in attendees.split(","):
-            email = email.strip()
-            if not email:
-                continue
-            attendee = vCalAddress("mailto:" + email)
-            attendee.params["PARTSTAT"] = vText("NEEDS-ACTION")
-            attendee.params["RSVP"] = vText("TRUE")
-            attendee.params["ROLE"] = vText("REQ-PARTICIPANT")
-            event.add("attendee", attendee, encode=False)
+    # Build event
+    attendee_emails = parse_attendee_emails(attendees)
+    ical, uid = build_event(
+        summary=summary,
+        start_dt=start_dt,
+        end_dt=end_dt,
+        now=_now(),
+        location=location,
+        description=description,
+        categories=categories,
+        priority_int=priority_int,
+        rrule_parsed=rrule_parsed,
+        attendee_emails=attendee_emails,
+    )
 
-    ical.add_component(event)
     cal.save_event(ical.to_ical().decode("utf-8"))
     return _ok(
         message=f"Event '{summary}' created (uid={uid})",
@@ -109,7 +97,7 @@ def caldav_update_event(
     event = cal.event_by_uid(uid)
     comp = _comp(event)
     if comp is None:
-        return ToolResult.failure(Status.ERROR, "no icalendar component")
+        return ToolResult.failure(Status.ERROR, ERR_NO_COMPONENT)
     if summary:
         comp["SUMMARY"] = summary
     if start:
@@ -135,29 +123,22 @@ def caldav_delete_event(client, cal, uid: str, calendar_name: str = ""):
 
 
 @mcp.tool()
-def caldav_move_event(uid: str, target_calendar: str, source_calendar: str = ""):
+@with_caldav_client(needs_calendar=False)
+def caldav_move_event(
+    client,
+    uid: str,
+    target_calendar: str,
+    source_calendar: str = "",
+):
     """Move an event to another calendar (copy to target with new UID, delete original)."""
     try:
-        from caldav_mcp.auth import _require_auth
-
-        error = _require_auth()
-        if error:
-            return error
-        url, user, pw = _resolve_credentials()
-
-        cache = get_cache()
-        client = cache.get(url, user)
-        if client is None:
-            client = DAVClient(url=url, username=user, password=pw)  # type: ignore[operator]
-            cache.put(url, user, client)
-
         src_cal = _get_calendar(client, source_calendar or None)
         dst_cal = _get_calendar(client, target_calendar)
         event = src_cal.event_by_uid(uid)
         comp = _comp(event)
         if comp is None:
-            return ToolResult.failure(Status.ERROR, "no icalendar component")
-        new_uid = f"{uuid.uuid4()}@caldav-mcp"
+            return ToolResult.failure(Status.ERROR, ERR_NO_COMPONENT)
+        new_uid = f"{uuid.uuid4()}@{UID_DOMAIN}"
         comp["UID"] = new_uid
         dst_cal.save_event(comp.to_ical().decode("utf-8"))
         event.delete()

@@ -4,6 +4,13 @@ from icalendar import vCalAddress, vText
 
 from caldav_mcp import mcp
 from caldav_mcp.calendar import _comp, _event_to_dict
+from caldav_mcp.constants import (
+    DEFAULT_ATTENDEE_ROLE,
+    DEFAULT_PARTSTAT,
+    DEFAULT_RSVP,
+    ERR_NO_COMPONENT,
+    MAILTO_PREFIX,
+)
 from caldav_mcp.errors import Status, ToolResult
 from caldav_mcp.tools import _empty, _ok, with_caldav_client
 
@@ -16,19 +23,19 @@ def caldav_add_attendee(
     uid: str,
     email: str,
     calendar_name: str = "",
-    role: str = "REQ-PARTICIPANT",
+    role: str = DEFAULT_ATTENDEE_ROLE,
 ):
     """Add an attendee to an existing event."""
     event = cal.event_by_uid(uid)
     comp = _comp(event)
     if comp is None:
-        return ToolResult.failure(Status.ERROR, "no icalendar component")
+        return ToolResult.failure(Status.ERROR, ERR_NO_COMPONENT)
     email_clean = email.strip()
-    if not email_clean.lower().startswith("mailto:"):
-        email_clean = "mailto:" + email_clean
+    if not email_clean.lower().startswith(MAILTO_PREFIX):
+        email_clean = MAILTO_PREFIX + email_clean
     attendee = vCalAddress(email_clean)
-    attendee.params["PARTSTAT"] = vText("NEEDS-ACTION")
-    attendee.params["RSVP"] = vText("TRUE")
+    attendee.params["PARTSTAT"] = vText(DEFAULT_PARTSTAT)
+    attendee.params["RSVP"] = vText(DEFAULT_RSVP)
     attendee.params["ROLE"] = vText(role)
     comp.add("attendee", attendee, encode=False)
     event.data = comp.to_ical().decode("utf-8")
@@ -45,10 +52,10 @@ def caldav_remove_attendee(
     event = cal.event_by_uid(uid)
     comp = _comp(event)
     if comp is None:
-        return ToolResult.failure(Status.ERROR, "no icalendar component")
+        return ToolResult.failure(Status.ERROR, ERR_NO_COMPONENT)
     target = email.strip()
-    if not target.lower().startswith("mailto:"):
-        target = "mailto:" + target
+    if not target.lower().startswith(MAILTO_PREFIX):
+        target = MAILTO_PREFIX + target
     target_norm = target.lower()
 
     current = comp.get("attendee")

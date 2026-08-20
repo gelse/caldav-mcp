@@ -22,7 +22,7 @@ import logging
 import threading
 import time
 from collections import OrderedDict
-from typing import Any
+from caldav_mcp.types import CalDAVClient
 
 log = logging.getLogger(__name__)
 
@@ -42,7 +42,7 @@ class ClientCache:
         self._max_size = max_size
         self._ttl = ttl_seconds
         # OrderedDict gives us O(1) move_to_end / popitem.
-        self._cache: OrderedDict[tuple[str, str], Any] = OrderedDict()
+        self._cache: OrderedDict[tuple[str, str], CalDAVClient] = OrderedDict()
         self._timestamps: dict[tuple[str, str], float] = {}
         self._lock = threading.Lock()
 
@@ -50,7 +50,7 @@ class ClientCache:
     # Public API
     # ------------------------------------------------------------------
 
-    def get(self, url: str, username: str) -> Any | None:
+    def get(self, url: str, username: str) -> CalDAVClient | None:
         """Return a cached ``DAVClient`` if one exists and is still alive.
 
         Returns ``None`` on cache miss or TTL expiry (the expired entry is
@@ -77,7 +77,7 @@ class ClientCache:
             self._cache.move_to_end(key)
             return client
 
-    def put(self, url: str, username: str, client: Any) -> None:
+    def put(self, url: str, username: str, client: CalDAVClient) -> None:
         """Insert or replace a ``DAVClient`` in the cache.
 
         If the cache is at capacity the least-recently-used entry is evicted

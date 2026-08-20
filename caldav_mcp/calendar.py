@@ -6,14 +6,18 @@ Pure helpers (``_text``, ``_event_to_dict``, ``_validate_priority``, …) and th
 dependency.
 """
 
+from __future__ import annotations
+
 from datetime import datetime
+from typing import Any
 
 from icalendar.prop import vRecur
 
 from caldav_mcp.errors import NotFoundError
+from caldav_mcp.types import CalDAVClient
 
 
-def _get_calendar(client, calendar_name=None):
+def _get_calendar(client: CalDAVClient, calendar_name: str | None = None) -> Any:
     calendars = client.principal().calendars()
     if not calendars:
         raise NotFoundError("No calendars found for this principal")
@@ -28,7 +32,7 @@ def _get_calendar(client, calendar_name=None):
     return calendars[0]
 
 
-def _text(comp, name):
+def _text(comp: Any, name: str) -> str:
     """Extract a text value from an icalendar component property."""
     v = comp.get(name)
     if v is None:
@@ -38,7 +42,7 @@ def _text(comp, name):
     return _text_single(v)
 
 
-def _text_single(v):
+def _text_single(v: Any) -> str:
     # icalendar prop objects; handle vText / vDDDTypes / plain str
     try:
         dt = v.dt
@@ -51,12 +55,12 @@ def _text_single(v):
     return str(v)
 
 
-def _comp(event):
+def _comp(event: Any) -> Any | None:
     """Return the icalendar.Component for a caldav Event object."""
     return getattr(event, "icalendar_component", None)
 
 
-def _event_to_dict(event):
+def _event_to_dict(event: Any) -> dict[str, str]:
     comp = _comp(event)
     if comp is None:
         return {
@@ -89,7 +93,7 @@ def _event_to_dict(event):
     }
 
 
-def _attendee_str(attendee):
+def _attendee_str(attendee: Any) -> str:
     email = str(attendee)
     # vCalAddress: value is 'mailto:user@host'
     role = getattr(attendee, "params", {})

@@ -31,6 +31,7 @@ from caldav_mcp import (
     HDR_USERNAME,
     SERVER_TZ,
     AuthError,
+    CalDAVClient,
     CalDAVError,
     NotFoundError,
     ServerError,
@@ -54,6 +55,7 @@ from caldav_mcp import (
     _text_single,
     _validate_priority,
     _validate_rrule,
+    build_event,
     caldav_add_attendee,
     caldav_create_event,
     caldav_delete_event,
@@ -70,10 +72,37 @@ from caldav_mcp import (
     caldav_update_event,
     log,
     mcp,
+    parse_attendee_emails,
+)
+from caldav_mcp.constants import (  # noqa: E402
+    DEFAULT_ATTENDEE_ROLE,
+    DEFAULT_PARTSTAT,
+    DEFAULT_RSVP,
+    ERR_INVALID_RRULE,
+    ERR_NO_COMPONENT,
+    ICAL_VERSION,
+    MAILTO_PREFIX,
+    PRODID,
+    UID_DOMAIN,
 )
 
 __all__ = [
     "mcp",
+    # constants
+    "DEFAULT_ATTENDEE_ROLE",
+    "DEFAULT_PARTSTAT",
+    "DEFAULT_RSVP",
+    "ERR_INVALID_RRULE",
+    "ERR_NO_COMPONENT",
+    "ICAL_VERSION",
+    "MAILTO_PREFIX",
+    "PRODID",
+    "UID_DOMAIN",
+    # event_builder
+    "build_event",
+    "parse_attendee_emails",
+    # types
+    "CalDAVClient",
     # errors
     "Status",
     "AuthError",

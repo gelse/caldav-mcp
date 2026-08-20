@@ -43,6 +43,9 @@ select = ["E", "F", "I", "UP"]
 
 [tool.mypy]
 python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false  # Start permissive; tighten incrementally
 
 [[tool.mypy.overrides]]
 module = ["caldav", "fastmcp.*"]

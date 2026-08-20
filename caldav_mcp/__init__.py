@@ -35,6 +35,7 @@ from caldav_mcp import (  # noqa: E402, F401  (submodule imports; see comment ab
     auth,
     calendar,
     config,
+    constants,
     datetime_utils,
     errors,
     tools,
@@ -81,6 +82,22 @@ from caldav_mcp.datetime_utils import (  # noqa: F401, E402
 
 # Re-export the names server.py previously exposed at module level.  Doing this
 # in __init__ lets server.py import a single flat set of names.
+from caldav_mcp.constants import (  # noqa: E402
+    DEFAULT_ATTENDEE_ROLE,
+    DEFAULT_PARTSTAT,
+    DEFAULT_RSVP,
+    ERR_INVALID_RRULE,
+    ERR_NO_COMPONENT,
+    ICAL_VERSION,
+    MAILTO_PREFIX,
+    PRODID,
+    UID_DOMAIN,
+)
+from caldav_mcp.event_builder import (  # noqa: E402
+    build_event,
+    parse_attendee_emails,
+)
+from caldav_mcp.types import CalDAVClient  # noqa: E402
 from caldav_mcp.errors import (  # noqa: E402
     AuthError,
     CalDAVError,
@@ -111,6 +128,21 @@ from caldav_mcp.tools import (  # noqa: F401, E402
 
 __all__ = [
     "mcp",
+    # constants
+    "DEFAULT_ATTENDEE_ROLE",
+    "DEFAULT_PARTSTAT",
+    "DEFAULT_RSVP",
+    "ERR_INVALID_RRULE",
+    "ERR_NO_COMPONENT",
+    "ICAL_VERSION",
+    "MAILTO_PREFIX",
+    "PRODID",
+    "UID_DOMAIN",
+    # event_builder
+    "build_event",
+    "parse_attendee_emails",
+    # types
+    "CalDAVClient",
     # errors
     "Status",
     "AuthError",

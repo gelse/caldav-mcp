@@ -176,13 +176,19 @@ def patch_caldav_move(src_cal, dst_cal):
 
     ``_get_calendar`` is faked to return ``dst_cal`` when the requested name
     matches the destination calendar, otherwise ``src_cal``.
+
+    After Phase 5 ``caldav_move_event`` uses the ``@with_caldav_client``
+    decorator, so ``_resolve_credentials`` and ``DAVClient`` live in
+    ``caldav_mcp.tools.__init__`` (the decorator module), while
+    ``_get_calendar`` is imported directly in ``mutations.py`` from
+    ``caldav_mcp.calendar``.
     """
     from caldav_mcp.client_cache import get_cache
 
     get_cache().clear()
     patchers = [
-        mock.patch("caldav_mcp.tools.mutations._resolve_credentials", return_value=("u", "p", "w")),
-        mock.patch("caldav_mcp.tools.mutations.DAVClient", return_value=FakeClient()),
+        mock.patch("caldav_mcp.tools._resolve_credentials", return_value=("u", "p", "w")),
+        mock.patch("caldav_mcp.tools.DAVClient", return_value=FakeClient()),
         mock.patch(
             "caldav_mcp.tools.mutations._get_calendar",
             side_effect=lambda client, name: dst_cal if name == dst_cal.name else src_cal,
