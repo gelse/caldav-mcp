@@ -117,8 +117,8 @@ def test_get_today_events_starts_at_local_midnight():
     tz = ZoneInfo("Europe/Vienna")
     fake_now = datetime(2026, 8, 18, 15, 30, tzinfo=tz)
     with mock.patch.object(server, "SERVER_TZ", tz):
-        with mock.patch.object(server, "_now", lambda: fake_now):
-            with mock.patch.object(server, "caldav_get_events") as get_events:
+        with mock.patch("caldav_mcp.tools.queries._now", lambda: fake_now):
+            with mock.patch("caldav_mcp.tools.queries.caldav_get_events") as get_events:
                 get_events.return_value = server.ToolResult.success("ok")
                 server.caldav_get_today_events()
     _, kwargs = get_events.call_args
@@ -130,8 +130,8 @@ def test_get_week_events_starts_at_local_midnight():
     tz = ZoneInfo("Europe/Vienna")
     fake_now = datetime(2026, 8, 18, 15, 30, tzinfo=tz)
     with mock.patch.object(server, "SERVER_TZ", tz):
-        with mock.patch.object(server, "_now", lambda: fake_now):
-            with mock.patch.object(server, "caldav_get_events") as get_events:
+        with mock.patch("caldav_mcp.tools.queries._now", lambda: fake_now):
+            with mock.patch("caldav_mcp.tools.queries.caldav_get_events") as get_events:
                 get_events.return_value = server.ToolResult.success("ok")
                 server.caldav_get_week_events()
     _, kwargs = get_events.call_args

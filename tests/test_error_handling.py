@@ -22,9 +22,8 @@ from server import Status
 
 
 def test_missing_credentials_returns_auth_error():
-    with mock.patch.object(
-        server,
-        "_resolve_credentials",
+    with mock.patch(
+        "caldav_mcp.tools._resolve_credentials",
         side_effect=server.AuthError("missing credentials"),
     ):
         result = server.caldav_list_calendars()
@@ -34,11 +33,10 @@ def test_missing_credentials_returns_auth_error():
 
 def test_missing_calendar_returns_not_found():
     with (
-        mock.patch.object(server, "_resolve_credentials", return_value=("u", "p", "w")),
-        mock.patch.object(server, "DAVClient", return_value=object()),
-        mock.patch.object(
-            server,
-            "_get_calendar",
+        mock.patch("caldav_mcp.tools._resolve_credentials", return_value=("u", "p", "w")),
+        mock.patch("caldav_mcp.tools.DAVClient", return_value=object()),
+        mock.patch(
+            "caldav_mcp.tools._get_calendar",
             side_effect=server.NotFoundError("Calendar 'x' not found"),
         ),
     ):
@@ -49,7 +47,7 @@ def test_missing_calendar_returns_not_found():
 
 def test_unexpected_exception_propagates():
     """Unexpected exceptions are no longer swallowed by the handler."""
-    with mock.patch.object(server, "_resolve_credentials", side_effect=RuntimeError("boom")):
+    with mock.patch("caldav_mcp.tools._resolve_credentials", side_effect=RuntimeError("boom")):
         with pytest.raises(RuntimeError):
             server.caldav_list_calendars()
 
@@ -57,9 +55,8 @@ def test_unexpected_exception_propagates():
 def test_dav_error_is_caught_and_logged():
     """Expected remote (DAVError) failures are still caught and rendered."""
     with (
-        mock.patch.object(
-            server,
-            "_resolve_credentials",
+        mock.patch(
+            "caldav_mcp.tools._resolve_credentials",
             side_effect=DAVError(url="https://caldav.example", reason="boom"),
         ),
         mock.patch.object(server.log, "exception") as log_exc,
@@ -72,9 +69,8 @@ def test_dav_error_is_caught_and_logged():
 
 def test_dav_error_does_not_leak_raw_message():
     secret = "hunter2-supersecret-password"
-    with mock.patch.object(
-        server,
-        "_resolve_credentials",
+    with mock.patch(
+        "caldav_mcp.tools._resolve_credentials",
         side_effect=DAVError(url=f"https://caldav.example/{secret}", reason="boom"),
     ):
         result = server.caldav_list_calendars()

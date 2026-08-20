@@ -162,9 +162,9 @@ def patch_caldav(fake_cal):
 
     client_cache.clear()
     patchers = [
-        mock.patch.object(server, "_resolve_credentials", return_value=("u", "p", "w")),
-        mock.patch.object(server, "DAVClient", return_value=FakeClient([fake_cal])),
-        mock.patch.object(server, "_get_calendar", return_value=fake_cal),
+        mock.patch("caldav_mcp.tools._resolve_credentials", return_value=("u", "p", "w")),
+        mock.patch("caldav_mcp.tools.DAVClient", return_value=FakeClient([fake_cal])),
+        mock.patch("caldav_mcp.tools._get_calendar", return_value=fake_cal),
     ]
     for p in patchers:
         p.start()
@@ -181,11 +181,10 @@ def patch_caldav_move(src_cal, dst_cal):
 
     client_cache.clear()
     patchers = [
-        mock.patch.object(server, "_resolve_credentials", return_value=("u", "p", "w")),
-        mock.patch.object(server, "DAVClient", return_value=FakeClient()),
-        mock.patch.object(
-            server,
-            "_get_calendar",
+        mock.patch("caldav_mcp.tools.mutations._resolve_credentials", return_value=("u", "p", "w")),
+        mock.patch("caldav_mcp.tools.mutations.DAVClient", return_value=FakeClient()),
+        mock.patch(
+            "caldav_mcp.tools.mutations._get_calendar",
             side_effect=lambda client, name: dst_cal if name == dst_cal.name else src_cal,
         ),
     ]

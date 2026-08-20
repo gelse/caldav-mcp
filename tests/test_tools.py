@@ -65,8 +65,8 @@ def test_list_calendars_returns_names_and_urls():
 def test_list_calendars_empty():
     client_cache.clear()
     with (
-        mock.patch.object(server, "_resolve_credentials", return_value=("u", "p", "w")),
-        mock.patch.object(server, "DAVClient", return_value=FakeClient(calendars=[])),
+        mock.patch("caldav_mcp.tools._resolve_credentials", return_value=("u", "p", "w")),
+        mock.patch("caldav_mcp.tools.DAVClient", return_value=FakeClient(calendars=[])),
     ):
         result = server.caldav_list_calendars()
     assert result.status == Status.EMPTY
@@ -74,7 +74,7 @@ def test_list_calendars_empty():
 
 def test_list_calendars_auth_error():
     auth_result = server.ToolResult.failure(Status.AUTH, "unauthorized")
-    with mock.patch.object(server, "_require_auth", return_value=auth_result):
+    with mock.patch("caldav_mcp.tools._require_auth", return_value=auth_result):
         result = server.caldav_list_calendars()
     assert result.status == Status.AUTH
 
@@ -89,10 +89,9 @@ def test_get_events_returns_matching_events():
     fake_now = datetime(2026, 1, 15, 8, 0, tzinfo=tz)
     try:
         with (
-            mock.patch.object(server, "_now", lambda: fake_now),
-            mock.patch.object(
-                server,
-                "_start_of_day",
+            mock.patch("caldav_mcp.tools.queries._now", lambda: fake_now),
+            mock.patch(
+                "caldav_mcp.tools.queries._start_of_day",
                 lambda dt: dt.replace(hour=0, minute=0, second=0, microsecond=0),
             ),
         ):
@@ -111,7 +110,7 @@ def test_get_events_explicit_start_end():
     start_dt = datetime(2026, 1, 15, 9, 0)
     end_dt = datetime(2026, 1, 15, 12, 0)
     try:
-        with mock.patch.object(server, "_parse_dt", side_effect=[start_dt, end_dt]):
+        with mock.patch("caldav_mcp.tools.queries._parse_dt", side_effect=[start_dt, end_dt]):
             result = server.caldav_get_events(start="2026-01-15T09:00", end="2026-01-15T12:00")
         assert result.status == Status.OK
         assert len(result.data) == 1
@@ -127,10 +126,9 @@ def test_get_events_empty_range():
     fake_now = datetime(2026, 1, 15, 8, 0, tzinfo=tz)
     try:
         with (
-            mock.patch.object(server, "_now", lambda: fake_now),
-            mock.patch.object(
-                server,
-                "_start_of_day",
+            mock.patch("caldav_mcp.tools.queries._now", lambda: fake_now),
+            mock.patch(
+                "caldav_mcp.tools.queries._start_of_day",
                 lambda dt: dt.replace(hour=0, minute=0, second=0, microsecond=0),
             ),
         ):
@@ -171,7 +169,7 @@ def test_get_event_by_uid_not_found():
 
 def test_get_event_by_uid_auth_error():
     auth_result = server.ToolResult.failure(Status.AUTH, "unauthorized")
-    with mock.patch.object(server, "_require_auth", return_value=auth_result):
+    with mock.patch("caldav_mcp.tools._require_auth", return_value=auth_result):
         result = server.caldav_get_event_by_uid(uid="uid-1")
     assert result.status == Status.AUTH
 
@@ -238,10 +236,9 @@ def test_get_freebusy_busy():
     fake_now = datetime(2026, 1, 15, 8, 0, tzinfo=tz)
     try:
         with (
-            mock.patch.object(server, "_now", lambda: fake_now),
-            mock.patch.object(
-                server,
-                "_start_of_day",
+            mock.patch("caldav_mcp.tools.queries._now", lambda: fake_now),
+            mock.patch(
+                "caldav_mcp.tools.queries._start_of_day",
                 lambda dt: dt.replace(hour=0, minute=0, second=0, microsecond=0),
             ),
         ):
@@ -261,10 +258,9 @@ def test_get_freebusy_free():
     fake_now = datetime(2026, 1, 15, 8, 0, tzinfo=tz)
     try:
         with (
-            mock.patch.object(server, "_now", lambda: fake_now),
-            mock.patch.object(
-                server,
-                "_start_of_day",
+            mock.patch("caldav_mcp.tools.queries._now", lambda: fake_now),
+            mock.patch(
+                "caldav_mcp.tools.queries._start_of_day",
                 lambda dt: dt.replace(hour=0, minute=0, second=0, microsecond=0),
             ),
         ):
@@ -283,7 +279,7 @@ def test_get_freebusy_explicit_range():
     start_dt = datetime(2026, 1, 15, 9, 0)
     end_dt = datetime(2026, 1, 15, 12, 0)
     try:
-        with mock.patch.object(server, "_parse_dt", side_effect=[start_dt, end_dt]):
+        with mock.patch("caldav_mcp.tools.queries._parse_dt", side_effect=[start_dt, end_dt]):
             result = server.caldav_get_freebusy(start="2026-01-15T09:00", end="2026-01-15T12:00")
         assert result.status == Status.OK
         assert "Busy" in result.message
@@ -396,7 +392,7 @@ def test_list_attendees_no_attendees():
 
 def test_list_attendees_auth_error():
     auth_result = server.ToolResult.failure(Status.AUTH, "unauthorized")
-    with mock.patch.object(server, "_require_auth", return_value=auth_result):
+    with mock.patch("caldav_mcp.tools._require_auth", return_value=auth_result):
         result = server.caldav_list_attendees(uid="test-uid@caldav-mcp")
     assert result.status == Status.AUTH
 
@@ -407,8 +403,8 @@ def test_list_attendees_auth_error():
 def test_get_today_events_delegates():
     mock_result = server.ToolResult.success(message="ok", data=[{"uid": "x"}])
     with (
-        mock.patch.object(server, "_require_auth", return_value=None),
-        mock.patch.object(server, "caldav_get_events", return_value=mock_result) as mock_get,
+        mock.patch("caldav_mcp.tools.queries._require_auth", return_value=None),
+        mock.patch("caldav_mcp.tools.queries.caldav_get_events", return_value=mock_result) as mock_get,
     ):
         result = server.caldav_get_today_events(calendar_name="Work")
     assert result is mock_result
@@ -421,7 +417,7 @@ def test_get_today_events_delegates():
 
 def test_get_today_events_auth_error():
     auth_result = server.ToolResult.failure(Status.AUTH, "unauthorized")
-    with mock.patch.object(server, "_require_auth", return_value=auth_result):
+    with mock.patch("caldav_mcp.tools.queries._require_auth", return_value=auth_result):
         result = server.caldav_get_today_events()
     assert result.status == Status.AUTH
 
@@ -432,8 +428,8 @@ def test_get_today_events_auth_error():
 def test_get_week_events_delegates():
     mock_result = server.ToolResult.success(message="ok", data=[{"uid": "x"}])
     with (
-        mock.patch.object(server, "_require_auth", return_value=None),
-        mock.patch.object(server, "caldav_get_events", return_value=mock_result) as mock_get,
+        mock.patch("caldav_mcp.tools.queries._require_auth", return_value=None),
+        mock.patch("caldav_mcp.tools.queries.caldav_get_events", return_value=mock_result) as mock_get,
     ):
         result = server.caldav_get_week_events(calendar_name="Work")
     assert result is mock_result
@@ -446,7 +442,7 @@ def test_get_week_events_delegates():
 
 def test_get_week_events_auth_error():
     auth_result = server.ToolResult.failure(Status.AUTH, "unauthorized")
-    with mock.patch.object(server, "_require_auth", return_value=auth_result):
+    with mock.patch("caldav_mcp.tools.queries._require_auth", return_value=auth_result):
         result = server.caldav_get_week_events()
     assert result.status == Status.AUTH
 
@@ -468,6 +464,6 @@ def test_move_event_not_found():
 
 def test_move_event_auth_error():
     auth_result = server.ToolResult.failure(Status.AUTH, "unauthorized")
-    with mock.patch.object(server, "_require_auth", return_value=auth_result):
+    with mock.patch("caldav_mcp.auth._require_auth", return_value=auth_result):
         result = server.caldav_move_event(uid="uid-1", target_calendar="dst")
     assert result.status == Status.AUTH
