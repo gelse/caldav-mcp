@@ -5,10 +5,10 @@ from unittest import mock
 
 from caldav_mcp.audit import log_auth_attempt, log_error, log_operation
 
-
 # ---------------------------------------------------------------------------
 # log_auth_attempt
 # ---------------------------------------------------------------------------
+
 
 @mock.patch("caldav_mcp.audit._audit_log")
 def test_log_auth_attempt_success(mock_log):
@@ -27,7 +27,9 @@ def test_log_auth_attempt_success(mock_log):
 def test_log_auth_attempt_failure(mock_log):
     """Failed auth emits warning-level JSON with success=False and reason."""
     log_auth_attempt(
-        success=False, client_ip="192.168.1.100", method="api-key",
+        success=False,
+        client_ip="192.168.1.100",
+        method="api-key",
         reason="invalid token",
     )
     mock_log.warning.assert_called_once()
@@ -50,6 +52,7 @@ def test_log_auth_attempt_default_client_ip(mock_log):
 # ---------------------------------------------------------------------------
 # log_operation
 # ---------------------------------------------------------------------------
+
 
 @mock.patch("caldav_mcp.audit._audit_log")
 def test_log_operation_records_timing(mock_log):
@@ -93,6 +96,7 @@ def test_log_operation_has_timestamp(mock_log):
 # log_error
 # ---------------------------------------------------------------------------
 
+
 @mock.patch("caldav_mcp.audit._audit_log")
 def test_log_error_records_type(mock_log):
     """log_error includes error_type and emits at warning level."""
@@ -110,11 +114,14 @@ def test_log_error_records_type(mock_log):
 # No credential leakage
 # ---------------------------------------------------------------------------
 
+
 @mock.patch("caldav_mcp.audit._audit_log")
 def test_auth_attempt_never_logs_token(mock_log):
     """Auth audit entries must never contain the actual token/password."""
     log_auth_attempt(
-        success=False, client_ip="10.0.0.1", method="bearer",
+        success=False,
+        client_ip="10.0.0.1",
+        method="bearer",
         reason="invalid token",
     )
     payload = json.loads(mock_log.warning.call_args[0][0])

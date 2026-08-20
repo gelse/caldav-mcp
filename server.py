@@ -31,17 +31,24 @@ from caldav_mcp import (
     HDR_PASSWORD,
     HDR_URL,
     HDR_USERNAME,
+    LOG_FORMAT,
+    MAX_CALENDAR_NAME_LENGTH,
+    MAX_CATEGORIES_LENGTH,
+    MAX_DESCRIPTION_LENGTH,
+    MAX_LOCATION_LENGTH,
+    MAX_QUERY_LENGTH,
+    MAX_SUMMARY_LENGTH,
     RATE_LIMIT_MAX_FAILURES,
     RATE_LIMIT_WINDOW_SECONDS,
     SERVER_TZ,
     TLS_CA_BUNDLE,
     TLS_CERT_PATH,
     TLS_KEY_PATH,
-    LOG_FORMAT,
     AuthError,
     CalDAVClient,
     CalDAVError,
     NotFoundError,
+    RateLimiter,
     ServerError,
     Status,
     ToolResult,
@@ -87,16 +94,9 @@ from caldav_mcp import (
     log_operation,
     mcp,
     parse_attendee_emails,
-    RateLimiter,
     sanitize_text,
     validate_calendar_name,
     validate_email,
-    MAX_CALENDAR_NAME_LENGTH,
-    MAX_CATEGORIES_LENGTH,
-    MAX_DESCRIPTION_LENGTH,
-    MAX_LOCATION_LENGTH,
-    MAX_QUERY_LENGTH,
-    MAX_SUMMARY_LENGTH,
 )
 from caldav_mcp.constants import (  # noqa: E402
     DEFAULT_ATTENDEE_ROLE,
@@ -236,7 +236,7 @@ def main() -> None:
     ``CALDAV_MCP_TLS_KEY`` environment variables are set.
     """
     # Validate configuration eagerly — fail fast with a clear message.
-    from caldav_mcp.config_schema import load_server_config, load_caldav_config
+    from caldav_mcp.config_schema import load_caldav_config, load_server_config
 
     load_server_config()  # raises on invalid port/tz/path
     caldav_cfg = load_caldav_config()

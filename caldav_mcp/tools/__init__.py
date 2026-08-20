@@ -35,11 +35,16 @@ from typing import Any
 import requests.exceptions
 from caldav import DAVClient  # type: ignore[attr-defined]
 from caldav.lib.error import DAVError
-from fastmcp.server.dependencies import get_http_headers
 
-from caldav_mcp import mcp
+from caldav_mcp import mcp as mcp  # noqa: F401  (re-exported)
 from caldav_mcp.audit import log_error, log_operation
-from caldav_mcp.auth import _get_client_ip, _require_auth, _resolve_credentials
+from caldav_mcp.auth import (
+    _get_client_ip as _get_client_ip,  # noqa: F401  (re-exported)
+)
+from caldav_mcp.auth import (
+    _require_auth,
+    _resolve_credentials,
+)
 from caldav_mcp.calendar import _get_calendar
 from caldav_mcp.client_cache import get_cache
 from caldav_mcp.config import CALDAV_VERIFY_SSL
@@ -66,6 +71,7 @@ _REMOTE_ERRORS = (
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
 
 def _ok(message: str = "", data=None) -> ToolResult:
     """Shortcut for ``ToolResult.success`` — used by every happy-path return."""
@@ -118,7 +124,9 @@ def _resolve_client_and_calendar(
     client = cache.get(url, user)
     if client is None:
         client = DAVClient(  # type: ignore[operator]
-            url=url, username=user, password=pw,
+            url=url,
+            username=user,
+            password=pw,
             ssl_verify=CALDAV_VERIFY_SSL,
         )
         cache.put(url, user, client)
@@ -184,14 +192,10 @@ def with_caldav_client(needs_calendar=True):
 # ---------------------------------------------------------------------------
 # Re-export all tool handlers for backward compatibility
 # ---------------------------------------------------------------------------
-from caldav_mcp.tools.queries import (  # noqa: E402, F401
-    caldav_get_events,
-    caldav_get_event_by_uid,
-    caldav_get_freebusy,
-    caldav_get_today_events,
-    caldav_get_week_events,
-    caldav_list_calendars,
-    caldav_search_events,
+from caldav_mcp.tools.attendees import (  # noqa: E402, F401
+    caldav_add_attendee,
+    caldav_list_attendees,
+    caldav_remove_attendee,
 )
 from caldav_mcp.tools.mutations import (  # noqa: E402, F401
     caldav_create_event,
@@ -199,8 +203,12 @@ from caldav_mcp.tools.mutations import (  # noqa: E402, F401
     caldav_move_event,
     caldav_update_event,
 )
-from caldav_mcp.tools.attendees import (  # noqa: E402, F401
-    caldav_add_attendee,
-    caldav_list_attendees,
-    caldav_remove_attendee,
+from caldav_mcp.tools.queries import (  # noqa: E402, F401
+    caldav_get_event_by_uid,
+    caldav_get_events,
+    caldav_get_freebusy,
+    caldav_get_today_events,
+    caldav_get_week_events,
+    caldav_list_calendars,
+    caldav_search_events,
 )

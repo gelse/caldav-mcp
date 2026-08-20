@@ -24,9 +24,7 @@ def caldav_list_calendars(client):
 
 @mcp.tool()
 @with_caldav_client()
-def caldav_get_events(
-    client, cal, calendar_name: str = "", start: str = "", end: str = ""
-):
+def caldav_get_events(client, cal, calendar_name: str = "", start: str = "", end: str = ""):
     """Get events in a date range for a calendar."""
     start_dt = _parse_dt(start) if start else _start_of_day(_now())
     end_dt = _parse_dt(end) if end else (start_dt + timedelta(days=1))
@@ -120,9 +118,7 @@ def caldav_search_events(client, cal, query: str, calendar_name: str = ""):
 
 @mcp.tool()
 @with_caldav_client()
-def caldav_get_freebusy(
-    client, cal, start: str = "", end: str = "", calendar_name: str = ""
-):
+def caldav_get_freebusy(client, cal, start: str = "", end: str = "", calendar_name: str = ""):
     """Get free/busy information for a time range."""
     start_dt = _parse_dt(start) if start else _start_of_day(_now())
     end_dt = _parse_dt(end) if end else (start_dt + timedelta(days=1))

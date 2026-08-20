@@ -39,7 +39,7 @@ def caldav_create_event(
     attendees: str = "",
 ):
     """Create a new calendar event."""
-    from caldav_mcp.event_builder import build_event, parse_attendee_emails
+    from caldav_mcp.event_builder import build_event
     from caldav_mcp.sanitizers import (
         MAX_CATEGORIES_LENGTH,
         MAX_DESCRIPTION_LENGTH,
@@ -60,6 +60,7 @@ def caldav_create_event(
     # Validate attendee emails before building the event.
     if attendees:
         from caldav_mcp.event_builder import parse_attendee_emails as _parse_ae
+
         raw_emails = _parse_ae(attendees)
         for addr in raw_emails:
             validate_email(addr)

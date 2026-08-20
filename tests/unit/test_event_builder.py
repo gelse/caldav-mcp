@@ -6,13 +6,10 @@ CalDAV mocking, since the functions are pure and have no external dependencies.
 
 from datetime import datetime
 
-from caldav_mcp.event_builder import build_event, parse_attendee_emails
 from caldav_mcp.constants import (
-    DEFAULT_ATTENDEE_ROLE,
-    DEFAULT_PARTSTAT,
-    DEFAULT_RSVP,
     MAILTO_PREFIX,
 )
+from caldav_mcp.event_builder import build_event, parse_attendee_emails
 
 
 def test_build_event_minimal():

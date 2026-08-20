@@ -1,8 +1,5 @@
 """Tests for configuration validation (Finding 6.3)."""
 
-import os
-from unittest import mock
-
 import pytest
 from pydantic import ValidationError
 

@@ -69,9 +69,7 @@ class CalDAVConfig(BaseModel):
 
         parsed = urlparse(v)
         if parsed.scheme not in ("http", "https"):
-            raise ValueError(
-                f"CalDAV URL must use http or https scheme, got {parsed.scheme!r}"
-            )
+            raise ValueError(f"CalDAV URL must use http or https scheme, got {parsed.scheme!r}")
         if not parsed.hostname:
             raise ValueError(f"CalDAV URL must have a hostname: {v!r}")
         return v

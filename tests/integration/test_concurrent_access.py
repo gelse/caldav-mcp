@@ -29,9 +29,7 @@ class TestConcurrentAccess:
             except Exception as e:
                 errors.append(e)
 
-        threads = [
-            threading.Thread(target=create_event, args=(i,)) for i in range(10)
-        ]
+        threads = [threading.Thread(target=create_event, args=(i,)) for i in range(10)]
         for t in threads:
             t.start()
         for t in threads:
@@ -57,7 +55,7 @@ class TestConcurrentAccess:
 
         read_results = []
         write_errors = []
-        read_done = threading.Event()
+        threading.Event()
         write_done = threading.Event()
 
         def reader():
@@ -88,9 +86,7 @@ class TestConcurrentAccess:
                 write_errors.append(e)
 
         reader_thread = threading.Thread(target=reader)
-        writer_threads = [
-            threading.Thread(target=writer, args=(i,)) for i in range(5)
-        ]
+        writer_threads = [threading.Thread(target=writer, args=(i,)) for i in range(5)]
 
         reader_thread.start()
         for t in writer_threads:
