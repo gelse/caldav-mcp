@@ -42,12 +42,8 @@ class TestMultiCalendar:
             cal2_events = cal2.events()
             assert len(cal1_events) == 1
             assert len(cal2_events) == 1
-            assert "multi-event-1@test" in str(
-                cal1_events[0].icalendar_component.get("uid")
-            )
-            assert "multi-event-2@test" in str(
-                cal2_events[0].icalendar_component.get("uid")
-            )
+            assert "multi-event-1@test" in str(cal1_events[0].icalendar_component.get("uid"))
+            assert "multi-event-2@test" in str(cal2_events[0].icalendar_component.get("uid"))
         finally:
             cal1.delete()
             cal2.delete()

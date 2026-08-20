@@ -14,6 +14,7 @@ def _make_limiter(max_failures=10, window_seconds=60):
 # Basic allow / block behaviour
 # ---------------------------------------------------------------------------
 
+
 def test_rate_limiter_allows_within_limit():
     """9 failures should NOT trigger rate limiting (threshold is 10)."""
     limiter = _make_limiter(max_failures=10)
@@ -42,6 +43,7 @@ def test_rate_limiter_blocks_after_limit():
 # Reset
 # ---------------------------------------------------------------------------
 
+
 def test_rate_limiter_reset_clears_history():
     """After reset, the key is no longer rate-limited."""
     limiter = _make_limiter(max_failures=3)
@@ -62,6 +64,7 @@ def test_rate_limiter_reset_nonexistent_key():
 # Window expiry
 # ---------------------------------------------------------------------------
 
+
 def test_rate_limiter_window_expiry():
     """Failures older than the window are pruned."""
     limiter = _make_limiter(max_failures=3, window_seconds=1)
@@ -80,6 +83,7 @@ def test_rate_limiter_window_expiry():
 # ---------------------------------------------------------------------------
 # Backoff
 # ---------------------------------------------------------------------------
+
 
 def test_rate_limiter_backoff_zero_within_limit():
     """Backoff is 0 when not rate-limited."""
@@ -120,6 +124,7 @@ def test_rate_limiter_backoff_capped_at_5_minutes():
 # Independent keys
 # ---------------------------------------------------------------------------
 
+
 def test_rate_limiter_independent_keys():
     """Rate limiting is per-key; different keys are independent."""
     limiter = _make_limiter(max_failures=3)
@@ -132,6 +137,7 @@ def test_rate_limiter_independent_keys():
 # ---------------------------------------------------------------------------
 # New key defaults
 # ---------------------------------------------------------------------------
+
 
 def test_rate_limiter_new_key_not_limited():
     """A key with no recorded failures is never rate-limited."""

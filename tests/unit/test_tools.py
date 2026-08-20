@@ -402,9 +402,13 @@ def test_list_attendees_auth_error():
 
 def test_get_today_events_delegates():
     mock_result = server.ToolResult.success(message="ok", data=[{"uid": "x"}])
+    events_patch = mock.patch(
+        "caldav_mcp.tools.queries.caldav_get_events",
+        return_value=mock_result,
+    )
     with (
         mock.patch("caldav_mcp.tools.queries._require_auth", return_value=None),
-        mock.patch("caldav_mcp.tools.queries.caldav_get_events", return_value=mock_result) as mock_get,
+        events_patch as mock_get,
     ):
         result = server.caldav_get_today_events(calendar_name="Work")
     assert result is mock_result
@@ -427,9 +431,13 @@ def test_get_today_events_auth_error():
 
 def test_get_week_events_delegates():
     mock_result = server.ToolResult.success(message="ok", data=[{"uid": "x"}])
+    events_patch = mock.patch(
+        "caldav_mcp.tools.queries.caldav_get_events",
+        return_value=mock_result,
+    )
     with (
         mock.patch("caldav_mcp.tools.queries._require_auth", return_value=None),
-        mock.patch("caldav_mcp.tools.queries.caldav_get_events", return_value=mock_result) as mock_get,
+        events_patch as mock_get,
     ):
         result = server.caldav_get_week_events(calendar_name="Work")
     assert result is mock_result

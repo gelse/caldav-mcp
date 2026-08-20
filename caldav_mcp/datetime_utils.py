@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 def _srv():
     """Lazy accessor for the ``server`` module – avoids circular top-level import."""
     import server  # noqa: E402  (deferred; see module docstring)
+
     return server
 
 
@@ -28,7 +29,7 @@ def _parse_dt(value: str) -> datetime:
     srv = _srv()
     value = value.strip()
     if not value:
-        return srv._now()
+        return srv._now()  # type: ignore[no-any-return]
     if value.endswith("Z"):
         value = value[:-1] + "+00:00"
     # Try ISO 8601 variants in decreasing specificity.  Timezone-aware formats

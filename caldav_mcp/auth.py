@@ -22,8 +22,7 @@ patches are observed at call time.
 import os
 
 from caldav_mcp.audit import log_auth_attempt
-from caldav_mcp.errors import AuthError, Status, ToolResult
-from caldav_mcp.rate_limit import auth_rate_limiter
+
 # Header-name constants are never patched in tests, so direct import is fine.
 from caldav_mcp.config import (
     HDR_API_KEY,
@@ -32,17 +31,21 @@ from caldav_mcp.config import (
     HDR_URL,
     HDR_USERNAME,
 )
+from caldav_mcp.errors import AuthError, Status, ToolResult
+from caldav_mcp.rate_limit import auth_rate_limiter
 
 
 def _cfg():
     """Lazy accessor for ``caldav_mcp.config`` – avoids circular top-level import."""
     from caldav_mcp import config  # noqa: E402  (deferred)
+
     return config
 
 
 def _hdrs():
     """Lazy accessor for ``fastmcp.server.dependencies.get_http_headers``."""
     from fastmcp.server.dependencies import get_http_headers  # noqa: E402
+
     return get_http_headers
 
 
@@ -53,7 +56,7 @@ def _get_client_ip() -> str:
     reverse-proxy setups), then falls back to 'unknown'.
     """
     try:
-        headers = _hdrs()()
+        headers: dict[str, str] = _hdrs()()
         forwarded = headers.get("X-Forwarded-For", "")
         if forwarded:
             # X-Forwarded-For may contain a comma-separated list; take the first.
@@ -97,7 +100,9 @@ def _require_auth() -> "ToolResult | None":
     if auth_rate_limiter.is_rate_limited(client_ip):
         backoff = auth_rate_limiter.get_backoff_seconds(client_ip)
         log_auth_attempt(
-            success=False, client_ip=client_ip, method="none",
+            success=False,
+            client_ip=client_ip,
+            method="none",
             reason=f"rate limited (backoff {backoff}s)",
         )
         return ToolResult.failure(
@@ -127,12 +132,12 @@ def _require_auth() -> "ToolResult | None":
 
     auth_rate_limiter.record_failure(client_ip)
     log_auth_attempt(
-        success=False, client_ip=client_ip, method=auth_method,
+        success=False,
+        client_ip=client_ip,
+        method=auth_method,
         reason="invalid token",
     )
-    return ToolResult.failure(
-        Status.AUTH, "unauthorized - missing or invalid API token"
-    )
+    return ToolResult.failure(Status.AUTH, "unauthorized - missing or invalid API token")
 
 
 def _resolve_credentials() -> tuple:

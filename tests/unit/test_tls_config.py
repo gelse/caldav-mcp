@@ -1,15 +1,13 @@
 """Unit tests for TLS / SSL configuration in server.py and caldav_mcp.config."""
 
-import importlib
 from unittest import mock
 
-import caldav_mcp.config as config
 import server
-
 
 # ---------------------------------------------------------------------------
 # TLS defaults
 # ---------------------------------------------------------------------------
+
 
 def test_tls_config_defaults_disabled():
     """By default (no env vars set), TLS cert and key paths are empty."""
@@ -61,9 +59,11 @@ def test_tls_config_missing_cert_returns_none():
 # CALDAV_VERIFY_SSL config
 # ---------------------------------------------------------------------------
 
+
 def test_caldav_verify_ssl_default_true():
     """CALDAV_VERIFY_SSL defaults to True."""
     import os
+
     os.environ.pop("CALDAV_MCP_CALDAV_VERIFY_SSL", None)
     raw = os.environ.get("CALDAV_MCP_CALDAV_VERIFY_SSL", "true")
     assert raw.lower() in ("true", "1", "yes")
@@ -77,6 +77,7 @@ def test_caldav_verify_ssl_can_disable():
 
 def test_caldav_verify_ssl_env_parsing():
     """Verify the exact parsing logic for CALDAV_VERIFY_SSL."""
+
     def _parse(val):
         return val.lower() in ("true", "1", "yes")
 
@@ -94,6 +95,7 @@ def test_caldav_verify_ssl_env_parsing():
 # ---------------------------------------------------------------------------
 # main() uses uvicorn_config when TLS is set
 # ---------------------------------------------------------------------------
+
 
 def test_main_passes_uvicorn_config_with_tls():
     """main() should include uvicorn_config when TLS is configured."""

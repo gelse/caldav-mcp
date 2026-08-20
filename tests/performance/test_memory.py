@@ -7,7 +7,9 @@ Run with: python3 -m pytest tests/performance/test_memory.py -v
 """
 
 import tracemalloc
+
 import pytest
+
 from caldav_mcp.client_cache import ClientCache
 
 pytestmark = [pytest.mark.performance]
@@ -107,6 +109,7 @@ class TestEventSerializationMemory:
     def test_event_to_dict_repeated_serialization(self):
         """Serialize many events and verify no memory accumulation."""
         from conftest import FakeEvent, make_event
+
         import server
 
         tracemalloc.start()

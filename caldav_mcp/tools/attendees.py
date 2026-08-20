@@ -53,9 +53,7 @@ def caldav_add_attendee(
 
 @mcp.tool()
 @with_caldav_client()
-def caldav_remove_attendee(
-    client, cal, uid: str, email: str, calendar_name: str = ""
-):
+def caldav_remove_attendee(client, cal, uid: str, email: str, calendar_name: str = ""):
     """Remove an attendee from an existing event."""
     event = cal.event_by_uid(uid)
     comp = _comp(event)
@@ -68,17 +66,13 @@ def caldav_remove_attendee(
 
     current = comp.get("attendee")
     if current is None:
-        return ToolResult.failure(
-            Status.NOT_FOUND, f"Attendee {email} not found on event {uid}"
-        )
+        return ToolResult.failure(Status.NOT_FOUND, f"Attendee {email} not found on event {uid}")
     if not isinstance(current, (list, tuple)):
         current = [current]
 
     remaining = [a for a in current if str(a).strip().lower() != target_norm]
     if len(remaining) == len(current):
-        return ToolResult.failure(
-            Status.NOT_FOUND, f"Attendee {email} not found on event {uid}"
-        )
+        return ToolResult.failure(Status.NOT_FOUND, f"Attendee {email} not found on event {uid}")
 
     if remaining:
         comp["attendee"] = remaining

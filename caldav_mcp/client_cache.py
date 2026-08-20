@@ -22,6 +22,7 @@ import logging
 import threading
 import time
 from collections import OrderedDict
+
 from caldav_mcp.types import CalDAVClient
 
 log = logging.getLogger(__name__)

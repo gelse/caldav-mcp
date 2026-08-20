@@ -9,11 +9,13 @@ import pytest
 
 try:
     import pytest_benchmark  # noqa: F401
+
     HAS_BENCHMARK = True
 except ImportError:
     HAS_BENCHMARK = False
 
 from conftest import FakeCalendar, FakeEvent, make_event, patch_caldav
+
 import server
 
 pytestmark = [

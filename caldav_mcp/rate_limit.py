@@ -36,17 +36,13 @@ class RateLimiter:
         with self._lock:
             self._failures[key].append(now)
             # Prune old entries outside the window.
-            self._failures[key] = [
-                t for t in self._failures[key] if now - t < self._window
-            ]
+            self._failures[key] = [t for t in self._failures[key] if now - t < self._window]
 
     def is_rate_limited(self, key: str) -> bool:
         """Return True if the key has exceeded the failure threshold."""
         now = time.monotonic()
         with self._lock:
-            self._failures[key] = [
-                t for t in self._failures[key] if now - t < self._window
-            ]
+            self._failures[key] = [t for t in self._failures[key] if now - t < self._window]
             return len(self._failures[key]) >= self._max_failures
 
     def get_backoff_seconds(self, key: str) -> int:
@@ -57,14 +53,12 @@ class RateLimiter:
         """
         now = time.monotonic()
         with self._lock:
-            count = len([
-                t for t in self._failures[key] if now - t < self._window
-            ])
+            count = len([t for t in self._failures[key] if now - t < self._window])
         if count < self._max_failures:
             return 0
         # Exponential backoff: 5s, 10s, 20s, ... capped at 5 minutes
         power = min(count - self._max_failures, 6)
-        return min(_BACKOFF_BASE_SECONDS * (2 ** power), 300)
+        return int(min(_BACKOFF_BASE_SECONDS * (2**power), 300))
 
     def reset(self, key: str) -> None:
         """Clear failure history for a key (e.g. after successful auth)."""

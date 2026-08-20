@@ -43,6 +43,11 @@ from caldav_mcp import (  # noqa: E402, F401  (submodule imports; see comment ab
     sanitizers,
     tools,
 )
+from caldav_mcp.audit import (  # noqa: E402
+    log_auth_attempt,
+    log_error,
+    log_operation,
+)
 from caldav_mcp.auth import (  # noqa: F401, E402
     _const_eq,
     _get_client_ip,
@@ -75,20 +80,14 @@ from caldav_mcp.config import (  # noqa: E402
     HDR_PASSWORD,
     HDR_URL,
     HDR_USERNAME,
+    LOG_FORMAT,
     RATE_LIMIT_MAX_FAILURES,
     RATE_LIMIT_WINDOW_SECONDS,
     SERVER_TZ,
     TLS_CA_BUNDLE,
     TLS_CERT_PATH,
     TLS_KEY_PATH,
-    LOG_FORMAT,
     _server_tz,
-)
-from caldav_mcp.datetime_utils import (  # noqa: F401, E402
-    _format_ical_dt,
-    _now,
-    _parse_dt,
-    _start_of_day,
 )
 
 # Re-export the names server.py previously exposed at module level.  Doing this
@@ -104,15 +103,11 @@ from caldav_mcp.constants import (  # noqa: E402
     PRODID,
     UID_DOMAIN,
 )
-from caldav_mcp.event_builder import (  # noqa: E402
-    build_event,
-    parse_attendee_emails,
-)
-from caldav_mcp.types import CalDAVClient  # noqa: E402
-from caldav_mcp.audit import (  # noqa: E402
-    log_auth_attempt,
-    log_error,
-    log_operation,
+from caldav_mcp.datetime_utils import (  # noqa: F401, E402
+    _format_ical_dt,
+    _now,
+    _parse_dt,
+    _start_of_day,
 )
 from caldav_mcp.errors import (  # noqa: E402
     AuthError,
@@ -125,6 +120,10 @@ from caldav_mcp.errors import (  # noqa: E402
     _render_error,
     log,
 )
+from caldav_mcp.event_builder import (  # noqa: E402
+    build_event,
+    parse_attendee_emails,
+)
 from caldav_mcp.rate_limit import (  # noqa: E402
     RateLimiter,
     auth_rate_limiter,
@@ -136,10 +135,10 @@ from caldav_mcp.sanitizers import (  # noqa: E402
     MAX_LOCATION_LENGTH,
     MAX_QUERY_LENGTH,
     MAX_SUMMARY_LENGTH,
+    limit_string_length,
     sanitize_text,
     validate_calendar_name,
     validate_email,
-    limit_string_length,
 )
 from caldav_mcp.tools import (  # noqa: F401, E402
     caldav_add_attendee,
@@ -157,6 +156,7 @@ from caldav_mcp.tools import (  # noqa: F401, E402
     caldav_search_events,
     caldav_update_event,
 )
+from caldav_mcp.types import CalDAVClient  # noqa: E402
 
 __all__ = [
     "mcp",

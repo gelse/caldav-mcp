@@ -2,11 +2,8 @@
 
 from caldav_mcp.constants import (
     DEFAULT_ATTENDEE_ROLE,
-    DEFAULT_PARTSTAT,
-    DEFAULT_RSVP,
     ICAL_VERSION,
     MAILTO_PREFIX,
-    PRODID,
     UID_DOMAIN,
 )
 

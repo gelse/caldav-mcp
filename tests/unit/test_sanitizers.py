@@ -3,19 +3,16 @@
 from caldav_mcp.sanitizers import (
     MAX_CALENDAR_NAME_LENGTH,
     MAX_DESCRIPTION_LENGTH,
-    MAX_LOCATION_LENGTH,
-    MAX_QUERY_LENGTH,
-    MAX_SUMMARY_LENGTH,
     limit_string_length,
     sanitize_text,
     validate_calendar_name,
     validate_email,
 )
 
-
 # ---------------------------------------------------------------------------
 # sanitize_text
 # ---------------------------------------------------------------------------
+
 
 def test_sanitize_text_strips_control_characters():
     """Control chars (except \\t \\n \\r) are removed."""
@@ -36,12 +33,14 @@ def test_sanitize_text_strips_leading_trailing_whitespace():
 def test_sanitize_text_raises_on_too_long():
     long = "x" * (MAX_DESCRIPTION_LENGTH + 1)
     import pytest
+
     with pytest.raises(ValueError, match="maximum length"):
         sanitize_text(long)
 
 
 def test_sanitize_text_accepts_custom_max_length():
     import pytest
+
     with pytest.raises(ValueError, match="maximum length"):
         sanitize_text("abcdef", max_length=3)
 
@@ -57,6 +56,7 @@ def test_sanitize_text_allows_unicode_letters():
 # ---------------------------------------------------------------------------
 # validate_calendar_name
 # ---------------------------------------------------------------------------
+
 
 def test_validate_calendar_name_accepts_valid():
     assert validate_calendar_name("Personal") == "Personal"
@@ -76,24 +76,28 @@ def test_validate_calendar_name_strips_whitespace():
 
 def test_validate_calendar_name_rejects_empty():
     import pytest
+
     with pytest.raises(ValueError, match="must not be empty"):
         validate_calendar_name("")
 
 
 def test_validate_calendar_name_rejects_only_whitespace():
     import pytest
+
     with pytest.raises(ValueError, match="must not be empty"):
         validate_calendar_name("   ")
 
 
 def test_validate_calendar_name_rejects_special_characters():
     import pytest
+
     with pytest.raises(ValueError, match="invalid characters"):
         validate_calendar_name("test<script>")
 
 
 def test_validate_calendar_name_rejects_too_long():
     import pytest
+
     name = "a" * (MAX_CALENDAR_NAME_LENGTH + 1)
     with pytest.raises(ValueError, match="exceeds"):
         validate_calendar_name(name)
@@ -111,6 +115,7 @@ def test_validate_calendar_name_allows_unicode():
 # ---------------------------------------------------------------------------
 # validate_email
 # ---------------------------------------------------------------------------
+
 
 def test_validate_email_accepts_valid():
     assert validate_email("user@example.com") == "user@example.com"
@@ -130,30 +135,35 @@ def test_validate_email_accepts_plus_addressing():
 
 def test_validate_email_rejects_empty():
     import pytest
+
     with pytest.raises(ValueError, match="must not be empty"):
         validate_email("")
 
 
 def test_validate_email_rejects_no_at():
     import pytest
+
     with pytest.raises(ValueError, match="Invalid email"):
         validate_email("userexample.com")
 
 
 def test_validate_email_rejects_no_domain():
     import pytest
+
     with pytest.raises(ValueError, match="Invalid email"):
         validate_email("user@")
 
 
 def test_validate_email_rejects_no_tld():
     import pytest
+
     with pytest.raises(ValueError, match="Invalid email"):
         validate_email("user@example")
 
 
 def test_validate_email_rejects_spaces():
     import pytest
+
     with pytest.raises(ValueError, match="Invalid email"):
         validate_email("user name@example.com")
 
@@ -161,6 +171,7 @@ def test_validate_email_rejects_spaces():
 # ---------------------------------------------------------------------------
 # limit_string_length
 # ---------------------------------------------------------------------------
+
 
 def test_limit_string_length_within_limit():
     assert limit_string_length("hello", 10) == "hello"
@@ -173,12 +184,14 @@ def test_limit_string_length_at_limit():
 
 def test_limit_string_length_exceeds_limit():
     import pytest
+
     with pytest.raises(ValueError, match="exceeds maximum length"):
         limit_string_length("x" * 11, 10)
 
 
 def test_limit_string_length_custom_field_name():
     import pytest
+
     with pytest.raises(ValueError, match="summary"):
         limit_string_length("x" * 11, 10, field_name="summary")
 

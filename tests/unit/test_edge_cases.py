@@ -4,14 +4,12 @@ malformed iCalendar data, and special characters in calendar names.
 
 from unittest import mock
 
-import pytest
 from caldav.lib.error import DAVError
+from conftest import FakeCalendar, FakeEvent, make_event, patch_caldav
 from icalendar import Calendar, Event
 
 import server
-from conftest import FakeCalendar, FakeEvent, make_event, patch_caldav
 from server import Status
-
 
 # ── Group A: Unicode in Event Fields ─────────────────────────────────
 
@@ -132,9 +130,7 @@ class TestNetworkFailures:
                 "caldav_mcp.tools._resolve_credentials",
                 return_value=("https://cal.example", "user", "pass"),
             ),
-            mock.patch(
-                "caldav_mcp.tools.DAVClient", side_effect=DAVError("timed out")
-            ),
+            mock.patch("caldav_mcp.tools.DAVClient", side_effect=DAVError("timed out")),
         ):
             result = server.caldav_list_calendars()
         assert result.status == Status.ERROR
@@ -230,9 +226,7 @@ class TestSpecialCalendarNames:
 
     def test_calendar_name_with_spaces(self):
         """Calendar name containing spaces."""
-        fake_cal = FakeCalendar(
-            name="My Calendar", url="https://cal.example/my%20calendar"
-        )
+        fake_cal = FakeCalendar(name="My Calendar", url="https://cal.example/my%20calendar")
         patchers = patch_caldav(fake_cal)
         try:
             result = server.caldav_list_calendars()
@@ -244,9 +238,7 @@ class TestSpecialCalendarNames:
 
     def test_calendar_name_with_unicode(self):
         """Calendar name with Unicode characters."""
-        fake_cal = FakeCalendar(
-            name="カレンダー", url="https://cal.example/unicode"
-        )
+        fake_cal = FakeCalendar(name="カレンダー", url="https://cal.example/unicode")
         patchers = patch_caldav(fake_cal)
         try:
             result = server.caldav_list_calendars()
