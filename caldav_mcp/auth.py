@@ -1,10 +1,18 @@
 """Authentication guards and CalDAV credential resolution.
 
-Configuration constants (API key, HTTP header names) live in
-:mod:`caldav_mcp.config`, typed errors and results in :mod:`caldav_mcp.errors`,
-and the HTTP header accessor in ``fastmcp.server.dependencies``.  This module
-imports directly from those sources, eliminating the previous circular
-``import server`` dependency.
+Two-layer authentication model
+------------------------------
+1. **MCP endpoint auth** — enforced by :func:`_require_auth`.  A shared
+   ``CALDAV_MCP_API_KEY`` token is validated against the incoming request's
+   ``Authorization: Bearer <token>`` or ``X-Api-Key: <token>`` header.
+   Authentication is disabled when the env-var is unset.
+2. **CalDAV credentials** — resolved by :func:`_resolve_credentials` for
+   each tool invocation.  HTTP headers take precedence; env-vars
+   ``CALDAV_URL``, ``CALDAV_USERNAME``, ``CALDAV_PASSWORD`` act as fallback.
+
+Shared runtime state (API key, HTTP header accessors, typed auth errors, and
+server constants) is referenced through the :mod:`server` namespace so that
+tests which patch ``server.<name>`` observe the same objects used here.
 
 Values that tests may mock (``API_KEY``, ``get_http_headers``) are read
 lazily via :func:`_cfg` / :func:`_hdrs` so that ``mock.patch.object(server, …)``
@@ -36,6 +44,8 @@ def _hdrs():
     return get_http_headers
 
 
+# NOTE: We use constant-time comparison to prevent timing side-channel
+# attacks that could leak the API token byte-by-byte.
 def _const_eq(a: str, b: str) -> bool:
     """Constant-time string comparison to avoid timing attacks on the token."""
     if len(a) != len(b):
@@ -75,6 +85,18 @@ def _require_auth() -> "ToolResult | None":
 
 
 def _resolve_credentials() -> tuple:
+    """Return (url, username, password) from headers or environment.
+
+    HTTP headers ``X-Caldav-Url``, ``X-Caldav-Username``, ``X-Caldav-Password``
+    are checked first.  If any are missing the corresponding ``CALDAV_URL``,
+    ``CALDAV_USERNAME``, ``CALDAV_PASSWORD`` environment variables are used.
+
+    Raises
+    ------
+    AuthError
+        When any of the three required values is still empty after both
+        lookup layers.
+    """
     headers = _hdrs()()
     url = headers.get(HDR_URL) or os.environ.get("CALDAV_URL", "")
     username = headers.get(HDR_USERNAME) or os.environ.get("CALDAV_USERNAME", "")

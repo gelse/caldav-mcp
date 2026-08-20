@@ -18,6 +18,20 @@ from caldav_mcp.types import CalDAVClient
 
 
 def _get_calendar(client: CalDAVClient, calendar_name: str | None = None) -> Any:
+    """Select a calendar from the principal's calendar list.
+
+    When *calendar_name* is provided the matching calendar is returned;
+    otherwise the first calendar is used as the default.  Raises
+    :class:`NotFoundError` with a list of available calendar names when
+    the requested name is not found.
+
+    Parameters
+    ----------
+    client : caldav.DAVClient
+        An authenticated DAV client instance.
+    calendar_name : str or None
+        Optional calendar name to select.  ``None`` selects the first.
+    """
     calendars = client.principal().calendars()
     if not calendars:
         raise NotFoundError("No calendars found for this principal")
@@ -43,6 +57,11 @@ def _text(comp: Any, name: str) -> str:
 
 
 def _text_single(v: Any) -> str:
+    """Extract a plain string from a single icalendar property value.
+
+    Handles ``vText``, ``vDDDTypes`` (which carry a ``.dt`` attribute),
+    and plain ``str`` objects.  Datetime values are serialized to ISO 8601.
+    """
     # icalendar prop objects; handle vText / vDDDTypes / plain str
     try:
         dt = v.dt
@@ -74,6 +93,8 @@ def _event_to_dict(event: Any) -> dict[str, str]:
             "attendees": "",
         }
 
+    # Attendees require special handling: icalendar may return a single
+    # vCalAddress, a list, or None.  We normalize to a "; "-separated string.
     attendee_val = comp.get("attendee")
     attendee_str = ""
     if isinstance(attendee_val, (list, tuple)):
@@ -94,6 +115,13 @@ def _event_to_dict(event: Any) -> dict[str, str]:
 
 
 def _attendee_str(attendee: Any) -> str:
+    """Format a ``vCalAddress`` attendee as a human-readable string.
+
+    Returns a space-separated string containing the email address and
+    optional ``ROLE`` / ``PARTSTAT`` parameters, e.g.::
+
+        mailto:alice@example.com ROLE=REQ-PARTICIPANT PARTSTAT=ACCEPTED
+    """
     email = str(attendee)
     # vCalAddress: value is 'mailto:user@host'
     role = getattr(attendee, "params", {})
@@ -136,7 +164,7 @@ def _validate_rrule(rrule: str) -> bool:
     except Exception:
         return False
     if not parsed_rrule:
-        # e.g. "garbage" parses to an empty vRecur; a valid recur requires
-        # at least a frequency.
+        # A string like "garbage" parses to an empty vRecur object without
+        # raising — we must check for the presence of a FREQ property.
         return False
     return True

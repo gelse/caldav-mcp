@@ -18,6 +18,8 @@ DEFAULT_PATH = os.environ.get("CALDAV_MCP_PATH", "/mcp")
 
 API_KEY = os.environ.get("CALDAV_MCP_API_KEY", "")
 
+# HTTP header names — lowercase for case-insensitive dict lookups.
+# These match the FastMCP / Starlette convention of lowercasing headers.
 HDR_URL = "x-caldav-url"
 HDR_USERNAME = "x-caldav-username"
 HDR_PASSWORD = "x-caldav-password"

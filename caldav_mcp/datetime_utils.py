@@ -31,6 +31,8 @@ def _parse_dt(value: str) -> datetime:
         return srv._now()
     if value.endswith("Z"):
         value = value[:-1] + "+00:00"
+    # Try ISO 8601 variants in decreasing specificity.  Timezone-aware formats
+    # are tried first; naive results are assumed to be in the server timezone.
     for fmt in (
         "%Y-%m-%dT%H:%M:%S%z",
         "%Y-%m-%dT%H:%M%z",
@@ -53,6 +55,11 @@ def _parse_dt(value: str) -> datetime:
 
 
 def _format_ical_dt(dt: datetime) -> str:
+    """Format a datetime as an iCalendar UTC timestamp (``YYYYMMDDTHHMMSSZ``).
+
+    Naive datetimes are assumed to be in UTC.  The result is always in UTC
+    per RFC 5545 §3.3.5.
+    """
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=UTC)
     return dt.astimezone(UTC).strftime("%Y%m%dT%H%M%SZ")

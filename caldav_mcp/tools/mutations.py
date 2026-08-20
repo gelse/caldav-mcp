@@ -58,7 +58,9 @@ def caldav_create_event(
             return ToolResult.failure(Status.ERROR, ERR_INVALID_RRULE)
         rrule_parsed = vRecur.from_ical(rrule)
 
-    # Build event
+    # RFC 5545 §3.3.4: ATTENDEE values are vCalAddress with PARAMS.
+    # We set PARTSTAT=NEEDS-ACTION and RSVP=TRUE as sensible defaults for
+    # newly-invited attendees.  encode=False lets icalendar handle escaping.
     attendee_emails = parse_attendee_emails(attendees)
     ical, uid = build_event(
         summary=summary,
@@ -130,7 +132,13 @@ def caldav_move_event(
     target_calendar: str,
     source_calendar: str = "",
 ):
-    """Move an event to another calendar (copy to target with new UID, delete original)."""
+    """Move an event to another calendar (copy to target with new UID, delete original).
+
+    Move semantics: we cannot rename a UID in-place on most CalDAV servers,
+    so we copy the event with a new UID to the target calendar and delete
+    the original.  This is not atomic — a failure after copy leaves a
+    duplicate, which is the safer failure mode.
+    """
     try:
         src_cal = _get_calendar(client, source_calendar or None)
         dst_cal = _get_calendar(client, target_calendar)

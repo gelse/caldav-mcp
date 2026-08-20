@@ -92,6 +92,8 @@ class ToolResult:
         This is the *only* place a human-readable string is produced; control
         flow and tests branch on :attr:`status`/``data`` instead.
         """
+        # Tag mapping preserves backward compatibility with clients that parse
+        # "OK:" / "ERROR:[...]" prefixes from the rendered string.
         tag = {
             Status.OK: "OK",
             Status.EMPTY: "OK",
@@ -109,6 +111,9 @@ def _render_error(exc: Exception, context: str) -> ToolResult:
     anything else is treated as an unexpected internal fault, logged server-side
     (never leaking secret/credential material), and returned as ``Status.ERROR``.
     """
+    # Exception classification: known operational errors are surfaced to the
+    # caller with their original message; anything else is an unexpected fault
+    # that gets logged server-side without leaking details.
     if isinstance(exc, AuthError):
         return ToolResult.failure(Status.AUTH, str(exc))
     if isinstance(exc, NotFoundError):

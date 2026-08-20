@@ -64,10 +64,12 @@ _REMOTE_ERRORS = (
 # ---------------------------------------------------------------------------
 
 def _ok(message: str = "", data=None) -> ToolResult:
+    """Shortcut for ``ToolResult.success`` — used by every happy-path return."""
     return ToolResult.success(message=message, data=data)
 
 
 def _empty(message: str = "") -> ToolResult:
+    """Shortcut for ``ToolResult.empty`` — used when a query returns no results."""
     return ToolResult.empty(message=message)
 
 
