@@ -25,6 +25,12 @@ services:
       # Audit log format (text or json)
       CALDAV_MCP_LOG_FORMAT: "${CALDAV_MCP_LOG_FORMAT:-text}"
       TZ: Europe/Vienna
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import socket; s=socket.socket(); s.settimeout(3); s.connect(('127.0.0.1',8080)); s.close()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
     volumes:
       # Mount TLS certificate and key (optional)
       - ${CALDAV_MCP_TLS_CERT:-/dev/null}:/app/tls/cert.pem:ro

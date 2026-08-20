@@ -235,6 +235,17 @@ def main() -> None:
     Optionally wraps the socket with TLS when ``CALDAV_MCP_TLS_CERT`` and
     ``CALDAV_MCP_TLS_KEY`` environment variables are set.
     """
+    # Validate configuration eagerly — fail fast with a clear message.
+    from caldav_mcp.config_schema import load_server_config, load_caldav_config
+
+    load_server_config()  # raises on invalid port/tz/path
+    caldav_cfg = load_caldav_config()
+    if caldav_cfg.url and not caldav_cfg.username:
+        log.warning(
+            "CALDAV_URL is set but CALDAV_USERNAME is missing — "
+            "credentials must come from HTTP headers at runtime"
+        )
+
     ssl_cfg = _build_ssl_config()
     run_kwargs: dict[str, Any] = {
         "host": "0.0.0.0",

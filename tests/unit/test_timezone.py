@@ -15,7 +15,9 @@ import server
 
 
 def test_tz_set_returns_configured_zone():
-    with mock.patch.dict(server.os.environ, {"TZ": "Europe/Vienna"}):
+    from caldav_mcp import config as config_module
+
+    with mock.patch.object(config_module._server_config, "tz", "Europe/Vienna"):
         tz = server._server_tz()
     assert str(tz) == "Europe/Vienna"
 
@@ -34,7 +36,9 @@ def test_tz_empty_returns_utc():
 
 def test_tz_invalid_returns_utc():
     """An invalid TZ falls back to a UTC zone (ZoneInfo('UTC'))."""
-    with mock.patch.dict(server.os.environ, {"TZ": "Not/AZone"}):
+    from caldav_mcp import config as config_module
+
+    with mock.patch.object(config_module._server_config, "tz", "Not/AZone"):
         tz = server._server_tz()
     assert tz == ZoneInfo("UTC")
     assert tz.utcoffset(None) == timedelta(0)
@@ -44,7 +48,7 @@ def test_tz_invalid_logs_warning_and_falls_back_to_utc():
     from caldav_mcp import config as config_module
 
     with (
-        mock.patch.dict(server.os.environ, {"TZ": "Not/AZone"}),
+        mock.patch.object(config_module._server_config, "tz", "Not/AZone"),
         mock.patch.object(config_module.logger, "warning") as log_warning,
     ):
         tz = server._server_tz()

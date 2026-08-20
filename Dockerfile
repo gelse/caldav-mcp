@@ -1,13 +1,24 @@
+# ── Stage 1: build dependencies ──────────────────────────────────
 # Runtime uses 3.13 (newer than requires-python >= 3.11) for latest security patches.
 # Pin to exact patch tag for reproducible builds.
+FROM python:3.13.5-alpine3.21 AS builder
+
+WORKDIR /build
+
+# Install build deps once; the wheel cache survives into stage 2 only if
+# we copy it explicitly.
+COPY requirements.txt .
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+
+# ── Stage 2: slim runtime ────────────────────────────────────────
 FROM python:3.13.5-alpine3.21
 
 RUN addgroup -S app && adduser -S app -G app
 
-WORKDIR /app
+# Copy pre-built packages from the builder stage.
+COPY --from=builder /install /usr/local
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+WORKDIR /app
 
 COPY --chown=app:app server.py .
 COPY --chown=app:app caldav_mcp/ ./caldav_mcp/

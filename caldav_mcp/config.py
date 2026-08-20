@@ -1,7 +1,7 @@
 """Environment parsing and server-timezone resolution.
 
 Owns the config constants read from the environment and computed once at import
-time. Runtime consumers reference these through the ``server`` namespace so they
+time.  Runtime consumers reference these through the ``server`` namespace so they
 observe the same values that tests patch.
 """
 
@@ -10,15 +10,20 @@ import os
 from datetime import UTC, tzinfo
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from caldav_mcp.config_schema import ServerConfig, load_server_config
+
 logger = logging.getLogger(__name__)
 
-# NOTE: resolved once at import time — env changes after startup are ignored.
-DEFAULT_PORT = int(os.environ.get("CALDAV_MCP_PORT", "8080"))
-DEFAULT_PATH = os.environ.get("CALDAV_MCP_PATH", "/mcp")
+# ── Validated startup config ──────────────────────────────────────
+# Raises pydantic.ValidationError (→ ValueError) immediately if env
+# vars contain invalid values (bad port, unknown timezone, etc.).
+_server_config: ServerConfig = load_server_config()
 
-API_KEY = os.environ.get("CALDAV_MCP_API_KEY", "")
+DEFAULT_PORT = _server_config.port
+DEFAULT_PATH = _server_config.path
+API_KEY = _server_config.api_key
 
-# HTTP header names — lowercase for case-insensitive dict lookups.
+# ── HTTP header names (constants, no validation needed) ──────────
 # These match the FastMCP / Starlette convention of lowercasing headers.
 HDR_URL = "x-caldav-url"
 HDR_USERNAME = "x-caldav-username"
@@ -33,7 +38,7 @@ def _server_tz() -> tzinfo:
     Reads the TZ environment variable (e.g. 'Europe/Vienna'); falls back to
     UTC when TZ is unset, empty, or invalid.
     """
-    tz_name = os.environ.get("TZ", "").strip()
+    tz_name = _server_config.tz
     if tz_name:
         try:
             return ZoneInfo(tz_name)

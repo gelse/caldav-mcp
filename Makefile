@@ -57,6 +57,23 @@ docs-serve:
 	@echo "Opening docs/ directory — view with any Markdown renderer"
 	@echo "  e.g. code docs/architecture.md"
 
+.PHONY: deps-update
+deps-update:
+	@echo "Syncing requirements.txt with pyproject.toml …"
+	@$(PYTHON) -c "\
+	import tomllib, json; \
+	py_deps = sorted(tomllib.load(open('pyproject.toml','rb'))['project']['dependencies']); \
+	open('requirements.txt','w').write('\n'.join(py_deps) + '\n'); \
+	print('✓ requirements.txt updated')"
+
+.PHONY: deps-verify
+deps-verify:
+	@$(PYTHON) -c "\
+	import tomllib; \
+	py_deps = sorted(tomllib.load(open('pyproject.toml','rb'))['project']['dependencies']); \
+	req_deps = sorted(l.strip() for l in open('requirements.txt') if l.strip()); \
+	exit(0 if py_deps == req_deps else 1)"
+
 .PHONY: docs-check
 docs-check:
 	@test -f docs/architecture.md && echo "✓ docs/architecture.md exists" || (echo "✗ docs/architecture.md missing" && exit 1)

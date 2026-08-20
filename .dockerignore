@@ -1,5 +1,6 @@
 .git
 .github
+.forgejo
 .mypy_cache
 .pytest_cache
 .ruff_cache
@@ -15,4 +16,7 @@ Makefile
 README.md
 docker-compose.yaml
 Dockerfile
-.ruff_cache
+.gitignore
+.dockerignore
+pyproject.toml
+requirements.txt
