@@ -28,6 +28,7 @@ jobs:
 
       - name: Verify image starts
         run: |
+          docker rm -f test-container 2>/dev/null || true
           docker run -d --name test-container \
             -e CALDAV_MCP_PORT=8080 \
             -e CALDAV_MCP_PATH=/mcp \
