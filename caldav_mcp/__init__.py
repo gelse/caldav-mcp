@@ -25,11 +25,12 @@ mcp: FastMCP = FastMCP(
 # names.  Order matters: errors/config/auth/datetime_utils/calendar carry no
 # side effects that need mcp; tools registers the handlers on ``mcp``.
 #
-# NOTE: ``auth`` and ``datetime_utils`` both ``import server`` at module level,
-# and ``server.py`` does ``from caldav_mcp import (…)``.  This circular chain
-# only resolves when ``server`` is the *first* entry-point into the package
-# (i.e. ``import server`` before ``import caldav_mcp``).  All existing tests and
-# the production entrypoint follow this convention.
+# Circular import note: leaf modules (auth, calendar, datetime_utils) now import
+# directly from their owning modules (config, errors, fastmcp) instead of
+# through the ``server`` namespace.  The only remaining ``import server`` is in
+# tools.py which routes through ``server.*`` for backward-compatible test
+# mocking.  This breaks the previous circular chain:
+#   server.py → __init__.py → auth/calendar/datetime_utils → server
 from caldav_mcp import (  # noqa: E402, F401  (submodule imports; see comment above)
     auth,
     calendar,

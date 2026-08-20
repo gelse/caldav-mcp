@@ -1,14 +1,16 @@
-"""Unit tests for the shared API-token auth guard in server.py.
+"""Unit tests for the shared API-token auth guard in caldav_mcp.auth.
 
 These tests verify _const_eq() and _require_auth(), plus the fact that
 guarded tools short-circuit to the unauthorized result before resolving
 CalDAV credentials. Auth headers are simulated by patching
-server.get_http_headers() to return a dict of lowercase header keys.
+caldav_mcp.auth._hdrs to return a dict of lowercase header keys.
 """
 
 from unittest import mock
 
+import caldav_mcp.config as config
 import server
+from caldav_mcp import auth
 from server import Status
 
 
@@ -33,81 +35,81 @@ def test_empty_string_equals_empty_string():
 
 
 def test_disabled_auth_passes():
-    with mock.patch.object(server, "API_KEY", ""):
-        result = server._require_auth()
+    with mock.patch.object(config, "API_KEY", ""):
+        result = auth._require_auth()
     assert result is None
 
 
 def test_valid_authorization_bearer_passes():
-    with mock.patch.object(server, "API_KEY", "secret-token"):
+    with mock.patch.object(config, "API_KEY", "secret-token"):
         with mock.patch.object(
-            server,
-            "get_http_headers",
-            return_value={"authorization": "Bearer secret-token"},
+            auth,
+            "_hdrs",
+            return_value=lambda: {"authorization": "Bearer secret-token"},
         ):
-            result = server._require_auth()
+            result = auth._require_auth()
     assert result is None
 
 
 def test_valid_x_api_key_passes():
-    with mock.patch.object(server, "API_KEY", "secret-token"):
+    with mock.patch.object(config, "API_KEY", "secret-token"):
         with mock.patch.object(
-            server,
-            "get_http_headers",
-            return_value={"x-api-key": "secret-token"},
+            auth,
+            "_hdrs",
+            return_value=lambda: {"x-api-key": "secret-token"},
         ):
-            result = server._require_auth()
+            result = auth._require_auth()
     assert result is None
 
 
 def test_missing_token_fails():
-    with mock.patch.object(server, "API_KEY", "secret-token"):
-        with mock.patch.object(server, "get_http_headers", return_value={}):
-            result = server._require_auth()
+    with mock.patch.object(config, "API_KEY", "secret-token"):
+        with mock.patch.object(auth, "_hdrs", return_value=lambda: {}):
+            result = auth._require_auth()
     assert result.status == Status.AUTH
 
 
 def test_wrong_token_fails():
-    with mock.patch.object(server, "API_KEY", "secret-token"):
+    with mock.patch.object(config, "API_KEY", "secret-token"):
         with mock.patch.object(
-            server,
-            "get_http_headers",
-            return_value={"authorization": "Bearer wrong"},
+            auth,
+            "_hdrs",
+            return_value=lambda: {"authorization": "Bearer wrong"},
         ):
-            result = server._require_auth()
+            result = auth._require_auth()
     assert result.status == Status.AUTH
 
 
 def test_bearer_scheme_case_insensitive_passes():
-    with mock.patch.object(server, "API_KEY", "secret-token"):
+    with mock.patch.object(config, "API_KEY", "secret-token"):
         with mock.patch.object(
-            server,
-            "get_http_headers",
-            return_value={"authorization": "bearer secret-token"},
+            auth,
+            "_hdrs",
+            return_value=lambda: {"authorization": "bearer secret-token"},
         ):
-            result = server._require_auth()
+            result = auth._require_auth()
     assert result is None
 
 
 def test_malformed_authorization_falls_back_to_api_key():
-    with mock.patch.object(server, "API_KEY", "secret-token"):
+    with mock.patch.object(config, "API_KEY", "secret-token"):
         with mock.patch.object(
-            server,
-            "get_http_headers",
-            return_value={
+            auth,
+            "_hdrs",
+            return_value=lambda: {
                 "authorization": "Basic abc123",
                 "x-api-key": "secret-token",
             },
         ):
-            result = server._require_auth()
+            result = auth._require_auth()
     assert result is None
 
 
 def test_guarded_tool_short_circuits_before_credentials():
-    with mock.patch.object(server, "API_KEY", "secret-token"):
-        with mock.patch.object(server, "get_http_headers", return_value={}):
+    with mock.patch.object(config, "API_KEY", "secret-token"):
+        with mock.patch.object(auth, "_hdrs", return_value=lambda: {}):
             with mock.patch.object(
-                server,
+                auth,
                 "_resolve_credentials",
                 side_effect=AssertionError("credentials must not be resolved"),
             ):

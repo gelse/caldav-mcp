@@ -3,8 +3,13 @@
 All logic lives in the :mod:`caldav_mcp` package; this module exists to keep the
 installed ``caldav-mcp`` console script (``server:main``) and existing imports
 stable.  It re-exports every name the package exposes so ``import server;
-server.<name>`` (and ``mock.patch.object(server, ...)``) continue to work, and
-provides the ``main()`` entrypoint that launches the FastMCP HTTP server.
+server.<name>`` continues to work, and provides the ``main()`` entrypoint that
+launches the FastMCP HTTP server.
+
+Leaf modules (``auth``, ``calendar``, ``datetime_utils``) now import directly
+from their owning modules, so the ``import server`` in this file no longer
+creates a circular dependency for those modules.  ``tools.py`` still routes
+through ``server.*`` for backward-compatible test mocking.
 """
 
 import asyncio

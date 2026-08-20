@@ -1,27 +1,27 @@
 """CalDAV client/calendar access and event serialization helpers.
 
-Pure helpers (`_text`, `_event_to_dict`, `_validate_priority`, ...) and the
-`_get_calendar` selector live here; the HTTP-facing handlers in :mod:`tools`
-call the shared run-through-the-:mod:`server` namespace so existing tests that
-patch ``server.<name>`` keep working.
+Pure helpers (``_text``, ``_event_to_dict``, ``_validate_priority``, …) and the
+``_get_calendar`` selector live here.  Errors are imported directly from
+:mod:`caldav_mcp.errors`, eliminating the previous circular ``import server``
+dependency.
 """
 
 from datetime import datetime
 
 from icalendar.prop import vRecur
 
-import server
+from caldav_mcp.errors import NotFoundError
 
 
 def _get_calendar(client, calendar_name=None):
     calendars = client.principal().calendars()
     if not calendars:
-        raise server.NotFoundError("No calendars found for this principal")
+        raise NotFoundError("No calendars found for this principal")
     if calendar_name:
         for c in calendars:
             if c.name == calendar_name:
                 return c
-        raise server.NotFoundError(
+        raise NotFoundError(
             f"Calendar '{calendar_name}' not found. Available: "
             + ", ".join(c.name for c in calendars)
         )

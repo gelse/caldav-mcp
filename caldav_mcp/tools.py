@@ -27,10 +27,15 @@ from caldav.lib.error import DAVError
 from icalendar import Calendar, Event, vCalAddress, vText
 from icalendar.prop import vRecur
 
-import server
 from caldav_mcp import mcp
 from caldav_mcp.client_cache import client_cache
 from caldav_mcp.errors import AuthError, NotFoundError, ToolResult
+
+
+def _get_server():
+    """Lazy import of the ``server`` module to avoid circular imports at load time."""
+    import server  # noqa: E402  (deferred; see module docstring)
+    return server
 
 # ---------------------------------------------------------------------------
 # Errors considered "expected" CalDAV/transport failures.  These are caught and
@@ -52,11 +57,11 @@ _REMOTE_ERRORS = (
 
 
 def _ok(message: str = "", data=None) -> ToolResult:
-    return server.ToolResult.success(message=message, data=data)
+    return _get_server().ToolResult.success(message=message, data=data)
 
 
 def _empty(message: str = "") -> ToolResult:
-    return server.ToolResult.empty(message=message)
+    return _get_server().ToolResult.empty(message=message)
 
 
 def with_caldav_client(needs_calendar=True):
@@ -88,24 +93,25 @@ def with_caldav_client(needs_calendar=True):
         ]
 
         def wrapper(*_args, **kwargs):
+            srv = _get_server()
             try:
-                error = server._require_auth()
+                error = srv._require_auth()
                 if error:
                     return error
-                url, user, pw = server._resolve_credentials()
+                url, user, pw = srv._resolve_credentials()
 
                 # Try to get a cached DAVClient first; create a new one on miss.
                 client = client_cache.get(url, user)
                 if client is None:
-                    client = server.DAVClient(url=url, username=user, password=pw)  # type: ignore[operator]  # DAVClient accepts dynamic kwargs
+                    client = srv.DAVClient(url=url, username=user, password=pw)  # type: ignore[operator]  # DAVClient accepts dynamic kwargs
                     client_cache.put(url, user, client)
 
                 if needs_calendar:
-                    cal = server._get_calendar(client, kwargs.get("calendar_name") or None)
+                    cal = srv._get_calendar(client, kwargs.get("calendar_name") or None)
                     return fn(client=client, cal=cal, **kwargs)
                 return fn(client=client, **kwargs)
             except _REMOTE_ERRORS as e:
-                return server._render_error(e, fn.__name__)
+                return srv._render_error(e, fn.__name__)
 
         wrapper.__name__ = fn.__name__
         wrapper.__doc__ = fn.__doc__
@@ -145,10 +151,11 @@ def caldav_get_events(
     client, cal, calendar_name: str = "", start: str = "", end: str = ""
 ) -> ToolResult:
     """Get events in a date range for a calendar."""
-    start_dt = server._parse_dt(start) if start else server._start_of_day(server._now())
-    end_dt = server._parse_dt(end) if end else (start_dt + timedelta(days=1))
+    srv = _get_server()
+    start_dt = srv._parse_dt(start) if start else srv._start_of_day(srv._now())
+    end_dt = srv._parse_dt(end) if end else (start_dt + timedelta(days=1))
     events = cal.search(start=start_dt, end=end_dt, event=True, expand=True)
-    data = [server._event_to_dict(e) for e in events]
+    data = [srv._event_to_dict(e) for e in events]
     if not data:
         return _empty("No events in range")
     return _ok(
@@ -162,11 +169,12 @@ def caldav_get_events(
 @mcp.tool()
 def caldav_get_today_events(calendar_name: str = "") -> ToolResult:
     """Get events for today (00:00 to 24:00)."""
-    error = server._require_auth()
+    srv = _get_server()
+    error = srv._require_auth()
     if error:
         return error
-    today = server._start_of_day(server._now())
-    return server.caldav_get_events(  # type: ignore[call-arg]  # caldav API undocumented params
+    today = srv._start_of_day(srv._now())
+    return srv.caldav_get_events(  # type: ignore[call-arg]  # caldav API undocumented params
         calendar_name=calendar_name,
         start=today.isoformat(),
         end=(today + timedelta(days=1)).isoformat(),
@@ -176,11 +184,12 @@ def caldav_get_today_events(calendar_name: str = "") -> ToolResult:
 @mcp.tool()
 def caldav_get_week_events(calendar_name: str = "") -> ToolResult:
     """Get events for the next 7 days."""
-    error = server._require_auth()
+    srv = _get_server()
+    error = srv._require_auth()
     if error:
         return error
-    now = server._start_of_day(server._now())
-    return server.caldav_get_events(  # type: ignore[call-arg]  # caldav API undocumented params
+    now = srv._start_of_day(srv._now())
+    return srv.caldav_get_events(  # type: ignore[call-arg]  # caldav API undocumented params
         calendar_name=calendar_name,
         start=now.isoformat(),
         end=(now + timedelta(days=7)).isoformat(),
@@ -191,8 +200,9 @@ def caldav_get_week_events(calendar_name: str = "") -> ToolResult:
 @with_caldav_client()
 def caldav_get_event_by_uid(client, cal, uid: str, calendar_name: str = "") -> ToolResult:
     """Get a specific event by its UID."""
+    srv = _get_server()
     event = cal.event_by_uid(uid)
-    d = server._event_to_dict(event)
+    d = srv._event_to_dict(event)
     return _ok(
         message=(
             "UID: " + d["uid"] + "\n"
@@ -225,8 +235,9 @@ def caldav_create_event(
     attendees: str = "",
 ) -> ToolResult:
     """Create a new calendar event."""
-    start_dt = server._parse_dt(start)
-    end_dt = server._parse_dt(end) if end else (start_dt + timedelta(hours=1))
+    srv = _get_server()
+    start_dt = srv._parse_dt(start)
+    end_dt = srv._parse_dt(end) if end else (start_dt + timedelta(hours=1))
 
     uid = f"{uuid.uuid4()}@caldav-mcp"
 
@@ -236,7 +247,7 @@ def caldav_create_event(
 
     event = Event()
     event.add("uid", uid)
-    event.add("dtstamp", server._now())
+    event.add("dtstamp", srv._now())
     event.add("dtstart", start_dt)
     event.add("dtend", end_dt)
     event.add("summary", summary)
@@ -249,14 +260,14 @@ def caldav_create_event(
         event.add("categories", categories)
 
     if priority:
-        priority_int, err = server._validate_priority(priority)
+        priority_int, err = srv._validate_priority(priority)
         if err:
-            return server.ToolResult.failure(server.Status.ERROR, err)
+            return srv.ToolResult.failure(srv.Status.ERROR, err)
         event.add("priority", priority_int)
 
     if rrule:
-        if not server._validate_rrule(rrule):
-            return server.ToolResult.failure(server.Status.ERROR, "invalid RRULE")
+        if not srv._validate_rrule(rrule):
+            return srv.ToolResult.failure(srv.Status.ERROR, "invalid RRULE")
         # Add the parsed vRecur so the recurrence value is typed/escaped via
         # the component API rather than injected as a raw string.
         event.add("rrule", vRecur.from_ical(rrule))
@@ -294,16 +305,17 @@ def caldav_update_event(
     description: str = "",
 ) -> ToolResult:
     """Update an existing event by UID. Only provided fields are updated."""
+    srv = _get_server()
     event = cal.event_by_uid(uid)
-    comp = server._comp(event)
+    comp = srv._comp(event)
     if comp is None:
-        return server.ToolResult.failure(server.Status.ERROR, "no icalendar component")
+        return srv.ToolResult.failure(srv.Status.ERROR, "no icalendar component")
     if summary:
         comp["SUMMARY"] = summary
     if start:
-        comp["DTSTART"] = server._parse_dt(start)
+        comp["DTSTART"] = srv._parse_dt(start)
     if end:
-        comp["DTEND"] = server._parse_dt(end)
+        comp["DTEND"] = srv._parse_dt(end)
     if location:
         comp["LOCATION"] = location
     if description:
@@ -324,10 +336,11 @@ def caldav_add_attendee(
     role: str = "REQ-PARTICIPANT",
 ) -> ToolResult:
     """Add an attendee to an existing event."""
+    srv = _get_server()
     event = cal.event_by_uid(uid)
-    comp = server._comp(event)
+    comp = srv._comp(event)
     if comp is None:
-        return server.ToolResult.failure(server.Status.ERROR, "no icalendar component")
+        return srv.ToolResult.failure(srv.Status.ERROR, "no icalendar component")
     email_clean = email.strip()
     if not email_clean.lower().startswith("mailto:"):
         email_clean = "mailto:" + email_clean
@@ -347,10 +360,11 @@ def caldav_remove_attendee(
     client, cal, uid: str, email: str, calendar_name: str = ""
 ) -> ToolResult:
     """Remove an attendee from an existing event."""
+    srv = _get_server()
     event = cal.event_by_uid(uid)
-    comp = server._comp(event)
+    comp = srv._comp(event)
     if comp is None:
-        return server.ToolResult.failure(server.Status.ERROR, "no icalendar component")
+        return srv.ToolResult.failure(srv.Status.ERROR, "no icalendar component")
     target = email.strip()
     if not target.lower().startswith("mailto:"):
         target = "mailto:" + target
@@ -358,16 +372,16 @@ def caldav_remove_attendee(
 
     current = comp.get("attendee")
     if current is None:
-        return server.ToolResult.failure(
-            server.Status.NOT_FOUND, f"Attendee {email} not found on event {uid}"
+        return srv.ToolResult.failure(
+            srv.Status.NOT_FOUND, f"Attendee {email} not found on event {uid}"
         )
     if not isinstance(current, (list, tuple)):
         current = [current]
 
     remaining = [a for a in current if str(a).strip().lower() != target_norm]
     if len(remaining) == len(current):
-        return server.ToolResult.failure(
-            server.Status.NOT_FOUND, f"Attendee {email} not found on event {uid}"
+        return srv.ToolResult.failure(
+            srv.Status.NOT_FOUND, f"Attendee {email} not found on event {uid}"
         )
 
     if remaining:
@@ -385,8 +399,9 @@ def caldav_remove_attendee(
 @with_caldav_client()
 def caldav_list_attendees(client, cal, uid: str, calendar_name: str = "") -> ToolResult:
     """List attendees of an event."""
+    srv = _get_server()
     event = cal.event_by_uid(uid)
-    d = server._event_to_dict(event)
+    d = srv._event_to_dict(event)
     if not d["attendees"]:
         return _empty("No attendees")
     attendees = d["attendees"].split("; ")
@@ -408,24 +423,25 @@ def caldav_delete_event(client, cal, uid: str, calendar_name: str = "") -> ToolR
 @mcp.tool()
 def caldav_move_event(uid: str, target_calendar: str, source_calendar: str = "") -> ToolResult:
     """Move an event to another calendar (copy to target with new UID, delete original)."""
+    srv = _get_server()
     try:
-        error = server._require_auth()
+        error = srv._require_auth()
         if error:
             return error
-        url, user, pw = server._resolve_credentials()
+        url, user, pw = srv._resolve_credentials()
 
         # Use cached DAVClient (same pattern as with_caldav_client).
         client = client_cache.get(url, user)
         if client is None:
-            client = server.DAVClient(url=url, username=user, password=pw)  # type: ignore[operator]  # DAVClient accepts dynamic kwargs
+            client = srv.DAVClient(url=url, username=user, password=pw)  # type: ignore[operator]  # DAVClient accepts dynamic kwargs
             client_cache.put(url, user, client)
 
-        src_cal = server._get_calendar(client, source_calendar or None)
-        dst_cal = server._get_calendar(client, target_calendar)
+        src_cal = srv._get_calendar(client, source_calendar or None)
+        dst_cal = srv._get_calendar(client, target_calendar)
         event = src_cal.event_by_uid(uid)
-        comp = server._comp(event)
+        comp = srv._comp(event)
         if comp is None:
-            return server.ToolResult.failure(server.Status.ERROR, "no icalendar component")
+            return srv.ToolResult.failure(srv.Status.ERROR, "no icalendar component")
         new_uid = f"{uuid.uuid4()}@caldav-mcp"
         comp["UID"] = new_uid
         dst_cal.save_event(comp.to_ical().decode("utf-8"))
@@ -435,18 +451,19 @@ def caldav_move_event(uid: str, target_calendar: str, source_calendar: str = "")
             data={"uid": uid, "new_uid": new_uid, "target_calendar": target_calendar},
         )
     except _REMOTE_ERRORS as e:
-        return server._render_error(e, "caldav_move_event")
+        return srv._render_error(e, "caldav_move_event")
 
 
 @mcp.tool()
 @with_caldav_client()
 def caldav_search_events(client, cal, query: str, calendar_name: str = "") -> ToolResult:
     """Search events by text (summary/description/location)."""
+    srv = _get_server()
     events = cal.search()
     q = query.lower()
     matches = []
     for event in events:
-        d = server._event_to_dict(event)
+        d = srv._event_to_dict(event)
         blob = " ".join([d["summary"], d["description"], d["location"], d["categories"]]).lower()
         if q in blob:
             matches.append(d)
@@ -464,10 +481,11 @@ def caldav_get_freebusy(
     client, cal, start: str = "", end: str = "", calendar_name: str = ""
 ) -> ToolResult:
     """Get free/busy information for a time range."""
-    start_dt = server._parse_dt(start) if start else server._start_of_day(server._now())
-    end_dt = server._parse_dt(end) if end else (start_dt + timedelta(days=1))
+    srv = _get_server()
+    start_dt = srv._parse_dt(start) if start else srv._start_of_day(srv._now())
+    end_dt = srv._parse_dt(end) if end else (start_dt + timedelta(days=1))
     events = cal.search(start=start_dt, end=end_dt, event=True, expand=True)
-    data = [server._event_to_dict(e) for e in events]
+    data = [srv._event_to_dict(e) for e in events]
     if not data:
         return _ok("Free (no events in range)", data=[])
     lines = [f"Busy ({len(data)} events):"]

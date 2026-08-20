@@ -1,18 +1,22 @@
 """Date/time parsing and formatting helpers.
 
-These helpers read the server timezone and the current-time function through the
-:mod:`server` namespace so that tests which patch ``server.SERVER_TZ`` and
-``server._now`` observe the patched values.
+Uses a lazy accessor for the server module so that ``SERVER_TZ`` and ``_now``
+are resolved at call time, allowing ``mock.patch.object(server, ...)`` to
+take effect in tests.
 """
 
 from datetime import UTC, datetime
 
-import server
+
+def _srv():
+    """Lazy accessor for the ``server`` module – avoids circular top-level import."""
+    import server  # noqa: E402  (deferred; see module docstring)
+    return server
 
 
 def _now():
     """Return the current time in the server timezone."""
-    return datetime.now(server.SERVER_TZ)
+    return datetime.now(_srv().SERVER_TZ)
 
 
 def _start_of_day(dt):
@@ -21,9 +25,10 @@ def _start_of_day(dt):
 
 
 def _parse_dt(value):
+    srv = _srv()
     value = value.strip()
     if not value:
-        return server._now()
+        return srv._now()
     if value.endswith("Z"):
         value = value[:-1] + "+00:00"
     for fmt in (
@@ -40,7 +45,7 @@ def _parse_dt(value):
         try:
             dt = datetime.strptime(value, fmt)
             if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=server.SERVER_TZ)
+                dt = dt.replace(tzinfo=srv.SERVER_TZ)
             return dt
         except ValueError:
             continue

@@ -1,13 +1,39 @@
 """Authentication guards and CalDAV credential resolution.
 
-Shared runtime state (API key, HTTP header accessors, typed auth errors, and
-server constants) is referenced through the :mod:`server` namespace so that
-tests which patch ``server.<name>`` observe the same objects used here.
+Configuration constants (API key, HTTP header names) live in
+:mod:`caldav_mcp.config`, typed errors and results in :mod:`caldav_mcp.errors`,
+and the HTTP header accessor in ``fastmcp.server.dependencies``.  This module
+imports directly from those sources, eliminating the previous circular
+``import server`` dependency.
+
+Values that tests may mock (``API_KEY``, ``get_http_headers``) are read
+lazily via :func:`_cfg` / :func:`_hdrs` so that ``mock.patch.object(server, …)``
+patches are observed at call time.
 """
 
 import os
 
-import server
+from caldav_mcp.errors import AuthError, Status, ToolResult
+# Header-name constants are never patched in tests, so direct import is fine.
+from caldav_mcp.config import (
+    HDR_API_KEY,
+    HDR_AUTHORIZATION,
+    HDR_PASSWORD,
+    HDR_URL,
+    HDR_USERNAME,
+)
+
+
+def _cfg():
+    """Lazy accessor for ``caldav_mcp.config`` – avoids circular top-level import."""
+    from caldav_mcp import config  # noqa: E402  (deferred)
+    return config
+
+
+def _hdrs():
+    """Lazy accessor for ``fastmcp.server.dependencies.get_http_headers``."""
+    from fastmcp.server.dependencies import get_http_headers  # noqa: E402
+    return get_http_headers
 
 
 def _const_eq(a: str, b: str) -> bool:
@@ -20,41 +46,41 @@ def _const_eq(a: str, b: str) -> bool:
     return result == 0
 
 
-def _require_auth() -> "server.ToolResult | None":
+def _require_auth() -> "ToolResult | None":
     """Enforce the shared API token, if configured.
 
     Returns ``None`` on success, or a structured auth :class:`ToolResult` to
     return to the client when authentication fails. Authentication is disabled
     (returns ``None``) when CALDAV_MCP_API_KEY is not set.
     """
-    expected = server.API_KEY
+    expected = _cfg().API_KEY
     if not expected:
         return None
 
-    headers = server.get_http_headers()
+    headers = _hdrs()()
     provided = ""
-    auth = headers.get(server.HDR_AUTHORIZATION, "")
+    auth = headers.get(HDR_AUTHORIZATION, "")
     if auth:
         scheme, _, token = auth.partition(" ")
         if scheme.lower() == "bearer":
             provided = token.strip()
     if not provided:
-        provided = headers.get(server.HDR_API_KEY, "").strip()
+        provided = headers.get(HDR_API_KEY, "").strip()
 
     if provided and _const_eq(provided, expected):
         return None
-    return server.ToolResult.failure(
-        server.Status.AUTH, "unauthorized - missing or invalid API token"
+    return ToolResult.failure(
+        Status.AUTH, "unauthorized - missing or invalid API token"
     )
 
 
 def _resolve_credentials() -> tuple:
-    headers = server.get_http_headers()
-    url = headers.get(server.HDR_URL) or os.environ.get("CALDAV_URL", "")
-    username = headers.get(server.HDR_USERNAME) or os.environ.get("CALDAV_USERNAME", "")
-    password = headers.get(server.HDR_PASSWORD) or os.environ.get("CALDAV_PASSWORD", "")
+    headers = _hdrs()()
+    url = headers.get(HDR_URL) or os.environ.get("CALDAV_URL", "")
+    username = headers.get(HDR_USERNAME) or os.environ.get("CALDAV_USERNAME", "")
+    password = headers.get(HDR_PASSWORD) or os.environ.get("CALDAV_PASSWORD", "")
     if not url or not username or not password:
-        raise server.AuthError(
+        raise AuthError(
             "Missing CalDAV credentials. Provide X-Caldav-Url, X-Caldav-Username, "
             "X-Caldav-Password headers, or set CALDAV_URL/CALDAV_USERNAME/"
             "CALDAV_PASSWORD environment variables."
