@@ -115,6 +115,14 @@ All config via environment variables, validated at startup with Pydantic:
 - **TLS**: Optional, configured via `CALDAV_MCP_TLS_CERT` / `CALDAV_MCP_TLS_KEY`
 - **Audit**: Structured JSON or text logging, controlled by `CALDAV_MCP_LOG_FORMAT`
 
+## Git Branch Strategy
+
+- The main branch is `main`.
+- The branch `github` is deprecated and must not be used.
+- The `main` branch is protected and cannot be pushed to directly.
+- All development must happen in a separate branch from `main`.
+- After a task is finished, a pull request must be created targeting `main`.
+
 ## Development
 
 ```bash
