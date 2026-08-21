@@ -2,11 +2,11 @@
 
 **Give AI assistants full read/write access to any CalDAV calendar.**
 
-An MCP server that connects Model Context Protocol clients — Claude, Codex,
-OpenCode, Cursor, and others — to CalDAV-compatible calendar servers. Query
-events, create meetings, manage attendees, and move events between calendars,
-all through a single Docker container with no database and no external
-dependencies.
+A self-hosted bridge between Model Context Protocol clients and your CalDAV
+infrastructure. Connect Claude, Codex, Cursor, VS Code, and other AI assistants
+to Nextcloud, Radicale, Baikal, and any RFC 4791 calendar server. Query events,
+create meetings, manage attendees, and move events between calendars — all
+through a single Docker container with no database and no external dependencies.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org)
@@ -31,12 +31,62 @@ copy-pasting events or switching tabs, ask your assistant to do it:
 
 | | |
 |---|---|
-| **Provider-agnostic** | Works with any RFC 4791 CalDAV server — Nextcloud, Radicale, Baikal, ownCloud, iCloud, Fastmail, and others. No provider-specific API. |
-| **Full read/write** | 14 focused tools covering calendar discovery, event queries, creation, updates, deletion, moves, and attendee management. |
-| **Stateless** | No session state between requests. Credentials travel per-request in HTTP headers, so a single server instance can serve multiple CalDAV accounts. |
-| **Single container** | One Docker image, one `docker compose up`. No database, no background workers, no sidecars, no external SaaS. |
-| **Security built in** | Optional API-key authentication with constant-time comparison, per-IP rate limiting, input sanitization, and structured audit logging. |
-| **Self-hosted** | Runs anywhere Docker runs. Keep your calendar data on your own infrastructure. |
+| **Self-hosted AI assistants** | Keep your AI calendar access on your own infrastructure. No third-party SaaS, no data leaves your network. |
+| **Nextcloud / Radicale / Baikal integration** | Works with any RFC 4791 CalDAV server. Radicale is integration-tested in CI, Nextcloud is used in development. Baikal, ownCloud, iCloud, and Fastmail are protocol-compatible. |
+| **Centralized MCP infrastructure** | One server instance for your entire homelab or team. Multiple AI clients connect to the same endpoint. |
+| **Multiple CalDAV accounts** | Credentials travel per-request in HTTP headers — a single server serves different CalDAV accounts without restarts or reconfiguration. |
+| **Docker / homelab deployment** | One Docker image, one `docker compose up`. No database, no background workers, no sidecars. Runs anywhere Docker runs. |
+| **Full read/write access** | 14 focused tools covering calendar discovery, event queries, creation, updates, deletion, moves, and attendee management. |
+| **Security built in** | Optional API-key authentication with constant-time comparison, per-IP rate limiting with exponential backoff, input sanitization, and structured audit logging. |
+
+## How it works
+
+```mermaid
+flowchart LR
+    subgraph "MCP Client"
+        AI["AI / MCP Client\n(Claude, Cursor, VS Code, …)"]
+    end
+
+    subgraph "caldav-mcp"
+        EP["/mcp\nStreamable HTTP"]
+        AK["API Key Auth\n(optional)"]
+        RL["Per-IP Rate\nLimiting"]
+    end
+
+    subgraph "CalDAV Providers"
+        N["Nextcloud"]
+        R["Radicale"]
+        B["Baikal"]
+    end
+
+    AI -- "Streamable HTTP\n+ headers" --> EP
+    EP --> AK
+    EP --> RL
+    EP -- "CalDAV protocol" --> N
+    EP -- "CalDAV protocol" --> R
+    EP -- "CalDAV protocol" --> B
+```
+
+### Stateless, per-request architecture
+
+The server maintains **no session state** between requests. CalDAV credentials
+travel per-request in HTTP headers (`X-Caldav-Url`, `X-Caldav-Username`,
+`X-Caldav-Password`), which means:
+
+- **Different requests can target different CalDAV accounts** — a single
+  server instance serves multiple users or calendars.
+- **Environment variables provide a simpler single-account fallback** — set
+  `CALDAV_URL`, `CALDAV_USERNAME`, `CALDAV_PASSWORD` and omit the headers.
+- **No database, no persistent account state** — the only in-memory state is
+  a thread-safe LRU cache of CalDAV client connections.
+
+Two authentication layers sit between the client and the CalDAV server:
+
+1. **MCP endpoint auth** — optional API key via `Authorization: Bearer` or
+   `X-Api-Key` header. When `CALDAV_MCP_API_KEY` is unset, the endpoint is
+   open. Protects the MCP endpoint itself.
+2. **CalDAV credentials** — HTTP headers (preferred) or environment variables
+   (fallback). Authenticate against the actual CalDAV server.
 
 ## Supported CalDAV servers
 
@@ -52,6 +102,50 @@ copy-pasting events or switching tabs, ask your assistant to do it:
 
 Any server that implements the [CalDAV standard (RFC 4791)](https://datatracker.ietf.org/doc/html/rfc4791)
 should work. If it doesn't, [open an issue](https://github.com/gelse/caldav-mcp/issues).
+
+## MCP tools (14)
+
+The server exposes 14 MCP tools across three categories.
+
+<details>
+<summary><strong>Calendar & queries (7)</strong></summary>
+
+| Tool | Description |
+| --- | --- |
+| [`caldav_list_calendars`](caldav_mcp/tools/queries.py) | List all available calendars for the configured account |
+| [`caldav_get_events`](caldav_mcp/tools/queries.py) | Get events in a date range |
+| [`caldav_get_today_events`](caldav_mcp/tools/queries.py) | Get events for today |
+| [`caldav_get_week_events`](caldav_mcp/tools/queries.py) | Get events for the next 7 days |
+| [`caldav_get_event_by_uid`](caldav_mcp/tools/queries.py) | Get a specific event by UID, including attendees |
+| [`caldav_search_events`](caldav_mcp/tools/queries.py) | Find events by text across summary, description, location, and categories |
+| [`caldav_get_freebusy`](caldav_mcp/tools/queries.py) | Get free/busy information for a time range |
+
+</details>
+
+<details>
+<summary><strong>Event management (4)</strong></summary>
+
+| Tool | Description |
+| --- | --- |
+| [`caldav_create_event`](caldav_mcp/tools/mutations.py) | Create a new event — supports recurring rules, priority, categories, and attendees |
+| [`caldav_update_event`](caldav_mcp/tools/mutations.py) | Partially update an existing event by UID |
+| [`caldav_delete_event`](caldav_mcp/tools/mutations.py) | Delete an event by UID |
+| [`caldav_move_event`](caldav_mcp/tools/mutations.py) | Move an event between calendars |
+
+</details>
+
+<details>
+<summary><strong>Attendees (3)</strong></summary>
+
+| Tool | Description |
+| --- | --- |
+| [`caldav_add_attendee`](caldav_mcp/tools/attendees.py) | Add an attendee to an event |
+| [`caldav_remove_attendee`](caldav_mcp/tools/attendees.py) | Remove an attendee from an event |
+| [`caldav_list_attendees`](caldav_mcp/tools/attendees.py) | List attendees of an event |
+
+</details>
+
+Full API documentation: [`docs/api.md`](docs/api.md).
 
 ## Quick start
 
@@ -94,23 +188,16 @@ curl -s http://localhost:8600/mcp \
 
 ## MCP client configuration
 
-The server exposes a Streamable HTTP endpoint at `/mcp`. Any MCP client that
-supports Streamable HTTP transport can connect.
+> **Streamable HTTP only** — the server does not support stdio transport.
+> Any MCP client that supports Streamable HTTP can connect.
 
-### Generic endpoint
-
-```
-http://localhost:8600/mcp
-```
-
-### Claude Desktop / Claude Code
-
-Add to your MCP settings:
+The standard configuration format with per-request CalDAV credentials:
 
 ```json
 {
   "mcpServers": {
     "caldav": {
+      "type": "http",
       "url": "http://localhost:8600/mcp",
       "headers": {
         "Authorization": "Bearer YOUR_API_KEY",
@@ -123,12 +210,75 @@ Add to your MCP settings:
 }
 ```
 
-### OpenCode / Cursor / VS Code
+### Client-specific configuration
 
-Any MCP client that supports Streamable HTTP can use the same endpoint. Set
-the URL to `http://localhost:8600/mcp` and pass the required headers
-(`Authorization`, `X-Caldav-Url`, `X-Caldav-Username`, `X-Caldav-Password`)
-in the client's MCP server configuration.
+#### Claude Desktop
+
+Config file location:
+
+- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Linux**: `~/.config/Claude/claude_desktop_config.json`
+
+Uses the `mcpServers` key. Custom Connectors added via the UI require a paid plan.
+
+#### Claude Code
+
+Config file locations:
+
+- **Global**: `~/.claude/settings.json`
+- **Project**: `.mcp.json` (in project root)
+
+Uses the `mcpServers` key. You can also add via CLI:
+
+```bash
+claude mcp add --transport http caldav http://localhost:8600/mcp
+```
+
+> **Note**: The CLI does not support setting custom headers. Add the
+> `headers` block manually in the JSON config after using the CLI command.
+
+#### Cursor
+
+Config file locations:
+
+- **Project**: `.cursor/mcp.json`
+- **Global**: `~/.cursor/mcp.json`
+
+Uses the `mcpServers` key.
+
+#### VS Code
+
+Config file location: `.vscode/mcp.json`
+
+**Uses the `servers` key**, not `mcpServers`:
+
+```json
+{
+  "servers": {
+    "caldav": {
+      "type": "http",
+      "url": "http://localhost:8600/mcp",
+      "headers": {
+        "Authorization": "Bearer YOUR_API_KEY",
+        "X-Caldav-Url": "https://cloud.example.com/remote.php/dav/calendars/user/",
+        "X-Caldav-Username": "user",
+        "X-Caldav-Password": "app-password"
+      }
+    }
+  }
+}
+```
+
+#### OpenCode
+
+Config file location: project root (e.g. `opencode.json`).
+
+Uses the `mcpServers` key with the standard format shown above.
+
+#### OpenWebUI
+
+Configure via **Admin Panel → Settings → Connections**. Add the MCP server
+URL and headers through the UI.
 
 ### Multiple CalDAV accounts
 
@@ -136,68 +286,66 @@ Because credentials travel per-request in HTTP headers, a single server
 instance can serve multiple CalDAV accounts. Configure each MCP client
 connection with different `X-Caldav-*` headers.
 
-## Tools
+## Deployment
 
-The server exposes 14 MCP tools across three categories.
+### Local / private deployment
 
-### Calendar & queries
+The simplest setup — AI client and caldav-mcp on the same machine:
 
-| Tool | Description |
-| --- | --- |
-| [`caldav_list_calendars`](caldav_mcp/tools/queries.py) | List all available calendars for the configured account |
-| [`caldav_get_events`](caldav_mcp/tools/queries.py) | Get events in a date range |
-| [`caldav_get_today_events`](caldav_mcp/tools/queries.py) | Get events for today |
-| [`caldav_get_week_events`](caldav_mcp/tools/queries.py) | Get events for the next 7 days |
-| [`caldav_get_event_by_uid`](caldav_mcp/tools/queries.py) | Get a specific event by UID, including attendees |
-| [`caldav_search_events`](caldav_mcp/tools/queries.py) | Find events by text across summary, description, location, and categories |
-| [`caldav_get_freebusy`](caldav_mcp/tools/queries.py) | Get free/busy information for a time range |
-
-### Event management
-
-| Tool | Description |
-| --- | --- |
-| [`caldav_create_event`](caldav_mcp/tools/mutations.py) | Create a new event — supports recurring rules, priority, categories, and attendees |
-| [`caldav_update_event`](caldav_mcp/tools/mutations.py) | Partially update an existing event by UID |
-| [`caldav_delete_event`](caldav_mcp/tools/mutations.py) | Delete an event by UID |
-| [`caldav_move_event`](caldav_mcp/tools/mutations.py) | Move an event between calendars |
-
-### Attendees
-
-| Tool | Description |
-| --- | --- |
-| [`caldav_add_attendee`](caldav_mcp/tools/attendees.py) | Add an attendee to an event |
-| [`caldav_remove_attendee`](caldav_mcp/tools/attendees.py) | Remove an attendee from an event |
-| [`caldav_list_attendees`](caldav_mcp/tools/attendees.py) | List attendees of an event |
-
-Full API documentation: [`docs/api.md`](docs/api.md).
-
-## Architecture
-
-```mermaid
-flowchart LR
-    Client["AI Client\n(Claude, Codex, OpenCode, …)"]
-    MCP["MCP\nStreamable HTTP"]
-    Server["caldav-mcp\n(Python 3.13)"]
-    Auth["API Key Auth\n+ Rate Limiting"]
-    CalDAV["CalDAV Server\n(Nextcloud, Radicale, …)"]
-
-    Client -- "MCP / HTTP" --> Server
-    Server --> Auth
-    Server -- "CalDAV" --> CalDAV
+```
+AI Client → http://localhost:8600/mcp → CalDAV Server
 ```
 
-Two authentication layers sit between the client and the CalDAV server:
+```bash
+docker compose up -d
+```
 
-1. **MCP endpoint auth** — optional API key via `Authorization: Bearer` or
-   `X-Api-Key` header. Protects the MCP endpoint itself.
-2. **CalDAV credentials** — `X-Caldav-Url`, `X-Caldav-Username`,
-   `X-Caldav-Password` headers (or environment variables). Authenticate
-   against the CalDAV server.
+The server listens on `localhost:8600` and is not accessible from the
+network unless you explicitly publish the port.
 
-The server is **stateless** — no database, no session store. The only
-in-memory state is a thread-safe LRU cache of CalDAV client connections.
+### Remote / shared deployment
 
-## Security
+For multi-user or remote access, put the server behind a TLS-terminating
+reverse proxy:
+
+```
+AI Client → HTTPS → reverse proxy → caldav-mcp → CalDAV Server
+```
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name caldav-mcp.example.com;
+
+    ssl_certificate     /etc/ssl/certs/caldav-mcp.pem;
+    ssl_certificate_key /etc/ssl/private/caldav-mcp-key.pem;
+
+    location /mcp {
+        proxy_pass http://127.0.0.1:8600/mcp;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+### Built-in TLS
+
+If you prefer not to use a reverse proxy, enable built-in TLS:
+
+```bash
+CALDAV_MCP_TLS_CERT=/path/to/cert.pem \
+CALDAV_MCP_TLS_KEY=/path/to/key.pem \
+docker compose up -d
+```
+
+> ⚠️ **Do not expose the MCP endpoint publicly without both authentication
+> and TLS.** Without `CALDAV_MCP_API_KEY` set, the endpoint is open. Without
+> TLS, all traffic — including API keys and CalDAV passwords — is transmitted
+> in plaintext.
+
+## Authentication & security
 
 ### Authentication
 
@@ -246,12 +394,13 @@ aggregation systems.
 - Never commit CalDAV app passwords to version control.
 - Use a reverse proxy for TLS termination in production.
 
-## Configuration
+## Configuration reference
 
 All configuration is via environment variables, validated at startup with
 Pydantic.
 
-### Server
+<details>
+<summary><strong>Server</strong></summary>
 
 | Variable | Default | Description |
 | --- | --- | --- |
@@ -260,7 +409,10 @@ Pydantic.
 | `CALDAV_MCP_API_KEY` | `""` (disabled) | Shared secret for MCP endpoint auth |
 | `TZ` | `""` (UTC) | IANA timezone (e.g. `Europe/Vienna`) for today/week boundaries |
 
-### CalDAV
+</details>
+
+<details>
+<summary><strong>CalDAV</strong></summary>
 
 | Variable | Default | Description |
 | --- | --- | --- |
@@ -269,7 +421,10 @@ Pydantic.
 | `CALDAV_PASSWORD` | `""` | CalDAV password (fallback for `X-Caldav-Password` header) |
 | `CALDAV_MCP_CALDAV_VERIFY_SSL` | `true` | Verify TLS certs on CalDAV connections. Set `false` only for testing with self-signed certs. |
 
-### TLS
+</details>
+
+<details>
+<summary><strong>TLS</strong></summary>
 
 | Variable | Default | Description |
 | --- | --- | --- |
@@ -277,65 +432,26 @@ Pydantic.
 | `CALDAV_MCP_TLS_KEY` | `""` | Path to TLS private key PEM file |
 | `CALDAV_MCP_TLS_CA_BUNDLE` | `""` | Optional CA bundle for custom certificate authorities |
 
-### Rate limiting
+</details>
+
+<details>
+<summary><strong>Rate limiting</strong></summary>
 
 | Variable | Default | Description |
 | --- | --- | --- |
 | `CALDAV_MCP_RATE_LIMIT_MAX_FAILURES` | `10` | Max failed auth attempts per IP within the sliding window |
 | `CALDAV_MCP_RATE_LIMIT_WINDOW_SECONDS` | `60` | Sliding window duration in seconds |
 
-### Logging
+</details>
+
+<details>
+<summary><strong>Logging</strong></summary>
 
 | Variable | Default | Description |
 | --- | --- | --- |
 | `CALDAV_MCP_LOG_FORMAT` | `text` | Audit log format: `text` or `json` |
 
-## Deployment
-
-### Local / private Docker deployment
-
-The recommended approach for personal use:
-
-```bash
-docker compose up -d
-```
-
-The server runs on `localhost:8600` and is not accessible from the network
-unless you explicitly publish the port to a specific interface.
-
-### Behind a reverse proxy
-
-For multi-user or internet-facing deployments, put the server behind a
-reverse proxy (Traefik, Caddy, nginx) that handles TLS termination and
-access control:
-
-```nginx
-server {
-    listen 443 ssl;
-    server_name caldav-mcp.example.com;
-
-    ssl_certificate     /etc/ssl/certs/caldav-mcp.pem;
-    ssl_certificate_key /etc/ssl/private/caldav-mcp-key.pem;
-
-    location /mcp {
-        proxy_pass http://127.0.0.1:8600/mcp;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
-```
-
-### Built-in TLS
-
-If you prefer not to use a reverse proxy, enable built-in TLS:
-
-```bash
-CALDAV_MCP_TLS_CERT=/path/to/cert.pem \
-CALDAV_MCP_TLS_KEY=/path/to/key.pem \
-docker compose up -d
-```
+</details>
 
 ## Compatibility / limitations
 
@@ -353,7 +469,8 @@ docker compose up -d
   or use `docker compose up --build`.
 - **No GitHub releases yet** — the project is at version `0.1.0`.
 
-## Development
+<details>
+<summary><strong>Development</strong></summary>
 
 ### Setup
 
@@ -378,7 +495,12 @@ make deps-check        # Verify pyproject.toml and requirements.txt are in sync
 make build             # Build Docker image
 ```
 
-### Project structure
+Full contributing guide: [`docs/contributing.md`](docs/contributing.md).
+
+</details>
+
+<details>
+<summary><strong>Project structure</strong></summary>
 
 ```
 caldav-mcp/
@@ -419,6 +541,8 @@ caldav-mcp/
 | [`caldav`](https://github.com/tobixen/python-caldav) | 3.2.1 | CalDAV client library |
 | [`icalendar`](https://github.com/collective/icalendar) | 7.2.2 | iCalendar RFC 5545 parsing/generation |
 | [`requests`](https://pypi.org/project/requests/) | >=2.28.0 | HTTP transport layer |
+
+</details>
 
 ## Troubleshooting
 
