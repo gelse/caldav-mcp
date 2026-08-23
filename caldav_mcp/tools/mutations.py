@@ -21,8 +21,20 @@ from caldav_mcp.datetime_utils import _now, _parse_dt
 from caldav_mcp.errors import Status, ToolResult
 from caldav_mcp.tools import _REMOTE_ERRORS, _ok, _render_error, with_caldav_client
 
+# Non-destructive write annotations (create, update, move).
+_NON_DESTRUCTIVE_ANNOTATIONS = {
+    "readOnlyHint": False,
+    "destructiveHint": False,
+    "idempotentHint": False,
+}
+# Destructive write annotations (delete).
+_DESTRUCTIVE_ANNOTATIONS = {
+    "readOnlyHint": False,
+    "destructiveHint": True,
+}
 
-@mcp.tool()
+
+@mcp.tool(annotations=_NON_DESTRUCTIVE_ANNOTATIONS)
 @with_caldav_client()
 def caldav_create_event(
     client,
@@ -105,7 +117,7 @@ def caldav_create_event(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=_NON_DESTRUCTIVE_ANNOTATIONS)
 @with_caldav_client()
 def caldav_update_event(
     client,
@@ -152,7 +164,7 @@ def caldav_update_event(
     return _ok(message=f"Event {uid} updated", data={"uid": uid})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_DESTRUCTIVE_ANNOTATIONS)
 @with_caldav_client()
 def caldav_delete_event(client, cal, uid: str, calendar_name: str = ""):
     """Delete an event by UID."""
@@ -161,7 +173,7 @@ def caldav_delete_event(client, cal, uid: str, calendar_name: str = ""):
     return _ok(message=f"Deleted event {uid}", data={"uid": uid})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_NON_DESTRUCTIVE_ANNOTATIONS)
 @with_caldav_client(needs_calendar=False)
 def caldav_move_event(
     client,

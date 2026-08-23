@@ -8,8 +8,11 @@ from caldav_mcp.calendar import _event_to_dict
 from caldav_mcp.datetime_utils import _now, _parse_dt, _start_of_day
 from caldav_mcp.tools import _empty, _ok, with_caldav_client
 
+# All query tools are read-only — shared annotation.
+_RO_ANNOTATIONS = {"readOnlyHint": True}
 
-@mcp.tool()
+
+@mcp.tool(annotations=_RO_ANNOTATIONS)
 @with_caldav_client(needs_calendar=False)
 def caldav_list_calendars(client):
     """List all calendars available for the configured account."""
@@ -22,7 +25,7 @@ def caldav_list_calendars(client):
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=_RO_ANNOTATIONS)
 @with_caldav_client()
 def caldav_get_events(client, cal, calendar_name: str = "", start: str = "", end: str = ""):
     """Get events in a date range for a calendar."""
@@ -40,7 +43,7 @@ def caldav_get_events(client, cal, calendar_name: str = "", start: str = "", end
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=_RO_ANNOTATIONS)
 def caldav_get_today_events(calendar_name: str = ""):
     """Get events for today (00:00 to 24:00)."""
     error = _require_auth()
@@ -54,7 +57,7 @@ def caldav_get_today_events(calendar_name: str = ""):
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=_RO_ANNOTATIONS)
 def caldav_get_week_events(calendar_name: str = ""):
     """Get events for the next 7 days."""
     error = _require_auth()
@@ -68,7 +71,7 @@ def caldav_get_week_events(calendar_name: str = ""):
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=_RO_ANNOTATIONS)
 @with_caldav_client()
 def caldav_get_event_by_uid(client, cal, uid: str, calendar_name: str = ""):
     """Get a specific event by its UID."""
@@ -89,7 +92,7 @@ def caldav_get_event_by_uid(client, cal, uid: str, calendar_name: str = ""):
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=_RO_ANNOTATIONS)
 @with_caldav_client()
 def caldav_search_events(client, cal, query: str, calendar_name: str = ""):
     """Search events by text (summary/description/location)."""
@@ -116,7 +119,7 @@ def caldav_search_events(client, cal, query: str, calendar_name: str = ""):
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=_RO_ANNOTATIONS)
 @with_caldav_client()
 def caldav_get_freebusy(client, cal, start: str = "", end: str = "", calendar_name: str = ""):
     """Get free/busy information for a time range."""

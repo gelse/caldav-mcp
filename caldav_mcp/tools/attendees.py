@@ -14,8 +14,17 @@ from caldav_mcp.constants import (
 from caldav_mcp.errors import Status, ToolResult
 from caldav_mcp.tools import _empty, _ok, with_caldav_client
 
+# Attendee add/remove modify the event but are additive, not destructive.
+_NON_DESTRUCTIVE_ANNOTATIONS = {
+    "readOnlyHint": False,
+    "destructiveHint": False,
+    "idempotentHint": False,
+}
+# List attendees is read-only.
+_RO_ANNOTATIONS = {"readOnlyHint": True}
 
-@mcp.tool()
+
+@mcp.tool(annotations=_NON_DESTRUCTIVE_ANNOTATIONS)
 @with_caldav_client()
 def caldav_add_attendee(
     client,
@@ -51,7 +60,7 @@ def caldav_add_attendee(
     return _ok(message=f"Added attendee {email} to event {uid}", data={"uid": uid, "email": email})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_NON_DESTRUCTIVE_ANNOTATIONS)
 @with_caldav_client()
 def caldav_remove_attendee(client, cal, uid: str, email: str, calendar_name: str = ""):
     """Remove an attendee from an existing event."""
@@ -85,7 +94,7 @@ def caldav_remove_attendee(client, cal, uid: str, email: str, calendar_name: str
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=_RO_ANNOTATIONS)
 @with_caldav_client()
 def caldav_list_attendees(client, cal, uid: str, calendar_name: str = ""):
     """List attendees of an event."""
