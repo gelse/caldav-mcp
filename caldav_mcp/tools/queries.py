@@ -9,7 +9,12 @@ from caldav_mcp.datetime_utils import _now, _parse_dt, _start_of_day
 from caldav_mcp.tools import _empty, _ok, with_caldav_client
 
 # All query tools are read-only — shared annotation.
-_RO_ANNOTATIONS = {"readOnlyHint": True}
+_RO_ANNOTATIONS = {
+    "readOnlyHint": True,
+    "destructiveHint": False,
+    "idempotentHint": True,
+    "openWorldHint": True,
+}
 
 
 @mcp.tool(annotations=_RO_ANNOTATIONS)
