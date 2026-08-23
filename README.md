@@ -13,6 +13,7 @@ through a single Docker container with no database and no external dependencies.
 [![Docker](https://img.shields.io/badge/docker-ready-2496ED.svg?logo=docker)](Dockerfile)
 [![MCP](https://img.shields.io/badge/MCP-Streamable%20HTTP-8B5CF6.svg)](https://modelcontextprotocol.io)
 [![CI](https://img.shields.io/github/actions/workflow/status/gelse/caldav-mcp/check.yaml?label=tests)](https://github.com/gelse/caldav-mcp/actions)
+[![M8ven Score](https://m8ven.ai/badge/mcp/gelse-caldav-mcp-p1nzjs?v=90357b3ccae3ec55ec82a3b6459ff45c)](https://m8ven.ai/mcp/gelse-caldav-mcp-p1nzjs)
 
 ## What it does
 
