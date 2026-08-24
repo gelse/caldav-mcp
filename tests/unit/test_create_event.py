@@ -204,7 +204,7 @@ def test_dtstamp_uses_timezone_aware_now():
     try:
         vienna = ZoneInfo("Europe/Vienna")
         fake_now = datetime(2026, 1, 1, 10, 0, 0, tzinfo=vienna)
-        with mock.patch.object(server, "SERVER_TZ", vienna):
+        with mock.patch("caldav_mcp.datetime_utils.SERVER_TZ", vienna):
             with mock.patch("caldav_mcp.tools.mutations._now", lambda: fake_now):
                 result = server.caldav_create_event(summary="s", start="2026-01-01T10:00:00Z")
         assert result.status == Status.OK, f"call failed: {result!r}"

@@ -1,23 +1,18 @@
 """Date/time parsing and formatting helpers.
 
-Uses a lazy accessor for the server module so that ``SERVER_TZ`` and ``_now``
-are resolved at call time, allowing ``mock.patch.object(server, ...)`` to
-take effect in tests.
+``SERVER_TZ`` is imported directly from :mod:`caldav_mcp.config` — no lazy
+accessor needed.  Tests should patch ``caldav_mcp.datetime_utils.SERVER_TZ``
+and ``caldav_mcp.datetime_utils._now`` to control timezone and clock behaviour.
 """
 
 from datetime import UTC, datetime
 
-
-def _srv():
-    """Lazy accessor for the ``server`` module – avoids circular top-level import."""
-    import server  # noqa: E402  (deferred; see module docstring)
-
-    return server
+from caldav_mcp.config import SERVER_TZ
 
 
 def _now() -> datetime:
     """Return the current time in the server timezone."""
-    return datetime.now(_srv().SERVER_TZ)
+    return datetime.now(SERVER_TZ)
 
 
 def _start_of_day(dt: datetime) -> datetime:
@@ -26,10 +21,9 @@ def _start_of_day(dt: datetime) -> datetime:
 
 
 def _parse_dt(value: str) -> datetime:
-    srv = _srv()
     value = value.strip()
     if not value:
-        return srv._now()  # type: ignore[no-any-return]
+        return _now()  # type: ignore[no-any-return]
     if value.endswith("Z"):
         value = value[:-1] + "+00:00"
     # Try ISO 8601 variants in decreasing specificity.  Timezone-aware formats
@@ -48,7 +42,7 @@ def _parse_dt(value: str) -> datetime:
         try:
             dt = datetime.strptime(value, fmt)
             if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=srv.SERVER_TZ)
+                dt = dt.replace(tzinfo=SERVER_TZ)
             return dt
         except ValueError:
             continue

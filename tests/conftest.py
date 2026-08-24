@@ -12,7 +12,7 @@ from unittest import mock
 
 from icalendar import Calendar, Event, vCalAddress, vText
 
-import server
+from caldav_mcp.errors import NotFoundError
 
 # ── CalDAV boundary fakes ─────────────────────────────────────────────
 
@@ -92,7 +92,7 @@ class FakeCalendar:
     def event_by_uid(self, uid):
         ev = self._events_by_uid.get(uid)
         if ev is None:
-            raise server.NotFoundError(f"Event '{uid}' not found")
+            raise NotFoundError(f"Event '{uid}' not found")
         return ev
 
     def save_event(self, data):

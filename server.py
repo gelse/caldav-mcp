@@ -8,8 +8,8 @@ launches the FastMCP HTTP server.
 
 Leaf modules (``auth``, ``calendar``, ``datetime_utils``) now import directly
 from their owning modules, so the ``import server`` in this file no longer
-creates a circular dependency for those modules.  ``tools.py`` still routes
-through ``server.*`` for backward-compatible test mocking.
+creates a circular dependency for those modules.  ``caldav_mcp.tools`` imports
+directly from submodules; no circular edges remain.
 """
 
 import asyncio

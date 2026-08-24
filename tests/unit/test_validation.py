@@ -10,40 +10,41 @@ The end-to-end tests reuse the fake-network pattern from
 from conftest import FakeCalendar, patch_caldav
 
 import server
+from caldav_mcp.calendar import _validate_priority, _validate_rrule
 from server import Status
 
 
 def test_priority_empty_returns_none():
-    assert server._validate_priority("") == (None, None)
+    assert _validate_priority("") == (None, None)
 
 
 def test_priority_valid():
-    assert server._validate_priority("0") == (0, None)
-    assert server._validate_priority("9") == (9, None)
+    assert _validate_priority("0") == (0, None)
+    assert _validate_priority("9") == (9, None)
 
 
 def test_priority_non_integer():
-    _, err = server._validate_priority("abc")
+    _, err = _validate_priority("abc")
     assert err == "priority must be an integer"
 
 
 def test_priority_out_of_range():
-    _, err = server._validate_priority("10")
+    _, err = _validate_priority("10")
     assert err == "priority must be between 0 and 9"
-    _, err = server._validate_priority("-1")
+    _, err = _validate_priority("-1")
     assert err == "priority must be between 0 and 9"
 
 
 def test_rrule_empty_is_true():
-    assert server._validate_rrule("") is True
+    assert _validate_rrule("") is True
 
 
 def test_rrule_valid_daily():
-    assert server._validate_rrule("FREQ=DAILY") is True
+    assert _validate_rrule("FREQ=DAILY") is True
 
 
 def test_rrule_invalid():
-    assert server._validate_rrule("NOT-A-RRULE;;") is False
+    assert _validate_rrule("NOT-A-RRULE;;") is False
 
 
 def test_invalid_priority_non_integer_returns_error():

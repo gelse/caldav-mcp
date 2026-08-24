@@ -9,6 +9,7 @@ from conftest import FakeCalendar, FakeEvent, make_event, patch_caldav
 from icalendar import Calendar, Event
 
 import server
+from caldav_mcp.calendar import _event_to_dict
 from server import Status
 
 # ── Group A: Unicode in Event Fields ─────────────────────────────────
@@ -191,7 +192,7 @@ class TestMalformedCalendarData:
         # Remove optional fields to test graceful handling
         comp = ev.icalendar_component
         del comp["summary"]
-        result = server._event_to_dict(ev)
+        result = _event_to_dict(ev)
         assert result["summary"] == ""
         assert result["uid"] != ""
 
@@ -201,7 +202,7 @@ class TestMalformedCalendarData:
         class NoComponent:
             id = "fallback-uid"
 
-        result = server._event_to_dict(NoComponent())
+        result = _event_to_dict(NoComponent())
         assert result["uid"] == "fallback-uid"
         assert result["summary"] == ""
         assert result["dtstart"] == ""
@@ -213,7 +214,7 @@ class TestMalformedCalendarData:
         ev.add("uid", "minimal@test")
         cal.add_component(ev)
         fake_event = FakeEvent(cal)
-        result = server._event_to_dict(fake_event)
+        result = _event_to_dict(fake_event)
         assert result["uid"] == "minimal@test"
         assert result["summary"] == ""
 

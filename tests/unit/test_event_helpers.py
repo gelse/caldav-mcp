@@ -10,7 +10,7 @@ from datetime import datetime
 
 from icalendar import Calendar, Event, vCalAddress
 
-import server
+from caldav_mcp.calendar import _attendee_str, _comp, _event_to_dict
 
 
 def make_event_wrapper(component):
@@ -37,14 +37,14 @@ def _build_event():
 def test_comp_returns_attached_component():
     comp = Event()
     wrapper = make_event_wrapper(comp)
-    assert server._comp(wrapper) is comp
+    assert _comp(wrapper) is comp
 
 
 def test_comp_returns_none_without_component():
     class Bare:
         pass
 
-    assert server._comp(Bare()) is None
+    assert _comp(Bare()) is None
 
 
 def test_event_to_dict_maps_all_fields():
@@ -52,7 +52,7 @@ def test_event_to_dict_maps_all_fields():
     cal.add_component(_build_event())
     wrapper = make_event_wrapper(cal.walk("VEVENT")[0])
 
-    result = server._event_to_dict(wrapper)
+    result = _event_to_dict(wrapper)
 
     assert isinstance(result, dict)
     assert list(result.keys()) == [
@@ -78,7 +78,7 @@ def test_event_to_dict_dtstart_isoformat():
     cal.add_component(_build_event())
     wrapper = make_event_wrapper(cal.walk("VEVENT")[0])
 
-    result = server._event_to_dict(wrapper)
+    result = _event_to_dict(wrapper)
     # Naive datetimes are serialized via isoformat, e.g. 2026-08-18T09:00:00
     assert result["dtstart"] == "2026-08-18T09:00:00"
     assert result["dtend"] == "2026-08-18T09:30:00"
@@ -91,7 +91,7 @@ def test_event_to_dict_with_attendees():
     cal.add_component(event)
     wrapper = make_event_wrapper(cal.walk("VEVENT")[0])
 
-    result = server._event_to_dict(wrapper)
+    result = _event_to_dict(wrapper)
     assert result["attendees"] == "mailto:alice@example.com"
 
 
@@ -103,7 +103,7 @@ def test_event_to_dict_multiple_attendees_semicolon_joined():
     cal.add_component(event)
     wrapper = make_event_wrapper(cal.walk("VEVENT")[0])
 
-    result = server._event_to_dict(wrapper)
+    result = _event_to_dict(wrapper)
     assert result["attendees"] == "mailto:alice@example.com; mailto:bob@example.com"
 
 
@@ -111,7 +111,7 @@ def test_event_to_dict_missing_component_uses_event_id():
     class BareEvent:
         id = "fallback-id"
 
-    result = server._event_to_dict(BareEvent())
+    result = _event_to_dict(BareEvent())
     assert result["uid"] == "fallback-id"
     assert result["summary"] == ""
     assert result["attendees"] == ""
@@ -122,7 +122,7 @@ def test_attendee_str_with_roled_partstat():
     attendee.params["ROLE"] = "CHAIR"
     attendee.params["PARTSTAT"] = "ACCEPTED"
 
-    assert server._attendee_str(attendee) == (
+    assert _attendee_str(attendee) == (
         "mailto:alice@example.com ROLE=CHAIR PARTSTAT=ACCEPTED"
     )
 
@@ -131,10 +131,10 @@ def test_attendee_str_with_role_only():
     attendee = vCalAddress("mailto:bob@example.com")
     attendee.params["ROLE"] = "REQ-PARTICIPANT"
 
-    assert server._attendee_str(attendee) == ("mailto:bob@example.com ROLE=REQ-PARTICIPANT")
+    assert _attendee_str(attendee) == ("mailto:bob@example.com ROLE=REQ-PARTICIPANT")
 
 
 def test_attendee_str_no_params():
     attendee = vCalAddress("mailto:carol@example.com")
 
-    assert server._attendee_str(attendee) == "mailto:carol@example.com"
+    assert _attendee_str(attendee) == "mailto:carol@example.com"
