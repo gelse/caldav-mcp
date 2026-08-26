@@ -1,8 +1,8 @@
 IMAGE_NAME := caldav-mcp
 IMAGE_TAG := latest
 
-# Active Python interpreter; set to a local venv for development (e.g. .venv/bin/python)
-PYTHON ?= python3
+# Active Python interpreter; prefer local venv, fall back to system python3
+PYTHON ?= $(if $(wildcard .venv/bin/python3),.venv/bin/python3,python3)
 
 .PHONY: help
 help:
