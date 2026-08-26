@@ -122,9 +122,7 @@ def test_attendee_str_with_roled_partstat():
     attendee.params["ROLE"] = "CHAIR"
     attendee.params["PARTSTAT"] = "ACCEPTED"
 
-    assert _attendee_str(attendee) == (
-        "mailto:alice@example.com ROLE=CHAIR PARTSTAT=ACCEPTED"
-    )
+    assert _attendee_str(attendee) == ("mailto:alice@example.com ROLE=CHAIR PARTSTAT=ACCEPTED")
 
 
 def test_attendee_str_with_role_only():
