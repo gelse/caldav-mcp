@@ -38,7 +38,11 @@ test-unit:
 
 .PHONY: test-integration
 test-integration:
-	$(PYTHON) -m pytest tests/integration/ -m integration --timeout=60
+	docker compose -f docker-compose.test.yaml up -d --wait
+	$(PYTHON) -m pytest tests/integration/ -m integration --timeout=60; \
+	EXIT=$$?; \
+	docker compose -f docker-compose.test.yaml down -v; \
+	exit $$EXIT
 
 .PHONY: test-performance
 test-performance:
