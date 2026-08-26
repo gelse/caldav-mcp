@@ -4,6 +4,26 @@ IMAGE_TAG := latest
 # Active Python interpreter; set to a local venv for development (e.g. .venv/bin/python)
 PYTHON ?= python3
 
+.PHONY: help
+help:
+	@echo "make <target>"
+	@echo ""
+	@echo "Targets:"
+	@echo "  build             Build Docker image"
+	@echo "  test              Run unit tests"
+	@echo "  test-unit         Run unit tests"
+	@echo "  test-integration  Run integration tests"
+	@echo "  test-performance  Run performance tests"
+	@echo "  test-all          Run all tests"
+	@echo "  lint              Lint with ruff"
+	@echo "  typecheck         Type check with mypy"
+	@echo "  deps-check        Check dependency consistency"
+	@echo "  deps-update       Sync requirements.txt from pyproject.toml"
+	@echo "  deps-verify       Verify dependency consistency (exit code only)"
+	@echo "  check             Full CI: lint, typecheck, deps-check, test"
+	@echo "  docs-serve        Print instructions for viewing docs"
+	@echo "  docs-check        Verify doc files exist"
+
 .PHONY: build
 build:
 	docker build -t $(IMAGE_NAME):$(IMAGE_TAG) .
