@@ -46,7 +46,7 @@ def caldav_add_attendee(
     # Strip mailto: prefix before validation (users may pass "mailto:user@example.com").
     email_for_validation = email.strip()
     if email_for_validation.lower().startswith(MAILTO_PREFIX):
-        email_for_validation = email_for_validation[len(MAILTO_PREFIX):]
+        email_for_validation = email_for_validation[len(MAILTO_PREFIX) :]
     validate_email(email_for_validation)
 
     event = cal.event_by_uid(uid)
