@@ -1,6 +1,7 @@
 # Development dependencies — mirrors [project.optional-dependencies] dev in pyproject.toml
 -r requirements.txt
 pytest>=8.0.0
+pytest-timeout>=2.1.0
 pytest-benchmark>=4.0.0
 ruff>=0.6.0
 mypy>=1.10.0
