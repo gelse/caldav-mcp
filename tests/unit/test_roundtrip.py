@@ -15,6 +15,7 @@ from conftest import FakeCalendar, patch_caldav
 from icalendar import Calendar
 
 import server
+from caldav_mcp.calendar import _event_to_dict
 from server import Status
 
 
@@ -91,7 +92,7 @@ def test_full_event_round_trips_all_fields():
 
         # The read path (_event_to_dict) used by caldav_get_event_by_uid
         # reflects the same text values after the re-parse.
-        d = server._event_to_dict(ev)
+        d = _event_to_dict(ev)
         assert d["summary"] == summary
         assert d["location"] == location
         assert d["description"] == description
@@ -108,7 +109,7 @@ def test_summary_with_special_characters_round_trips():
         summary = "a,b;c\\d\ne"
         ev = _create(fake_cal, summary=summary, start="2026-01-01T10:00:00Z")
         assert str(ev.icalendar_component["summary"]) == summary
-        assert server._event_to_dict(ev)["summary"] == summary
+        assert _event_to_dict(ev)["summary"] == summary
     finally:
         for p in patchers:
             p.stop()
@@ -124,7 +125,7 @@ def test_dtstart_dtend_round_trip_utc():
             start="2026-03-05T09:00:00Z",
             end="2026-03-05T10:30:00Z",
         )
-        d = server._event_to_dict(ev)
+        d = _event_to_dict(ev)
         assert d["dtstart"] == "2026-03-05T09:00:00+00:00"
         assert d["dtend"] == "2026-03-05T10:30:00+00:00"
     finally:

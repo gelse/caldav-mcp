@@ -13,16 +13,16 @@ from datetime import UTC, datetime, timedelta
 from unittest import mock
 from zoneinfo import ZoneInfo
 
-import server
+import caldav_mcp.datetime_utils as _dt
 
 
 def test_default_start_is_server_local_midnight():
     # Mid-afternoon instant in Europe/Vienna (UTC+2 in summer).
     tz = ZoneInfo("Europe/Vienna")
     fake_now = datetime(2026, 8, 18, 15, 30, 45, tzinfo=tz)
-    with mock.patch.object(server, "SERVER_TZ", tz):
-        with mock.patch.object(server, "_now", lambda: fake_now):
-            start_dt = server._start_of_day(server._now())
+    with mock.patch("caldav_mcp.datetime_utils.SERVER_TZ", tz):
+        with mock.patch("caldav_mcp.datetime_utils._now", lambda: fake_now):
+            start_dt = _dt._start_of_day(_dt._now())
             end_dt = start_dt + timedelta(days=1)
 
     # Default start is local midnight with the server offset (+02:00).
@@ -40,9 +40,9 @@ def test_default_start_is_server_local_midnight():
 def test_default_start_uses_utc_midnight_when_server_is_utc():
     tz_utc = UTC
     fake_now = datetime(2026, 8, 18, 15, 30, 45, tzinfo=tz_utc)
-    with mock.patch.object(server, "SERVER_TZ", tz_utc):
-        with mock.patch.object(server, "_now", lambda: fake_now):
-            start_dt = server._start_of_day(server._now())
+    with mock.patch("caldav_mcp.datetime_utils.SERVER_TZ", tz_utc):
+        with mock.patch("caldav_mcp.datetime_utils._now", lambda: fake_now):
+            start_dt = _dt._start_of_day(_dt._now())
             end_dt = start_dt + timedelta(days=1)
 
     assert start_dt.isoformat() == "2026-08-18T00:00:00+00:00"

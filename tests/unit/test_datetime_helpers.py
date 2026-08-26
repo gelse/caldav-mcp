@@ -10,12 +10,12 @@ wall clock) and network-free.
 from datetime import UTC, datetime, timedelta
 from unittest import mock
 
-import server
+from caldav_mcp.datetime_utils import _now, _start_of_day
 
 
 def test_start_of_day_preserves_tz_and_zeroes_time():
     dt = datetime(2026, 8, 17, 15, 30, 45, 123456, tzinfo=UTC)
-    sd = server._start_of_day(dt)
+    sd = _start_of_day(dt)
     assert sd == datetime(2026, 8, 17, 0, 0, 0, 0, tzinfo=UTC)
     assert sd.tzinfo is not None
     assert sd.hour == 0
@@ -25,15 +25,15 @@ def test_start_of_day_preserves_tz_and_zeroes_time():
 
 
 def test_now_is_timezone_aware():
-    now = server._now()
+    now = _now()
     assert now.tzinfo is not None
 
 
 def test_fixed_now_contiguous_24h_day_window():
     fixed_now = datetime(2026, 8, 17, 15, 30, 45, 123456, tzinfo=UTC)
-    with mock.patch.object(server, "_now", return_value=fixed_now):
-        now = server._now()
-        start = server._start_of_day(now)
+    with mock.patch("caldav_mcp.datetime_utils._now", return_value=fixed_now):
+        now = _now()
+        start = _start_of_day(now)
         end = start + timedelta(days=1)
     # Boundary: start at local midnight with all time fields zeroed.
     assert start.hour == 0

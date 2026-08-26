@@ -7,24 +7,21 @@
 
 ## Running
 
-1. Start the Radicale test server:
-   ```bash
-   docker compose -f docker-compose.test.yaml up -d
-   ```
-
-2. Wait for Radicale to be healthy:
-   ```bash
-   docker compose -f docker-compose.test.yaml ps
-   ```
-
-3. Run integration tests:
+1. Run the integration tests (Radicale is started and stopped automatically):
    ```bash
    make test-integration
-   # or: .venv/bin/python -m pytest tests/integration/ -m integration
    ```
 
-4. Stop the test server:
+   This will:
+   - Start the Radicale test server in Docker
+   - Wait for it to be healthy
+   - Run the integration test suite
+   - Tear down the server and clean up volumes
+
+2. Or manually:
    ```bash
+   docker compose -f docker-compose.test.yaml up -d
+   .venv/bin/python -m pytest tests/integration/ -m integration
    docker compose -f docker-compose.test.yaml down -v
    ```
 

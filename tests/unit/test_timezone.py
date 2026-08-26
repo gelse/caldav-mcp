@@ -12,6 +12,7 @@ from unittest import mock
 from zoneinfo import ZoneInfo
 
 import server
+from caldav_mcp.datetime_utils import _now, _parse_dt, _start_of_day
 
 
 def test_tz_set_returns_configured_zone():
@@ -58,8 +59,8 @@ def test_tz_invalid_logs_warning_and_falls_back_to_utc():
 
 def test_now_carries_server_timezone():
     """_now() and _start_of_day() must preserve the server timezone."""
-    with mock.patch.object(server, "SERVER_TZ", ZoneInfo("Europe/Vienna")):
-        now = server._now()
+    with mock.patch("caldav_mcp.datetime_utils.SERVER_TZ", ZoneInfo("Europe/Vienna")):
+        now = _now()
     assert now.tzinfo is ZoneInfo("Europe/Vienna")
     # Europe/Vienna in late August is on DST (UTC+2).
     assert now.utcoffset() == timedelta(hours=2)
@@ -67,7 +68,7 @@ def test_now_carries_server_timezone():
 
 def test_start_of_day_zeroes_time_but_keeps_tz():
     dt = datetime(2026, 8, 17, 15, 30, 45, 123456, tzinfo=ZoneInfo("Europe/Vienna"))
-    sd = server._start_of_day(dt)
+    sd = _start_of_day(dt)
     assert sd == datetime(2026, 8, 17, 0, 0, 0, 0, tzinfo=ZoneInfo("Europe/Vienna"))
     assert sd.tzinfo is ZoneInfo("Europe/Vienna")
     assert sd.hour == 0
@@ -78,15 +79,15 @@ def test_start_of_day_zeroes_time_but_keeps_tz():
 
 def test_start_of_day_utc():
     dt = datetime(2026, 8, 17, 15, 30, tzinfo=UTC)
-    sd = server._start_of_day(dt)
+    sd = _start_of_day(dt)
     assert sd == datetime(2026, 8, 17, tzinfo=UTC)
     assert sd.tzinfo is UTC
 
 
 def test_parse_dt_date_only_resolves_to_server_local_midnight():
     """_parse_dt() must resolve naive inputs to the server timezone."""
-    with mock.patch.object(server, "SERVER_TZ", ZoneInfo("Europe/Vienna")):
-        dt = server._parse_dt("2026-08-17")
+    with mock.patch("caldav_mcp.datetime_utils.SERVER_TZ", ZoneInfo("Europe/Vienna")):
+        dt = _parse_dt("2026-08-17")
     assert dt.tzinfo == ZoneInfo("Europe/Vienna")
     assert dt.hour == 0
     assert dt.minute == 0
@@ -95,15 +96,15 @@ def test_parse_dt_date_only_resolves_to_server_local_midnight():
 
 
 def test_parse_dt_naive_datetime_string_resolves_to_server_tz():
-    with mock.patch.object(server, "SERVER_TZ", ZoneInfo("Europe/Vienna")):
-        dt = server._parse_dt("2026-08-17 10:00:00")
+    with mock.patch("caldav_mcp.datetime_utils.SERVER_TZ", ZoneInfo("Europe/Vienna")):
+        dt = _parse_dt("2026-08-17 10:00:00")
     assert dt.tzinfo == ZoneInfo("Europe/Vienna")
     assert dt.strftime("%Y-%m-%d %H:%M:%S") == "2026-08-17 10:00:00"
 
 
 def test_parse_dt_explicit_z_suffix_returns_utc():
-    with mock.patch.object(server, "SERVER_TZ", ZoneInfo("Europe/Vienna")):
-        dt = server._parse_dt("2026-01-01T10:00:00Z")
+    with mock.patch("caldav_mcp.datetime_utils.SERVER_TZ", ZoneInfo("Europe/Vienna")):
+        dt = _parse_dt("2026-01-01T10:00:00Z")
     assert dt.tzinfo == UTC
     assert dt.strftime("%Y-%m-%d %H:%M:%S") == "2026-01-01 10:00:00"
 
@@ -111,16 +112,16 @@ def test_parse_dt_explicit_z_suffix_returns_utc():
 def test_parse_dt_empty_input_returns_now():
     tz = ZoneInfo("Europe/Vienna")
     fake_now = datetime(2026, 8, 17, 10, 0, 0, tzinfo=tz)
-    with mock.patch.object(server, "SERVER_TZ", tz):
-        with mock.patch.object(server, "_now", lambda: fake_now):
-            assert server._parse_dt("") is fake_now
+    with mock.patch("caldav_mcp.datetime_utils.SERVER_TZ", tz):
+        with mock.patch("caldav_mcp.datetime_utils._now", lambda: fake_now):
+            assert _parse_dt("") is fake_now
 
 
 def test_get_today_events_starts_at_local_midnight():
     """Optional: day helpers pass local-midnight ISO boundaries to get_events."""
     tz = ZoneInfo("Europe/Vienna")
     fake_now = datetime(2026, 8, 18, 15, 30, tzinfo=tz)
-    with mock.patch.object(server, "SERVER_TZ", tz):
+    with mock.patch("caldav_mcp.datetime_utils.SERVER_TZ", tz):
         with mock.patch("caldav_mcp.tools.queries._now", lambda: fake_now):
             with mock.patch("caldav_mcp.tools.queries.caldav_get_events") as get_events:
                 get_events.return_value = server.ToolResult.success("ok")
@@ -133,7 +134,7 @@ def test_get_today_events_starts_at_local_midnight():
 def test_get_week_events_starts_at_local_midnight():
     tz = ZoneInfo("Europe/Vienna")
     fake_now = datetime(2026, 8, 18, 15, 30, tzinfo=tz)
-    with mock.patch.object(server, "SERVER_TZ", tz):
+    with mock.patch("caldav_mcp.datetime_utils.SERVER_TZ", tz):
         with mock.patch("caldav_mcp.tools.queries._now", lambda: fake_now):
             with mock.patch("caldav_mcp.tools.queries.caldav_get_events") as get_events:
                 get_events.return_value = server.ToolResult.success("ok")

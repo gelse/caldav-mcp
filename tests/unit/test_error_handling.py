@@ -18,13 +18,18 @@ import pytest
 from caldav.lib.error import DAVError
 
 import server
-from server import Status
+from caldav_mcp.errors import (
+    AuthError,
+    NotFoundError,
+    Status,
+    _log_exception,
+)
 
 
 def test_missing_credentials_returns_auth_error():
     with mock.patch(
         "caldav_mcp.tools._resolve_credentials",
-        side_effect=server.AuthError("missing credentials"),
+        side_effect=AuthError("missing credentials"),
     ):
         result = server.caldav_list_calendars()
     assert result.status == Status.AUTH
@@ -37,7 +42,7 @@ def test_missing_calendar_returns_not_found():
         mock.patch("caldav_mcp.tools.DAVClient", return_value=object()),
         mock.patch(
             "caldav_mcp.tools._get_calendar",
-            side_effect=server.NotFoundError("Calendar 'x' not found"),
+            side_effect=NotFoundError("Calendar 'x' not found"),
         ),
     ):
         result = server.caldav_get_events()
@@ -59,12 +64,12 @@ def test_dav_error_is_caught_and_logged():
             "caldav_mcp.tools._resolve_credentials",
             side_effect=DAVError(url="https://caldav.example", reason="boom"),
         ),
-        mock.patch.object(server.log, "exception") as log_exc,
+        mock.patch("caldav_mcp.errors.log") as mock_log,
     ):
         result = server.caldav_list_calendars()
     assert result.status == Status.ERROR
     assert result.message == "Internal error"
-    log_exc.assert_called_once_with("Unhandled error in %s", "caldav_list_calendars")
+    mock_log.exception.assert_called_once_with("Unhandled error in %s", "caldav_list_calendars")
 
 
 def test_dav_error_does_not_leak_raw_message():
@@ -80,18 +85,18 @@ def test_dav_error_does_not_leak_raw_message():
 
 
 def test_log_exception_returns_sanitized_message():
-    with mock.patch.object(server.log, "exception") as log_exc:
-        result = server._log_exception(RuntimeError("boom"), "caldav_foo")
+    with mock.patch("caldav_mcp.errors.log") as mock_log:
+        result = _log_exception(RuntimeError("boom"), "caldav_foo")
     assert result.status == Status.ERROR
     assert result.message == "Internal error"
-    log_exc.assert_called_once_with("Unhandled error in %s", "caldav_foo")
+    mock_log.exception.assert_called_once_with("Unhandled error in %s", "caldav_foo")
 
 
 def test_log_exception_never_leaks_exception_text():
     secret = "s3cret-value"
     exc = RuntimeError(f"priviledge escalation with key={secret}")
-    with mock.patch.object(server.log, "exception"):
-        result = server._log_exception(exc, "caldav_foo")
+    with mock.patch("caldav_mcp.errors.log"):
+        result = _log_exception(exc, "caldav_foo")
     assert secret not in result.message
     assert "priviledge" not in result.message
 
@@ -100,8 +105,8 @@ def test_log_exception_verbose_context_logged():
     """The exact exception text is logged server-side, not returned."""
     secret = "top-secret"
     exc = RuntimeError(f"detail is logged here {secret}")
-    with mock.patch.object(server.log, "exception") as log_exc:
-        result = server._log_exception(exc, "caldav_foo")
-    log_exc.assert_called_once_with("Unhandled error in %s", "caldav_foo")
+    with mock.patch("caldav_mcp.errors.log") as mock_log:
+        result = _log_exception(exc, "caldav_foo")
+    mock_log.exception.assert_called_once_with("Unhandled error in %s", "caldav_foo")
     assert secret not in result.message
     assert "detail is logged here" not in result.message
