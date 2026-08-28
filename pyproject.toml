@@ -28,8 +28,8 @@ docs = [
 caldav-mcp = "server:main"
 
 [project.urls]
-Documentation = "http://forgejo.gelse.local/werner/caldav-mcp/src/branch/main/docs"
-Repository = "http://forgejo.gelse.local/werner/caldav-mcp"
+Documentation = "https://github.com/gelse/caldav-mcp/tree/main/docs"
+Repository = "https://github.com/gelse/caldav-mcp"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
