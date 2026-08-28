@@ -52,12 +52,11 @@ jobs:
       - name: Verify image starts
         if: github.event_name == 'pull_request'
         run: |
-          docker rm -f test-container 2>/dev/null || true
-          docker run -d --name test-container \
+          docker run -d --rm --name test-container \
             -e CALDAV_MCP_PORT=8080 \
             -e CALDAV_MCP_PATH=/mcp \
             -e TZ=UTC \
-            caldav-mcp:ci-${{ github.sha }}
+            "ghcr.io/gelse/caldav-mcp:${GITHUB_SHA::7}"
           sleep 5
           docker exec test-container python3 -c \
             "import socket; s=socket.socket(); s.settimeout(3); s.connect(('127.0.0.1',8080)); s.close()"
