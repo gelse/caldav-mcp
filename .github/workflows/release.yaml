@@ -60,14 +60,15 @@ jobs:
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           NOTES=$(awk "/^## v${VERSION}/,/^## v[0-9]/" CHANGELOG.md | head -n -1 | tail -n +2)
-          NOTES_JSON=$(echo "$NOTES" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))")
-          echo "body=$NOTES_JSON" >> "$GITHUB_OUTPUT"
+          echo "body<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$NOTES" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
 
-      - name: Create Forgejo release
-        run: |
-          TAG="${{ steps.tag.outputs.tag }}"
-          curl -sS -f -X POST \
-            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/releases" \
-            -H "Authorization: token ${GITHUB_TOKEN}" \
-            -H "Content-Type: application/json" \
-            -d "{\"tag_name\": \"${TAG}\", \"name\": \"Release ${TAG}\", \"body\": ${{ steps.notes.outputs.body }}, \"draft\": false, \"prerelease\": false}"
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: Release ${{ steps.tag.outputs.tag }}
+          body: ${{ steps.notes.outputs.body }}
+          draft: false
+          prerelease: false
