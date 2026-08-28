@@ -12,7 +12,6 @@ through a single Docker container with no database and no external dependencies.
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org)
 [![Docker](https://img.shields.io/badge/docker-ready-2496ED.svg?logo=docker)](Dockerfile)
 [![MCP](https://img.shields.io/badge/MCP-Streamable%20HTTP-8B5CF6.svg)](https://modelcontextprotocol.io)
-[![CI](https://img.shields.io/github/actions/workflow/status/gelse/caldav-mcp/check.yaml?label=tests)](https://github.com/gelse/caldav-mcp/actions)
 [![M8ven Score](https://m8ven.ai/badge/mcp/gelse-caldav-mcp-p1nzjs?v=90357b3ccae3ec55ec82a3b6459ff45c)](https://m8ven.ai/mcp/gelse-caldav-mcp-p1nzjs)
 
 ## What it does
@@ -289,6 +288,17 @@ connection with different `X-Caldav-*` headers.
 
 ## Deployment
 
+### Install from a release
+
+```bash
+# Clone at a specific version
+git clone --branch v0.1.0 https://github.com/gelse/caldav-mcp.git
+cd caldav-mcp
+cp .env.example .env
+# Edit .env with your CalDAV credentials
+docker compose up -d
+```
+
 ### Local / private deployment
 
 The simplest setup — AI client and caldav-mcp on the same machine:
@@ -468,7 +478,7 @@ Pydantic.
 - **No published Docker image** — the CI pipeline builds and tests the image
   but does not publish it. Build locally with `docker build -t caldav-mcp .`
   or use `docker compose up --build`.
-- **No GitHub releases yet** — the project is at version `0.1.0`.
+- **First release** — v0.1.0 is the initial release. See the [release page](https://github.com/gelse/caldav-mcp/releases) for details.
 
 <details>
 <summary><strong>Development</strong></summary>
