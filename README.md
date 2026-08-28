@@ -149,33 +149,32 @@ Full API documentation: [`docs/api.md`](docs/api.md).
 
 ## Quick start
 
-### 1. Clone and configure
+### 1. Pull and run
+
+Pull the latest image:
 
 ```bash
-git clone https://github.com/gelse/caldav-mcp.git
-cd caldav-mcp
-cp .env.example .env
+docker pull ghcr.io/gelse/caldav-mcp:latest
 ```
 
-Edit `.env` with your CalDAV credentials:
-
-```env
-CALDAV_URL=https://cloud.example.com/remote.php/dav/calendars/user/
-CALDAV_USERNAME=user
-CALDAV_PASSWORD=app-password
-CALDAV_MCP_API_KEY=your-secret-token
-TZ=Europe/Vienna
-```
-
-### 2. Start the server
+Then run it directly (replace the environment variables with your values):
 
 ```bash
-docker compose up -d
+docker run -d \
+  -p 8600:8080 \
+  -e CALDAV_URL=https://cloud.example.com/remote.php/dav/calendars/user/ \
+  -e CALDAV_USERNAME=user \
+  -e CALDAV_PASSWORD=app-password \
+  -e CALDAV_MCP_API_KEY=your-secret-token \
+  -e TZ=Europe/Vienna \
+  ghcr.io/gelse/caldav-mcp:latest
 ```
+
+> **Note:** The `CALDAV_URL`, `CALDAV_USERNAME`, and `CALDAV_PASSWORD` environment variables are optional. If omitted, CalDAV credentials must be sent per-request via the `X-Caldav-Url`, `X-Caldav-Username`, and `X-Caldav-Password` HTTP headers — see [MCP client configuration](#mcp-client-configuration).
 
 The server is now running at `http://localhost:8600/mcp` (Streamable HTTP).
 
-### 3. Verify
+### 2. Verify
 
 ```bash
 curl -s http://localhost:8600/mcp \
@@ -288,16 +287,30 @@ connection with different `X-Caldav-*` headers.
 
 ## Deployment
 
-### Install from a release
+### Using the public Docker image
+
+Docker image releases are published to the
+[GitHub Container Registry](https://github.com/gelse/caldav-mcp/pkgs/container/caldav-mcp).
+Pull the latest image:
 
 ```bash
-# Clone at a specific version
-git clone --branch v0.1.0 https://github.com/gelse/caldav-mcp.git
-cd caldav-mcp
-cp .env.example .env
-# Edit .env with your CalDAV credentials
-docker compose up -d
+docker pull ghcr.io/gelse/caldav-mcp:latest
 ```
+
+Then run it directly (replace the environment variables with your values):
+
+```bash
+docker run -d \
+  -p 8600:8080 \
+  -e CALDAV_URL=https://cloud.example.com/remote.php/dav/calendars/user/ \
+  -e CALDAV_USERNAME=user \
+  -e CALDAV_PASSWORD=app-password \
+  -e CALDAV_MCP_API_KEY=your-secret-token \
+  -e TZ=Europe/Vienna \
+  ghcr.io/gelse/caldav-mcp:latest
+```
+
+> **Note:** The CalDAV credentials (`CALDAV_URL`, `CALDAV_USERNAME`, `CALDAV_PASSWORD`) are optional. You can omit them and instead provide credentials per-request via the `X-Caldav-Url`, `X-Caldav-Username`, and `X-Caldav-Password` HTTP headers in your MCP client configuration — see [MCP client configuration](#mcp-client-configuration).
 
 ### Local / private deployment
 
@@ -475,10 +488,11 @@ Pydantic.
 - **Move is non-atomic** — `caldav_move_event` copies the event to the target
   calendar with a new UID, then deletes the original. A failure after copy
   leaves a duplicate (the safer failure mode).
-- **No published Docker image** — the CI pipeline builds and tests the image
-  but does not publish it. Build locally with `docker build -t caldav-mcp .`
-  or use `docker compose up --build`.
-- **First release** — v0.1.0 is the initial release. See the [release page](https://github.com/gelse/caldav-mcp/releases) for details.
+- **Published Docker image** — prebuilt images are available from
+  [GitHub Container Registry](https://github.com/gelse/caldav-mcp/pkgs/container/caldav-mcp).
+  Pull with `docker pull ghcr.io/gelse/caldav-mcp:latest` or build locally
+  with `docker build -t caldav-mcp .` / `docker compose up --build`.
+- **No GitHub releases yet** — the project is at version `0.1.0`.
 
 <details>
 <summary><strong>Development</strong></summary>
