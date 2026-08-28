@@ -170,6 +170,8 @@ docker run -d \
   ghcr.io/gelse/caldav-mcp:latest
 ```
 
+> **Note:** The `CALDAV_URL`, `CALDAV_USERNAME`, and `CALDAV_PASSWORD` environment variables are optional. If omitted, CalDAV credentials must be sent per-request via the `X-Caldav-Url`, `X-Caldav-Username`, and `X-Caldav-Password` HTTP headers — see [MCP client configuration](#mcp-client-configuration).
+
 The server is now running at `http://localhost:8600/mcp` (Streamable HTTP).
 
 ### 2. Verify
@@ -307,6 +309,8 @@ docker run -d \
   -e TZ=Europe/Vienna \
   ghcr.io/gelse/caldav-mcp:latest
 ```
+
+> **Note:** The CalDAV credentials (`CALDAV_URL`, `CALDAV_USERNAME`, `CALDAV_PASSWORD`) are optional. You can omit them and instead provide credentials per-request via the `X-Caldav-Url`, `X-Caldav-Username`, and `X-Caldav-Password` HTTP headers in your MCP client configuration — see [MCP client configuration](#mcp-client-configuration).
 
 ### Local / private deployment
 
