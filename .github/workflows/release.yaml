@@ -4,6 +4,11 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag name (e.g. v0.1.0). Leave empty to auto-detect from GITHUB_REF."
+        required: false
+        type: string
 
 jobs:
   release:
@@ -12,10 +17,35 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine tag name
+        id: tag
+        run: |
+          # Priority: input > GITHUB_REF > latest tag
+          if [ -n "${{ inputs.tag }}" ]; then
+            TAG="${{ inputs.tag }}"
+          elif [ -n "${GITHUB_REF#refs/tags/}" ] && [ "${GITHUB_REF}" != "${GITHUB_REF#refs/tags/}" ]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+          else
+            TAG=$(git describe --tags --abbrev=0 2>/dev/null || true)
+          fi
+          if [ -z "$TAG" ]; then
+            echo "ERROR: Could not determine tag name"
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Detected tag: $TAG"
 
       - name: Extract version from tag
         id: version
-        run: echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          VERSION="${TAG#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag_name=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Extracted version: $VERSION"
 
       - name: Verify version matches pyproject.toml
         run: |
@@ -28,7 +58,6 @@ jobs:
       - name: Generate release notes from CHANGELOG
         id: notes
         run: |
-          # Extract the section for this version from CHANGELOG.md
           VERSION="${{ steps.version.outputs.version }}"
           NOTES=$(awk "/^## v${VERSION}/,/^## v[0-9]/" CHANGELOG.md | head -n -1 | tail -n +2)
           NOTES_JSON=$(echo "$NOTES" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))")
@@ -36,8 +65,9 @@ jobs:
 
       - name: Create Forgejo release
         run: |
+          TAG="${{ steps.tag.outputs.tag }}"
           curl -sS -f -X POST \
             "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/releases" \
             -H "Authorization: token ${GITHUB_TOKEN}" \
             -H "Content-Type: application/json" \
-            -d "{\"tag_name\": \"${{ github.ref_name }}\", \"name\": \"Release ${{ github.ref_name }}\", \"body\": ${{ steps.notes.outputs.body }}, \"draft\": false, \"prerelease\": false}"
+            -d "{\"tag_name\": \"${TAG}\", \"name\": \"Release ${TAG}\", \"body\": ${{ steps.notes.outputs.body }}, \"draft\": false, \"prerelease\": false}"
