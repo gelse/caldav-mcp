@@ -149,33 +149,30 @@ Full API documentation: [`docs/api.md`](docs/api.md).
 
 ## Quick start
 
-### 1. Clone and configure
+### 1. Pull and run
+
+Pull the latest image:
 
 ```bash
-git clone https://github.com/gelse/caldav-mcp.git
-cd caldav-mcp
-cp .env.example .env
+docker pull ghcr.io/gelse/caldav-mcp:latest
 ```
 
-Edit `.env` with your CalDAV credentials:
-
-```env
-CALDAV_URL=https://cloud.example.com/remote.php/dav/calendars/user/
-CALDAV_USERNAME=user
-CALDAV_PASSWORD=app-password
-CALDAV_MCP_API_KEY=your-secret-token
-TZ=Europe/Vienna
-```
-
-### 2. Start the server
+Then run it directly (replace the environment variables with your values):
 
 ```bash
-docker compose up -d
+docker run -d \
+  -p 8600:8080 \
+  -e CALDAV_URL=https://cloud.example.com/remote.php/dav/calendars/user/ \
+  -e CALDAV_USERNAME=user \
+  -e CALDAV_PASSWORD=app-password \
+  -e CALDAV_MCP_API_KEY=your-secret-token \
+  -e TZ=Europe/Vienna \
+  ghcr.io/gelse/caldav-mcp:latest
 ```
 
 The server is now running at `http://localhost:8600/mcp` (Streamable HTTP).
 
-### 3. Verify
+### 2. Verify
 
 ```bash
 curl -s http://localhost:8600/mcp \
