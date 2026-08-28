@@ -7,6 +7,8 @@ on:
 jobs:
   release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -22,7 +24,19 @@ jobs:
             exit 1
           fi
 
-      - name: Create GitHub-style release
-        uses: softprops/action-gh-release@v2
-        with:
-          generate_release_notes: true
+      - name: Generate release notes from CHANGELOG
+        id: notes
+        run: |
+          # Extract the section for this version from CHANGELOG.md
+          VERSION="${{ steps.version.outputs.version }}"
+          NOTES=$(awk "/^## v${VERSION}/,/^## v[0-9]/" CHANGELOG.md | head -n -1 | tail -n +2)
+          NOTES_JSON=$(echo "$NOTES" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))")
+          echo "body=$NOTES_JSON" >> "$GITHUB_OUTPUT"
+
+      - name: Create Forgejo release
+        run: |
+          curl -sS -f -X POST \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/releases" \
+            -H "Authorization: token ${GITHUB_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "{\"tag_name\": \"${{ github.ref_name }}\", \"name\": \"Release ${{ github.ref_name }}\", \"body\": ${{ steps.notes.outputs.body }}, \"draft\": false, \"prerelease\": false}"
