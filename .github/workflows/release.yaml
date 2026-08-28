@@ -59,7 +59,13 @@ jobs:
         id: notes
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          NOTES=$(awk "/^## v${VERSION}/,/^## v[0-9]/" CHANGELOG.md | head -n -1 | tail -n +2)
+          NOTES=$(python3 -c "
+          import re, sys
+          text = open('CHANGELOG.md').read()
+          pattern = rf'^## v{re.escape(VERSION)}.*$(.*?)(?=^## v|\Z)'
+          m = re.search(pattern, text, re.MULTILINE | re.DOTALL)
+          print(m.group(1).strip() if m else '')
+          ")
           echo "body<<EOF" >> "$GITHUB_OUTPUT"
           echo "$NOTES" >> "$GITHUB_OUTPUT"
           echo "EOF" >> "$GITHUB_OUTPUT"
