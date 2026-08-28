@@ -288,15 +288,27 @@ connection with different `X-Caldav-*` headers.
 
 ## Deployment
 
-### Install from a release
+### Using the public Docker image
+
+Docker image releases are published to the
+[GitHub Container Registry](https://github.com/gelse/caldav-mcp/pkgs/container/caldav-mcp).
+Pull the latest image:
 
 ```bash
-# Clone at a specific version
-git clone --branch v0.1.0 https://github.com/gelse/caldav-mcp.git
-cd caldav-mcp
-cp .env.example .env
-# Edit .env with your CalDAV credentials
-docker compose up -d
+docker pull ghcr.io/gelse/caldav-mcp:latest
+```
+
+Then run it directly (replace the environment variables with your values):
+
+```bash
+docker run -d \
+  -p 8600:8080 \
+  -e CALDAV_URL=https://cloud.example.com/remote.php/dav/calendars/user/ \
+  -e CALDAV_USERNAME=user \
+  -e CALDAV_PASSWORD=app-password \
+  -e CALDAV_MCP_API_KEY=your-secret-token \
+  -e TZ=Europe/Vienna \
+  ghcr.io/gelse/caldav-mcp:latest
 ```
 
 ### Local / private deployment
@@ -475,10 +487,11 @@ Pydantic.
 - **Move is non-atomic** — `caldav_move_event` copies the event to the target
   calendar with a new UID, then deletes the original. A failure after copy
   leaves a duplicate (the safer failure mode).
-- **No published Docker image** — the CI pipeline builds and tests the image
-  but does not publish it. Build locally with `docker build -t caldav-mcp .`
-  or use `docker compose up --build`.
-- **First release** — v0.1.0 is the initial release. See the [release page](https://github.com/gelse/caldav-mcp/releases) for details.
+- **Published Docker image** — prebuilt images are available from
+  [GitHub Container Registry](https://github.com/gelse/caldav-mcp/pkgs/container/caldav-mcp).
+  Pull with `docker pull ghcr.io/gelse/caldav-mcp:latest` or build locally
+  with `docker build -t caldav-mcp .` / `docker compose up --build`.
+- **No GitHub releases yet** — the project is at version `0.1.0`.
 
 <details>
 <summary><strong>Development</strong></summary>
