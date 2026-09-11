@@ -475,3 +475,28 @@ def test_move_event_auth_error():
     with mock.patch("caldav_mcp.auth._require_auth", return_value=auth_result):
         result = server.caldav_move_event(uid="uid-1", target_calendar="dst")
     assert result.status == Status.AUTH
+
+
+# ── Section: DAVClient ssl_verify_cert kwarg ──────────────────────────
+
+
+def test_davclient_receives_ssl_verify_cert_kwarg():
+    """DAVClient must be called with ssl_verify_cert, not ssl_verify."""
+    get_cache().clear()
+    fake_cal = FakeCalendar(name="Work", url="https://cal.example/work")
+    recorder = mock.MagicMock(return_value=FakeClient(calendars=[fake_cal]))
+    with (
+        mock.patch("caldav_mcp.tools._resolve_credentials", return_value=("u", "p", "w")),
+        mock.patch("caldav_mcp.tools.DAVClient", recorder),
+        mock.patch("caldav_mcp.tools._get_calendar", return_value=fake_cal),
+    ):
+        result = server.caldav_list_calendars()
+    assert result.status == Status.OK
+    recorder.assert_called_once()
+    call_kwargs = recorder.call_args[1]
+    assert "ssl_verify_cert" in call_kwargs, (
+        f"Expected ssl_verify_cert kwarg, got kwargs: {list(call_kwargs.keys())}"
+    )
+    assert "ssl_verify" not in call_kwargs, (
+        "ssl_verify is the wrong kwarg name; use ssl_verify_cert"
+    )
