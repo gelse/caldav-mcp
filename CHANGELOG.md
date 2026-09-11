@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.1.1 (2026-09-11)
+
+### Fixed
+- DAVClient SSL verify kwarg (`ssl_verify` → `ssl_verify_cert`) so `CALDAV_MCP_CALDAV_VERIFY_SSL=false` works (#8)
+
+### Changed
+- CI: Docker image now tagged `testing` for the testing branch; workflow permissions fix (#9)
+- Docs: improved `caldav_search_events` tool docstring to guide callers
+
 ## v0.1.0 (2026-08-21)
 
 ### Features
