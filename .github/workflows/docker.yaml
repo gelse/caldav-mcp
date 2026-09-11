@@ -34,7 +34,7 @@ jobs:
           images: ghcr.io/gelse/caldav-mcp
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
-            type=raw,value=testing,enable={{branch=='testing'}}
+            type=raw,value=testing,enable=${{ github.ref_name == 'testing' }}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha,prefix=
