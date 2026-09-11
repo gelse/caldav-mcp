@@ -127,7 +127,7 @@ def _resolve_client_and_calendar(
             url=url,
             username=user,
             password=pw,
-            ssl_verify=CALDAV_VERIFY_SSL,
+            ssl_verify_cert=CALDAV_VERIFY_SSL,
         )
         cache.put(url, user, client)
 
