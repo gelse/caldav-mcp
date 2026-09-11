@@ -118,10 +118,10 @@ All config via environment variables, validated at startup with Pydantic:
 ## Git Branch Strategy
 
 - The main branch is `main`.
-- The branch `github` is deprecated and must not be used.
+- The testing branch is `testing`.
 - The `main` branch is protected and cannot be pushed to directly.
-- All development must happen in a separate branch from `main`.
-- After a task is finished, a pull request must be created targeting `main`.
+- All development must happen in a separate branch from `main` and `testing`.
+- After a task is finished, a pull request must be created targeting `testing`.
 
 ## Development
 

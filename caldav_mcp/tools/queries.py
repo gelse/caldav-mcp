@@ -100,7 +100,14 @@ def caldav_get_event_by_uid(client, cal, uid: str, calendar_name: str = ""):
 @mcp.tool(annotations=_RO_ANNOTATIONS)
 @with_caldav_client()
 def caldav_search_events(client, cal, query: str, calendar_name: str = ""):
-    """Search events by text (summary/description/location)."""
+    """Search events by text in summary, description, or location.
+
+    This tool performs a full-text search across all events on the calendar.
+    It does NOT accept date range parameters (start/end).
+
+    For date-range queries, use caldav_get_events instead, which filters
+    events by start and end times.
+    """
     from caldav_mcp.sanitizers import MAX_QUERY_LENGTH, sanitize_text
 
     query = sanitize_text(query, MAX_QUERY_LENGTH)
