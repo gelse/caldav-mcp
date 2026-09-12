@@ -47,7 +47,7 @@ from caldav_mcp.auth import (
 )
 from caldav_mcp.calendar import _get_calendar
 from caldav_mcp.client_cache import get_cache
-from caldav_mcp.config import CALDAV_VERIFY_SSL
+from caldav_mcp.config import CALDAV_VERIFY_SSL, READ_ONLY
 from caldav_mcp.errors import (
     AuthError,
     NotFoundError,
@@ -136,6 +136,22 @@ def _resolve_client_and_calendar(
         cal = _get_calendar(client, kwargs.get("calendar_name") or None)
 
     return client, cal
+
+
+def mcp_tool_if_writable(annotations):
+    """Apply @mcp.tool only when the server is not read-only.
+
+    In read-only mode returns the identity decorator: the function stays
+    defined and importable but is never registered on the MCP instance,
+    so clients never see it in tools/list and cannot call it.
+    """
+
+    def decorator(fn):
+        if READ_ONLY:
+            return fn
+        return mcp.tool(annotations=annotations)(fn)
+
+    return decorator
 
 
 def with_caldav_client(needs_calendar=True):
