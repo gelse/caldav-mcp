@@ -64,5 +64,12 @@ CALDAV_VERIFY_SSL = os.environ.get("CALDAV_MCP_CALDAV_VERIFY_SSL", "true").lower
     "yes",
 )
 
+# Read-only mode: when true, write tools are not registered on the MCP instance.
+READ_ONLY = os.environ.get("CALDAV_MCP_READ_ONLY", "false").lower() in (
+    "true",
+    "1",
+    "yes",
+)
+
 # Log format: "text" or "json"
 LOG_FORMAT = os.environ.get("CALDAV_MCP_LOG_FORMAT", "text")
