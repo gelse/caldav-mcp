@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Features
+- Add `CALDAV_MCP_READ_ONLY` flag to hide write tools at registration time
+
 ## v0.1.1 (2026-09-11)
 
 ### Fixed

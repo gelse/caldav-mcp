@@ -5,7 +5,6 @@ from datetime import timedelta
 
 from icalendar import vRecur
 
-from caldav_mcp import mcp
 from caldav_mcp.calendar import (
     _comp,
     _get_calendar,
@@ -19,7 +18,13 @@ from caldav_mcp.constants import (
 )
 from caldav_mcp.datetime_utils import _now, _parse_dt
 from caldav_mcp.errors import Status, ToolResult
-from caldav_mcp.tools import _REMOTE_ERRORS, _ok, _render_error, with_caldav_client
+from caldav_mcp.tools import (
+    _REMOTE_ERRORS,
+    _ok,
+    _render_error,
+    mcp_tool_if_writable,
+    with_caldav_client,
+)
 
 # Create — writes a new resource; not idempotent (repeated calls create duplicates).
 _CREATE_ANNOTATIONS = {
@@ -44,7 +49,7 @@ _DESTRUCTIVE_ANNOTATIONS = {
 }
 
 
-@mcp.tool(annotations=_CREATE_ANNOTATIONS)
+@mcp_tool_if_writable(annotations=_CREATE_ANNOTATIONS)
 @with_caldav_client()
 def caldav_create_event(
     client,
@@ -127,7 +132,7 @@ def caldav_create_event(
     )
 
 
-@mcp.tool(annotations=_UPDATE_ANNOTATIONS)
+@mcp_tool_if_writable(annotations=_UPDATE_ANNOTATIONS)
 @with_caldav_client()
 def caldav_update_event(
     client,
@@ -174,7 +179,7 @@ def caldav_update_event(
     return _ok(message=f"Event {uid} updated", data={"uid": uid})
 
 
-@mcp.tool(annotations=_DESTRUCTIVE_ANNOTATIONS)
+@mcp_tool_if_writable(annotations=_DESTRUCTIVE_ANNOTATIONS)
 @with_caldav_client()
 def caldav_delete_event(client, cal, uid: str, calendar_name: str = ""):
     """Delete an event by UID."""
@@ -183,7 +188,7 @@ def caldav_delete_event(client, cal, uid: str, calendar_name: str = ""):
     return _ok(message=f"Deleted event {uid}", data={"uid": uid})
 
 
-@mcp.tool(annotations=_DESTRUCTIVE_ANNOTATIONS)
+@mcp_tool_if_writable(annotations=_DESTRUCTIVE_ANNOTATIONS)
 @with_caldav_client(needs_calendar=False)
 def caldav_move_event(
     client,

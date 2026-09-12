@@ -49,7 +49,7 @@ caldav-mcp/
 └── Makefile                     # Build/test shortcuts
 ```
 
-## MCP Tools (14 total)
+## MCP Tools (14 total — 8 in read-only mode)
 
 ### Queries (read-only)
 | Tool | Description |
@@ -105,6 +105,7 @@ All config via environment variables, validated at startup with Pydantic:
 | `CALDAV_MCP_PORT` | HTTP server port (default `8080`) |
 | `CALDAV_MCP_PATH` | Streamable HTTP endpoint path (default `/mcp`) |
 | `TZ` | IANA timezone for today/week boundaries (default UTC) |
+| `CALDAV_MCP_READ_ONLY` | Hide write tools; only query tools are exposed when `true` (default `false`) |
 | `CALDAV_MCP_RATE_LIMIT_MAX_FAILURES` | Max failed auth attempts per IP before rate limiting (default `10`) |
 | `CALDAV_MCP_RATE_LIMIT_WINDOW_SECONDS` | Sliding window for rate limiting in seconds (default `60`) |
 

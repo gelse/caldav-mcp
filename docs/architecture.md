@@ -19,7 +19,7 @@ caldav-mcp is a Model Context Protocol server that provides read/write access to
 | `caldav_mcp/constants.py` | Shared string constants (error messages, defaults) |
 | `caldav_mcp/types.py` | Type aliases (`CalDAVClient`) |
 | `caldav_mcp/event_builder.py` | iCalendar event construction helpers |
-| `caldav_mcp/tools/__init__.py` | Shared `with_caldav_client` decorator, result helpers, re-exports |
+| `caldav_mcp/tools/__init__.py` | Shared `with_caldav_client` decorator, `mcp_tool_if_writable` helper, result helpers, re-exports |
 | `caldav_mcp/tools/queries.py` | Read-only calendar/event query tool handlers |
 | `caldav_mcp/tools/mutations.py` | Event create/update/delete/move tool handlers |
 | `caldav_mcp/tools/attendees.py` | Attendee management tool handlers |
@@ -81,4 +81,4 @@ Tool handlers are split across submodules by responsibility:
 - **`tools/mutations.py`** — write operations (create, update, delete, move)
 - **`tools/attendees.py`** — attendee management (add, remove, list)
 
-The `with_caldav_client` decorator in `tools/__init__.py` handles auth, client creation/caching, and error classification. All `@mcp.tool()` handlers are re-exported from `tools/__init__.py` for backward compatibility.
+The `with_caldav_client` decorator in `tools/__init__.py` handles auth, client creation/caching, and error classification. The `mcp_tool_if_writable` helper conditionally applies `@mcp.tool()` only when `CALDAV_MCP_READ_ONLY` is falsy — in read-only mode write functions stay importable but are never registered on the FastMCP instance. All `@mcp.tool()` handlers are re-exported from `tools/__init__.py` for backward compatibility.

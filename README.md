@@ -423,12 +423,22 @@ All authentication attempts and tool operations are logged. Set
 `CALDAV_MCP_LOG_FORMAT=json` for structured JSON output suitable for log
 aggregation systems.
 
+### Read-only mode
+
+Set `CALDAV_MCP_READ_ONLY=true` to hide all write tools (create, update,
+delete, move, add/remove attendee) at registration time.  In read-only mode
+only 8 read-only tools (the 7 query tools plus `caldav_list_attendees`) are
+visible to MCP clients, making it safe to expose the endpoint without risk of
+data modification.  The write-tool Python functions remain importable for unit
+tests regardless of this flag.
+
 ### Deployment recommendations
 
 - Bind to `127.0.0.1` or a private network unless you need remote access.
 - Restrict access at the network/firewall layer to trusted hosts or a VPN.
 - Never commit CalDAV app passwords to version control.
 - Use a reverse proxy for TLS termination in production.
+- For read-only deployments, set `CALDAV_MCP_READ_ONLY=true`.
 
 ## Configuration reference
 
@@ -443,6 +453,7 @@ Pydantic.
 | `CALDAV_MCP_PORT` | `8080` | Listen port (inside container) |
 | `CALDAV_MCP_PATH` | `/mcp` | Streamable HTTP endpoint path |
 | `CALDAV_MCP_API_KEY` | `""` (disabled) | Shared secret for MCP endpoint auth |
+| `CALDAV_MCP_READ_ONLY` | `false` | Hide write tools; only query tools are exposed when `true` |
 | `TZ` | `""` (UTC) | IANA timezone (e.g. `Europe/Vienna`) for today/week boundaries |
 
 </details>

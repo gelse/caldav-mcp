@@ -4,6 +4,12 @@
 
 All tools are accessible via the Streamable HTTP endpoint at `/mcp`.
 
+> **Read-only mode:** When `CALDAV_MCP_READ_ONLY=true`, only 8 read-only
+> tools (the 7 query tools plus `caldav_list_attendees`) below are registered.  Write tools (`caldav_create_event`,
+> `caldav_update_event`, `caldav_delete_event`, `caldav_move_event`,
+> `caldav_add_attendee`, `caldav_remove_attendee`) are hidden and cannot be
+> called via MCP.
+
 ### caldav_list_calendars
 
 List all calendars available for the configured account.
@@ -49,6 +55,8 @@ Get a specific event by its UID (includes attendees).
 
 ### caldav_create_event
 
+> **Not available in read-only mode.**
+
 Create a new calendar event.
 
 | Parameter | Type | Default | Description |
@@ -66,6 +74,8 @@ Create a new calendar event.
 
 ### caldav_update_event
 
+> **Not available in read-only mode.**
+
 Update an existing event by UID. Only provided fields are updated.
 
 | Parameter | Type | Default | Description |
@@ -80,6 +90,8 @@ Update an existing event by UID. Only provided fields are updated.
 
 ### caldav_add_attendee
 
+> **Not available in read-only mode.**
+
 Add an attendee to an existing event.
 
 | Parameter | Type | Default | Description |
@@ -90,6 +102,8 @@ Add an attendee to an existing event.
 | `role` | str | `"REQ-PARTICIPANT"` | RFC 5545 ROLE |
 
 ### caldav_remove_attendee
+
+> **Not available in read-only mode.**
 
 Remove an attendee from an existing event.
 
@@ -110,6 +124,8 @@ List attendees of an event.
 
 ### caldav_move_event
 
+> **Not available in read-only mode.**
+
 Move an event to another calendar (copy with new UID, delete original).
 
 | Parameter | Type | Default | Description |
@@ -119,6 +135,8 @@ Move an event to another calendar (copy with new UID, delete original).
 | `source_calendar` | str | `""` | Source calendar (defaults to first) |
 
 ### caldav_delete_event
+
+> **Not available in read-only mode.**
 
 Delete an event by UID.
 
