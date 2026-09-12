@@ -71,13 +71,20 @@ flowchart LR
 ### Stateless, per-request architecture
 
 The server maintains **no session state** between requests. CalDAV credentials
-travel per-request in HTTP headers (`X-Caldav-Url`, `X-Caldav-Username`,
-`X-Caldav-Password`), which means:
+are resolved in one of two mutually exclusive modes:
 
-- **Different requests can target different CalDAV accounts** — a single
-  server instance serves multiple users or calendars.
-- **Environment variables provide a simpler single-account fallback** — set
-  `CALDAV_URL`, `CALDAV_USERNAME`, `CALDAV_PASSWORD` and omit the headers.
+- **Environment mode** — set `CALDAV_URL`, `CALDAV_USERNAME`,
+  `CALDAV_PASSWORD` as environment variables. The `X-Caldav-*` request
+  headers are ignored. This is the simplest setup for single-account
+  deployments.
+- **Header mode** — omit the environment variables and send
+  `X-Caldav-Url`, `X-Caldav-Username`, `X-Caldav-Password` on every
+  request. This allows a single server instance to serve multiple
+  CalDAV accounts without restarts or reconfiguration.
+
+No per-field mixing: either all three credentials come from the environment,
+or all three come from the request headers.
+
 - **No database, no persistent account state** — the only in-memory state is
   a thread-safe LRU cache of CalDAV client connections.
 
@@ -86,8 +93,10 @@ Two authentication layers sit between the client and the CalDAV server:
 1. **MCP endpoint auth** — optional API key via `Authorization: Bearer` or
    `X-Api-Key` header. When `CALDAV_MCP_API_KEY` is unset, the endpoint is
    open. Protects the MCP endpoint itself.
-2. **CalDAV credentials** — HTTP headers (preferred) or environment variables
-   (fallback). Authenticate against the actual CalDAV server.
+2. **CalDAV credentials** — resolved from environment variables when
+   `CALDAV_URL` is set (environment mode), or from `X-Caldav-*` request
+   headers when `CALDAV_URL` is unset (header mode). Authenticate against
+   the actual CalDAV server.
 
 ## Supported CalDAV servers
 
@@ -171,7 +180,7 @@ docker run -d \
   ghcr.io/gelse/caldav-mcp:latest
 ```
 
-> **Note:** The `CALDAV_URL`, `CALDAV_USERNAME`, and `CALDAV_PASSWORD` environment variables are optional. If omitted, CalDAV credentials must be sent per-request via the `X-Caldav-Url`, `X-Caldav-Username`, and `X-Caldav-Password` HTTP headers — see [MCP client configuration](#mcp-client-configuration).
+> **Note:** The `CALDAV_URL`, `CALDAV_USERNAME`, and `CALDAV_PASSWORD` environment variables are optional. When set, all three are used and `X-Caldav-*` request headers are ignored (environment mode). When omitted, CalDAV credentials must be sent per-request via the `X-Caldav-Url`, `X-Caldav-Username`, and `X-Caldav-Password` HTTP headers (header mode) — see [MCP client configuration](#mcp-client-configuration).
 
 The server is now running at `http://localhost:8600/mcp` (Streamable HTTP).
 
@@ -322,7 +331,7 @@ docker run -d \
   ghcr.io/gelse/caldav-mcp:latest
 ```
 
-> **Note:** The CalDAV credentials (`CALDAV_URL`, `CALDAV_USERNAME`, `CALDAV_PASSWORD`) are optional. You can omit them and instead provide credentials per-request via the `X-Caldav-Url`, `X-Caldav-Username`, and `X-Caldav-Password` HTTP headers in your MCP client configuration — see [MCP client configuration](#mcp-client-configuration).
+> **Note:** The CalDAV credentials (`CALDAV_URL`, `CALDAV_USERNAME`, `CALDAV_PASSWORD`) are optional. When set, all three are used and `X-Caldav-*` request headers are ignored (environment mode). When omitted, provide credentials per-request via the `X-Caldav-Url`, `X-Caldav-Username`, and `X-Caldav-Password` HTTP headers in your MCP client configuration (header mode) — see [MCP client configuration](#mcp-client-configuration).
 
 ### Local / private deployment
 
@@ -393,12 +402,17 @@ docker compose up -d
 - **When `CALDAV_MCP_API_KEY` is unset, the endpoint is open. Do not expose
   it to the public internet without authentication.**
 
-**CalDAV credentials** are resolved per-request:
+**CalDAV credentials** are resolved in one of two mutually exclusive modes:
 
-1. HTTP headers (preferred): `X-Caldav-Url`, `X-Caldav-Username`,
-   `X-Caldav-Password`
-2. Environment variables (fallback): `CALDAV_URL`, `CALDAV_USERNAME`,
-   `CALDAV_PASSWORD`
+- **Environment mode** (`CALDAV_URL` is set): all credentials come from
+  environment variables (`CALDAV_URL`, `CALDAV_USERNAME`, `CALDAV_PASSWORD`).
+  `X-Caldav-*` request headers are ignored.
+- **Header mode** (`CALDAV_URL` is unset): credentials are read from
+  `X-Caldav-Url`, `X-Caldav-Username`, `X-Caldav-Password` request headers,
+  which are required on every request.
+
+No per-field mixing. `X-Caldav-Username` and `X-Caldav-Password` are
+reserved for a future passthrough mode and are ignored when `CALDAV_URL` is set.
 
 ### TLS
 
@@ -463,9 +477,9 @@ Pydantic.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `CALDAV_URL` | `""` | CalDAV server URL (fallback for `X-Caldav-Url` header) |
-| `CALDAV_USERNAME` | `""` | CalDAV username (fallback for `X-Caldav-Username` header) |
-| `CALDAV_PASSWORD` | `""` | CalDAV password (fallback for `X-Caldav-Password` header) |
+| `CALDAV_URL` | `""` | CalDAV server URL. When set, request headers are ignored and all credentials come from env (environment mode). When unset, `X-Caldav-*` headers are required (header mode). |
+| `CALDAV_USERNAME` | `""` | CalDAV username. Used in environment mode; ignored in header mode. |
+| `CALDAV_PASSWORD` | `""` | CalDAV password. Used in environment mode; ignored in header mode. |
 | `CALDAV_MCP_CALDAV_VERIFY_SSL` | `true` | Verify TLS certs on CalDAV connections. Set `false` only for testing with self-signed certs. |
 
 </details>

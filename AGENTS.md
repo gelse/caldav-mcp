@@ -83,7 +83,7 @@ Two independent layers — both are optional but recommended:
 
 1. **MCP Endpoint Auth** (`CALDAV_MCP_API_KEY` env var): Bearer token or `X-Api-Key` header. Constant-time comparison, per-IP rate limiting. Protects the MCP endpoint itself.
 
-2. **CalDAV Credentials**: HTTP headers (`X-Caldav-Url`, `X-Caldav-Username`, `X-Caldav-Password`) take precedence over env vars (`CALDAV_URL`, `CALDAV_USERNAME`, `CALDAV_PASSWORD`). These authenticate against the actual CalDAV server.
+2. **CalDAV Credentials**: Mode-based resolution — when `CALDAV_URL` is set, all credentials come from the environment (`CALDAV_URL`, `CALDAV_USERNAME`, `CALDAV_PASSWORD`) and `X-Caldav-*` request headers are ignored (environment mode). When `CALDAV_URL` is unset, `X-Caldav-Url`, `X-Caldav-Username`, `X-Caldav-Password` headers are required on every request (header mode). No per-field mixing. `X-Caldav-Username` and `X-Caldav-Password` are reserved for a future passthrough mode and are ignored when `CALDAV_URL` is set.
 
 **Key design**: Server is stateless. Only in-memory state is the LRU client cache and rate limiter.
 
@@ -94,9 +94,9 @@ All config via environment variables, validated at startup with Pydantic:
 | Variable | Description |
 |----------|-------------|
 | `CALDAV_MCP_API_KEY` | API key for MCP endpoint auth (optional) |
-| `CALDAV_URL` | CalDAV server URL (fallback, headers take precedence) |
-| `CALDAV_USERNAME` | CalDAV username (fallback) |
-| `CALDAV_PASSWORD` | CalDAV password (fallback) |
+| `CALDAV_URL` | CalDAV server URL. When set, all credentials come from env and `X-Caldav-*` headers are ignored (environment mode). When unset, `X-Caldav-*` headers are required (header mode). |
+| `CALDAV_USERNAME` | CalDAV username (environment mode). Ignored in header mode. |
+| `CALDAV_PASSWORD` | CalDAV password (environment mode). Ignored in header mode. |
 | `CALDAV_MCP_TLS_CERT` | TLS certificate path (optional) |
 | `CALDAV_MCP_TLS_KEY` | TLS key path (optional) |
 | `CALDAV_MCP_TLS_CA_BUNDLE` | Optional CA bundle for custom certificate authorities |
