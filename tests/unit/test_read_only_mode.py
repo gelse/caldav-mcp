@@ -12,6 +12,9 @@ import os
 import sys
 from unittest import mock
 
+import pytest
+from fastmcp import FastMCP
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -38,39 +41,64 @@ WRITE_TOOL_NAMES = {
 
 ALL_TOOL_NAMES = READ_ONLY_TOOL_NAMES | WRITE_TOOL_NAMES
 
+
+def _reload_config(env_val: str | None) -> bool:
+    """Re-import caldav_mcp.config with a controlled CALDAV_MCP_READ_ONLY env.
+
+    Returns the resulting ``READ_ONLY`` boolean.  Restores sys.modules in a
+    ``finally`` block so no cross-test pollution occurs.
+    """
+    to_remove = [k for k in sys.modules if k.startswith("caldav_mcp")]
+    saved = {k: sys.modules[k] for k in to_remove}
+    for k in to_remove:
+        del sys.modules[k]
+
+    try:
+        if env_val is None:
+            # Ensure the var is truly absent
+            patched = {k: v for k, v in os.environ.items() if k != "CALDAV_MCP_READ_ONLY"}
+        else:
+            patched = {**os.environ, "CALDAV_MCP_READ_ONLY": env_val}
+
+        with mock.patch.dict(os.environ, patched, clear=True):
+            from caldav_mcp import config as _cfg  # noqa: E402
+
+            return _cfg.READ_ONLY
+    finally:
+        # Restore all caldav_mcp modules to the pre-test state
+        for k in [k for k in sys.modules if k.startswith("caldav_mcp")]:
+            del sys.modules[k]
+        sys.modules.update(saved)
+
+
 # ---------------------------------------------------------------------------
-# 1. Parsing test
+# 1. Parsing tests — exercise the real caldav_mcp.config.READ_ONLY
 # ---------------------------------------------------------------------------
 
 
-def test_read_only_parsing_trueish():
-    """Trueish values evaluate to True using the same expression as config.py."""
+@pytest.mark.parametrize(
+    "val",
+    ["true", "True", "TRUE", "1", "yes", "YES"],
+    ids=lambda v: f"val={v!r}",
+)
+def test_read_only_parsing_trueish(val: str):
+    """Truthy env values produce READ_ONLY=True in the real config module."""
+    assert _reload_config(val) is True
 
-    def _parse(val: str) -> bool:
-        return val.lower() in ("true", "1", "yes")
 
-    for val in ("true", "True", "TRUE", "1", "yes", "YES"):
-        assert _parse(val) is True, f"{val!r} should be True"
-
-
-def test_read_only_parsing_falseish():
-    """Falseish values evaluate to False using the same expression as config.py."""
-
-    def _parse(val: str) -> bool:
-        return val.lower() in ("true", "1", "yes")
-
-    for val in ("false", "False", "0", "no", "", "garbage", "nope"):
-        assert _parse(val) is False, f"{val!r} should be False"
+@pytest.mark.parametrize(
+    "val",
+    ["false", "False", "0", "no", "", "garbage", "nope"],
+    ids=lambda v: f"val={v!r}",
+)
+def test_read_only_parsing_falseish(val: str):
+    """Falsy env values produce READ_ONLY=False in the real config module."""
+    assert _reload_config(val) is False
 
 
 def test_read_only_config_default_false():
-    """The default (no env var) resolves to False."""
-    raw = os.environ.get("CALDAV_MCP_READ_ONLY", "false")
-    # When the var is not set, the default "false" parses to False.
-    # When it IS set (e.g. CALDAV_MCP_READ_ONLY=true in CI), the test
-    # still passes because we only verify the default-expression logic.
-    if raw == "false":
-        assert raw.lower() not in ("true", "1", "yes")
+    """When CALDAV_MCP_READ_ONLY is unset, READ_ONLY defaults to False."""
+    assert _reload_config(None) is False
 
 
 # ---------------------------------------------------------------------------
@@ -164,7 +192,11 @@ def test_mcp_tool_if_writable_registers_when_writable():
         """Original."""
         pass
 
-    with mock.patch("caldav_mcp.tools.READ_ONLY", False):
+    throwaway = FastMCP("test-throwaway")
+    with (
+        mock.patch("caldav_mcp.tools.READ_ONLY", False),
+        mock.patch("caldav_mcp.tools.mcp", throwaway),
+    ):
         result = mcp_tool_if_writable(annotations={"readOnlyHint": True})(original_fn)
 
     # FastMCP's @mcp.tool adds a __fastmcp__ attribute
