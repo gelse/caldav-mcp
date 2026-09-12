@@ -6,11 +6,15 @@ CalDAV credentials. Auth headers are simulated by patching
 caldav_mcp.auth._hdrs to return a dict of lowercase header keys.
 """
 
+import os
 from unittest import mock
+
+import pytest
 
 import caldav_mcp.config as config
 import server
 from caldav_mcp import auth
+from caldav_mcp.errors import AuthError
 from server import Status
 
 
@@ -115,3 +119,100 @@ def test_guarded_tool_short_circuits_before_credentials():
             ):
                 result = server.caldav_list_calendars()
     assert result.status == Status.AUTH
+
+
+# ---------------------------------------------------------------------------
+# Precedence resolution tests (Step M1.1 — mode-based credential resolution)
+# ---------------------------------------------------------------------------
+
+_ENV_TRIPLE = {
+    "CALDAV_URL": "https://env.example.com/caldav",
+    "CALDAV_USERNAME": "env-user",
+    "CALDAV_PASSWORD": "env-pass",
+}
+
+_HDR_TRIPLE = {
+    "x-caldav-url": "https://header.example.com/caldav",
+    "x-caldav-username": "header-user",
+    "x-caldav-password": "header-pass",
+}
+
+
+def test_env_mode_headers_ignored():
+    """Env mode: env triple set + different headers → returns env triple."""
+    with mock.patch.dict(os.environ, _ENV_TRIPLE):
+        with mock.patch.object(auth, "_hdrs", return_value=lambda: _HDR_TRIPLE):
+            url, username, password = auth._resolve_credentials()
+    assert url == "https://env.example.com/caldav"
+    assert username == "env-user"
+    assert password == "env-pass"
+
+
+def test_env_mode_garbage_headers_ignored():
+    """Env mode: env triple set + nonsense headers → returns env triple."""
+    garbage = {"x-caldav-url": "not-a-real-url", "x-caldav-username": "x", "x-caldav-password": "y"}
+    with mock.patch.dict(os.environ, _ENV_TRIPLE):
+        with mock.patch.object(auth, "_hdrs", return_value=lambda: garbage):
+            url, username, password = auth._resolve_credentials()
+    assert url == "https://env.example.com/caldav"
+    assert username == "env-user"
+    assert password == "env-pass"
+
+
+def test_env_mode_missing_env_username_password():
+    """Env mode: CALDAV_URL set, CALDAV_USERNAME/CALDAV_PASSWORD unset → raises AuthError."""
+    env = {"CALDAV_URL": "https://env.example.com/caldav"}
+    with mock.patch.dict(os.environ, env, clear=True):
+        with mock.patch.object(auth, "_hdrs", return_value=lambda: _HDR_TRIPLE):
+            with pytest.raises(AuthError, match="CALDAV_USERNAME"):
+                auth._resolve_credentials()
+
+
+def test_env_mode_whitespace_url_counts_as_unset():
+    """Env mode: CALDAV_URL=' ' with valid headers → header mode applies."""
+    env = {"CALDAV_URL": " "}
+    with mock.patch.dict(os.environ, env, clear=True):
+        with mock.patch.object(auth, "_hdrs", return_value=lambda: _HDR_TRIPLE):
+            url, username, password = auth._resolve_credentials()
+    assert url == "https://header.example.com/caldav"
+    assert username == "header-user"
+    assert password == "header-pass"
+
+
+def test_header_mode_all_headers_present():
+    """Header mode: CALDAV_* env vars absent + three headers → returns header triple."""
+    with mock.patch.dict(os.environ, {}, clear=True):
+        with mock.patch.object(auth, "_hdrs", return_value=lambda: _HDR_TRIPLE):
+            url, username, password = auth._resolve_credentials()
+    assert url == "https://header.example.com/caldav"
+    assert username == "header-user"
+    assert password == "header-pass"
+
+
+def test_header_mode_no_headers_no_env():
+    """Header mode: no headers, no env → raises AuthError."""
+    with mock.patch.dict(os.environ, {}, clear=True):
+        with mock.patch.object(auth, "_hdrs", return_value=lambda: {}):
+            with pytest.raises(AuthError):
+                auth._resolve_credentials()
+
+
+def test_header_mode_partial_headers_no_mixing():
+    """Header mode: partial X-Caldav-Url + env CALDAV_USERNAME/PASSWORD → AuthError."""
+    partial = {"x-caldav-url": "https://header.example.com/caldav"}
+    env = {"CALDAV_USERNAME": "env-user", "CALDAV_PASSWORD": "env-pass"}
+    with mock.patch.dict(os.environ, env, clear=True):
+        with mock.patch.object(auth, "_hdrs", return_value=lambda: partial):
+            with pytest.raises(AuthError):
+                auth._resolve_credentials()
+
+
+def test_header_mode_header_url_with_env_username():
+    """Header mode: full header triple + env username/password → returns header triple."""
+    env = {"CALDAV_USERNAME": "env-user", "CALDAV_PASSWORD": "env-pass"}
+    with mock.patch.dict(os.environ, env, clear=True):
+        with mock.patch.object(auth, "_hdrs", return_value=lambda: _HDR_TRIPLE):
+            url, username, password = auth._resolve_credentials()
+    assert url == "https://header.example.com/caldav"
+    assert username == "header-user"
+    assert password == "header-pass"

@@ -7,8 +7,16 @@ Two-layer authentication model
    ``Authorization: Bearer <token>`` or ``X-Api-Key: <token>`` header.
    Authentication is disabled when the env-var is unset.
 2. **CalDAV credentials** — resolved by :func:`_resolve_credentials` for
-   each tool invocation.  HTTP headers take precedence; env-vars
-   ``CALDAV_URL``, ``CALDAV_USERNAME``, ``CALDAV_PASSWORD`` act as fallback.
+   each tool invocation.  Mode-based precedence:
+
+   - **Env mode**: when ``CALDAV_URL`` is set (non-empty after stripping
+     whitespace), all three values (URL, username, password) come from
+     environment variables.  ``X-Caldav-*`` headers are ignored entirely.
+   - **Header mode**: when ``CALDAV_URL`` is unset or empty, all three
+     ``X-Caldav-Url``, ``X-Caldav-Username``, ``X-Caldav-Password`` headers
+     are required per request.
+
+   There is no per-field mixing between modes.
 
 Shared runtime state (API key, HTTP header accessors, typed auth errors, and
 server constants) is referenced through the :mod:`server` namespace so that
@@ -141,26 +149,48 @@ def _require_auth() -> "ToolResult | None":
 
 
 def _resolve_credentials() -> tuple:
-    """Return (url, username, password) from headers or environment.
+    """Return ``(url, username, password)`` using mode-based credential resolution.
 
-    HTTP headers ``X-Caldav-Url``, ``X-Caldav-Username``, ``X-Caldav-Password``
-    are checked first.  If any are missing the corresponding ``CALDAV_URL``,
-    ``CALDAV_USERNAME``, ``CALDAV_PASSWORD`` environment variables are used.
+    **Env mode** — when ``CALDAV_URL`` is set (non-empty after ``.strip()``),
+    all three values come from environment variables.  The ``X-Caldav-Url``,
+    ``X-Caldav-Username``, ``X-Caldav-Password`` headers are ignored entirely.
+    ``X-Caldav-Username`` and ``X-Caldav-Password`` are reserved for a future
+    passthrough mode and are ignored here.
+
+    **Header mode** — when ``CALDAV_URL`` is unset or whitespace-only, all
+    three ``X-Caldav-*`` headers are required per request.
 
     Raises
     ------
     AuthError
-        When any of the three required values is still empty after both
-        lookup layers.
+        * In env mode: when ``CALDAV_URL`` is set but ``CALDAV_USERNAME``
+          or ``CALDAV_PASSWORD`` are missing.
+        * In header mode: when any of the three required headers is missing.
     """
+    env_url = os.environ.get("CALDAV_URL", "").strip()
+    if env_url:
+        # Env mode: headers are ignored entirely (no per-field mixing).
+        # X-Caldav-Username / X-Caldav-Password are reserved for a future
+        # passthrough mode and are ignored here.
+        username = os.environ.get("CALDAV_USERNAME", "")
+        password = os.environ.get("CALDAV_PASSWORD", "")
+        if not username or not password:
+            raise AuthError(
+                "CALDAV_URL is set but CALDAV_USERNAME/CALDAV_PASSWORD are missing. "
+                "Provide all three environment variables, or unset CALDAV_URL and "
+                "use the X-Caldav-Url, X-Caldav-Username, X-Caldav-Password headers."
+            )
+        return env_url, username, password
+
+    # Header mode: all three headers are required per request.
     headers = _hdrs()()
-    url = headers.get(HDR_URL) or os.environ.get("CALDAV_URL", "")
-    username = headers.get(HDR_USERNAME) or os.environ.get("CALDAV_USERNAME", "")
-    password = headers.get(HDR_PASSWORD) or os.environ.get("CALDAV_PASSWORD", "")
+    url = headers.get(HDR_URL, "")
+    username = headers.get(HDR_USERNAME, "")
+    password = headers.get(HDR_PASSWORD, "")
     if not url or not username or not password:
         raise AuthError(
-            "Missing CalDAV credentials. Provide X-Caldav-Url, X-Caldav-Username, "
-            "X-Caldav-Password headers, or set CALDAV_URL/CALDAV_USERNAME/"
-            "CALDAV_PASSWORD environment variables."
+            "Missing CalDAV credentials. Provide the X-Caldav-Url, "
+            "X-Caldav-Username, and X-Caldav-Password headers, or set the "
+            "CALDAV_URL, CALDAV_USERNAME, and CALDAV_PASSWORD environment variables."
         )
     return url, username, password

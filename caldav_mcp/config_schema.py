@@ -64,7 +64,7 @@ class CalDAVConfig(BaseModel):
     @classmethod
     def validate_url(cls, v: str) -> str:
         if not v:
-            return v  # empty is OK — may come from headers at runtime
+            return v  # empty is OK — credentials may come from headers at runtime (header mode)
         from urllib.parse import urlparse
 
         parsed = urlparse(v)
