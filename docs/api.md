@@ -4,8 +4,8 @@
 
 All tools are accessible via the Streamable HTTP endpoint at `/mcp`.
 
-> **Read-only mode:** When `CALDAV_MCP_READ_ONLY=true`, only the 8 query
-> tools below are registered.  Write tools (`caldav_create_event`,
+> **Read-only mode:** When `CALDAV_MCP_READ_ONLY=true`, only 8 read-only
+> tools (the 7 query tools plus `caldav_list_attendees`) below are registered.  Write tools (`caldav_create_event`,
 > `caldav_update_event`, `caldav_delete_event`, `caldav_move_event`,
 > `caldav_add_attendee`, `caldav_remove_attendee`) are hidden and cannot be
 > called via MCP.

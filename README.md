@@ -427,9 +427,10 @@ aggregation systems.
 
 Set `CALDAV_MCP_READ_ONLY=true` to hide all write tools (create, update,
 delete, move, add/remove attendee) at registration time.  In read-only mode
-only the 8 query tools are visible to MCP clients, making it safe to expose
-the endpoint without risk of data modification.  The write-tool Python
-functions remain importable for unit tests regardless of this flag.
+only 8 read-only tools (the 7 query tools plus `caldav_list_attendees`) are
+visible to MCP clients, making it safe to expose the endpoint without risk of
+data modification.  The write-tool Python functions remain importable for unit
+tests regardless of this flag.
 
 ### Deployment recommendations
 
