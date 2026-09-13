@@ -421,6 +421,60 @@ class ConfigStore:
                 f"config not found or other FK violation for user {username!r}"
             ) from exc
 
+    def grant_config(self, username: str, config_name: str) -> None:
+        """Grant a user access to a config.
+
+        Idempotent — if the user already has access, this is a no-op.
+        Runs the post-write passthrough constraint check since a newly linked
+        config may carry passthrough remotes.  Raises ``StoreNotFoundError``
+        if the user or config does not exist, or ``StoreValidationError``
+        if granting would violate the single-passthrough constraint.
+        """
+        _validate_username(username)
+        _validate_name(config_name, "config name")
+        conn = self._get_conn()
+        # Check user exists.
+        if conn.execute("SELECT 1 FROM users WHERE username = ?", (username,)).fetchone() is None:
+            raise StoreNotFoundError(f"user not found: {username!r}")
+        # Check config exists.
+        if conn.execute("SELECT 1 FROM configs WHERE name = ?", (config_name,)).fetchone() is None:
+            raise StoreNotFoundError(f"config not found: {config_name!r}")
+        # Idempotent: already granted?
+        existing = conn.execute(
+            "SELECT 1 FROM user_configs WHERE username = ? AND config_name = ?",
+            (username, config_name),
+        ).fetchone()
+        if existing is not None:
+            return
+        try:
+            conn.execute("BEGIN")
+            conn.execute(
+                "INSERT INTO user_configs (username, config_name) VALUES (?, ?)",
+                (username, config_name),
+            )
+            self._assert_single_passthrough_per_user(conn)
+            conn.execute("COMMIT")
+        except StoreValidationError:
+            conn.execute("ROLLBACK")
+            raise
+
+    def revoke_config(self, username: str, config_name: str) -> None:
+        """Revoke a user's access to a config.
+
+        Idempotent — if the user does not have access, this is a no-op.
+        No re-validation is needed on revoke since removing access can only
+        loosen the passthrough constraint.
+        """
+        _validate_username(username)
+        _validate_name(config_name, "config name")
+        conn = self._get_conn()
+        conn.execute("BEGIN")
+        conn.execute(
+            "DELETE FROM user_configs WHERE username = ? AND config_name = ?",
+            (username, config_name),
+        )
+        conn.execute("COMMIT")
+
     def create_config(self, name: str) -> None:
         """Create a new (empty) config.  Raises ``StoreConflictError`` on duplicate."""
         _validate_name(name, "config name")
