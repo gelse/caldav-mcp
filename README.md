@@ -471,7 +471,8 @@ Pydantic.
 | `CALDAV_MCP_PATH` | `/mcp` | Streamable HTTP endpoint path |
 | `CALDAV_MCP_API_KEY` | `""` (disabled) | Shared secret for MCP endpoint auth |
 | `CALDAV_MCP_READ_ONLY` | `false` | Hide write tools; only query tools are exposed when `true` |
-| `CALDAV_MCP_CONFIG_SECRET` | `""` | Master key source for encrypting CalDAV credentials in the SQLite config store at rest (CLI encrypts, server decrypts; required in pro mode) |
+| `CALDAV_MCP_CONFIG_SECRET` | `""` | Master key for encrypting CalDAV passwords in the SQLite config store at rest (config store / CLI; pro mode planned). CLI encrypts, server decrypts. Changing it invalidates stored ciphertexts. |
+| `CALDAV_MCP_DB_PATH` | `""` | Path to the SQLite configuration store (config store / CLI; pro mode planned). Used by the CLI; `--db` flag takes precedence. |
 | `TZ` | `""` (UTC) | IANA timezone (e.g. `Europe/Vienna`) for today/week boundaries |
 
 </details>
@@ -517,6 +518,18 @@ Pydantic.
 | `CALDAV_MCP_LOG_FORMAT` | `text` | Audit log format: `text` or `json` |
 
 </details>
+
+## Configuration store (CLI)
+
+caldav-mcp includes a SQLite-backed configuration store and a CLI tool
+(`caldav-mcp-config`) for managing users, configs, remotes, and calendars.
+This is a building block for multi-user deployments — see
+[`docs/cli.md`](docs/cli.md) for the full CLI reference.
+
+> **Note:** The server currently **does not read the config store**.
+> In simple mode, CalDAV credentials are resolved from environment
+> variables or per-request headers. Pro mode, where the server loads
+> configuration from the store, is planned for M4.
 
 ## Compatibility / limitations
 

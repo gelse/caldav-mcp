@@ -103,3 +103,4 @@ docs-check:
 	@test -f docs/architecture.md && echo "✓ docs/architecture.md exists" || (echo "✗ docs/architecture.md missing" && exit 1)
 	@test -f docs/api.md && echo "✓ docs/api.md exists" || (echo "✗ docs/api.md missing" && exit 1)
 	@test -f docs/contributing.md && echo "✓ docs/contributing.md exists" || (echo "✗ docs/contributing.md missing" && exit 1)
+	@test -f docs/cli.md && echo "✓ docs/cli.md exists" || (echo "✗ docs/cli.md missing" && exit 1)

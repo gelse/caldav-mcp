@@ -97,3 +97,9 @@ Two modes mirror the M1 rule:
 - **Header mode** — `CALDAV_URL` is unset or whitespace-only: an implicit `passthrough` remote is used and all three `X-Caldav-*` headers are required per request.
 
 The `Config` / `Remote` / `Calendar` dataclasses intentionally match the conceptual model described in [`ideas/db-config-enhancement.md`](../ideas/db-config-enhancement.md) so that a future DB loader (M4) can produce the same structure without downstream changes. In simple (env) mode the `calendars` tuple is typically empty — calendar discovery stays live against the CalDAV server.
+
+### Config store and CLI (M3 building block)
+
+[`caldav_mcp/config_store.py`](../caldav_mcp/config_store.py) implements a SQLite-backed store with a schema-versioned table layout. [`caldav_mcp/config_cli.py`](../caldav_mcp/config_cli.py) provides the `caldav-mcp-config` CLI for managing users, configs, remotes, and calendars. [`caldav_mcp/config_crypto.py`](../caldav_mcp/config_crypto.py) handles Fernet encryption of CalDAV passwords at rest (keyed by `CALDAV_MCP_CONFIG_SECRET`).
+
+Store records map 1:1 onto the M2 `Config` / `Remote` / `Calendar` dataclasses so that the planned M4 DB loader can produce the same singleton shape without downstream changes. The CLI encrypts passwords on write; the server will decrypt on read in pro mode (planned M4). Today the server does not read the store — see [`docs/cli.md`](cli.md) for the full CLI reference.
