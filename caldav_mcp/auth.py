@@ -2,10 +2,19 @@
 
 Two-layer authentication model
 ------------------------------
-1. **MCP endpoint auth** — enforced by :func:`_require_auth`.  A shared
-   ``CALDAV_MCP_API_KEY`` token is validated against the incoming request's
-   ``Authorization: Bearer <token>`` or ``X-Api-Key: <token>`` header.
-   Authentication is disabled when the env-var is unset.
+1. **MCP endpoint auth** — enforced by :func:`_require_auth`.  Two modes:
+
+   - **Simple mode** (env/header) — a shared ``CALDAV_MCP_API_KEY`` token is
+     validated against the incoming request's ``Authorization: Bearer <token>``
+     or ``X-Api-Key: <token>`` header.  Authentication is disabled when the
+     env-var is unset.
+   - **Pro mode** (``"db"``) — DB users sourced from the SQLite store replace
+     the env API key.  ``CALDAV_MCP_API_KEY`` is ignored even if set.  The
+     username arrives in ``X-Mcp-Username``; the key arrives via the existing
+     Bearer / ``X-Api-Key`` transport.  Verification is constant-time against
+     the stored PBKDF2 hash.  Per-IP rate limiting and audit logging are
+     unchanged.
+
 2. **CalDAV credentials** — resolved by :func:`_resolve_credentials` for
    each tool invocation via the read-only config singleton
    (:mod:`caldav_mcp.app_config`), which encodes the M1 mode rule.
@@ -34,26 +43,31 @@ from caldav_mcp.audit import log_auth_attempt
 from caldav_mcp.config import (
     HDR_API_KEY,
     HDR_AUTHORIZATION,
+    HDR_MCP_USERNAME,
     HDR_PASSWORD,
     HDR_URL,
     HDR_USERNAME,
 )
+from caldav_mcp.db_loader import ProUser
 from caldav_mcp.errors import AuthError, Status, ToolResult
+from caldav_mcp.key_hash import verify_api_key
 from caldav_mcp.rate_limit import auth_rate_limiter
 
 # ---------------------------------------------------------------------------
-# Pro-user snapshot (populated at startup in db mode — Step M4.1 stub)
+# Pro-user snapshot (populated at startup in db mode — M4.1 / M4.2)
 # ---------------------------------------------------------------------------
-_pro_users: tuple = ()  # populated by configure_pro_users; tuple[ProUser, ...]
+_pro_users: tuple[ProUser, ...] = ()
+
+_FAILURE_MSG = "unauthorized - missing or invalid credentials"
 
 
-def configure_pro_users(users: tuple) -> None:
+def configure_pro_users(users: tuple[ProUser, ...]) -> None:
     """Install the pro-user snapshot from the DB loader (called once at startup)."""
     global _pro_users  # noqa: PLW0603
     _pro_users = users
 
 
-def get_pro_users() -> tuple:
+def get_pro_users() -> tuple[ProUser, ...]:
     """Return the installed pro-user snapshot."""
     return _pro_users
 
@@ -117,8 +131,128 @@ def _const_eq(a: str, b: str) -> bool:
     return result == 0
 
 
+def _is_pro_mode() -> bool:
+    """Return ``True`` when the server is running in pro (DB) mode."""
+    app_mod = _app()
+    return bool(app_mod.get_app_config().mode == "db")
+
+
+def _extract_key(headers: dict[str, str]) -> tuple[str, str]:
+    """Extract the provided API key from Bearer or X-Api-Key headers.
+
+    Returns ``(provided_key, auth_method)`` where *auth_method* is one of
+    ``"bearer"``, ``"api-key"``, or ``"none"``.
+    """
+    provided = ""
+    auth_method = "none"
+    auth = headers.get(HDR_AUTHORIZATION, "")
+    if auth:
+        scheme, _, token = auth.partition(" ")
+        if scheme.lower() == "bearer":
+            provided = token.strip()
+            auth_method = "bearer"
+    if not provided:
+        key = headers.get(HDR_API_KEY, "").strip()
+        if key:
+            provided = key
+            auth_method = "api-key"
+    return provided, auth_method
+
+
 def _require_auth() -> "ToolResult | None":
-    """Enforce the shared API token, if configured.
+    """Enforce MCP endpoint authentication.
+
+    In **pro mode** (``mode == "db"``) authentication uses DB users: the
+    username arrives in ``X-Mcp-Username`` and the key via Bearer /
+    ``X-Api-Key``.  ``CALDAV_MCP_API_KEY`` is ignored.
+
+    In **simple mode** a shared ``CALDAV_MCP_API_KEY`` token is validated.
+    Authentication is disabled (returns ``None``) when the env-var is unset.
+
+    Returns ``None`` on success, or a structured auth :class:`ToolResult` to
+    return to the client when authentication fails.  Integrates rate limiting
+    (per client IP) and structured audit logging.
+    """
+    if _is_pro_mode():
+        return _require_auth_db_user()
+    return _require_auth_simple()
+
+
+def _require_auth_db_user() -> "ToolResult | None":
+    """Pro-mode endpoint auth: username + key verified against DB users."""
+    users = get_pro_users()
+    if not users:
+        return ToolResult.failure(
+            Status.AUTH,
+            "pro mode enabled but no users configured in the config store",
+        )
+
+    client_ip = _get_client_ip()
+
+    # Rate-limit check BEFORE credential work (same semantics as simple mode).
+    if auth_rate_limiter.is_rate_limited(client_ip):
+        backoff = auth_rate_limiter.get_backoff_seconds(client_ip)
+        log_auth_attempt(
+            success=False,
+            client_ip=client_ip,
+            method="none",
+            reason=f"rate limited (backoff {backoff}s)",
+        )
+        return ToolResult.failure(
+            Status.AUTH,
+            f"rate limited - too many failed attempts, retry in {backoff}s",
+        )
+
+    headers = _hdrs()()
+    username = headers.get(HDR_MCP_USERNAME, "").strip()
+    provided, auth_method = _extract_key(headers)
+
+    # Fail fast: missing/empty key avoids the ~50 ms PBKDF2 work.
+    if not provided:
+        auth_rate_limiter.record_failure(client_ip)
+        log_auth_attempt(
+            success=False,
+            client_ip=client_ip,
+            method="db-user",
+            reason="invalid key",
+        )
+        return ToolResult.failure(Status.AUTH, _FAILURE_MSG)
+
+    # Linear case-sensitive scan for the username.
+    matched: ProUser | None = None
+    for user in users:
+        if user.username == username:
+            matched = user
+            break
+
+    if matched is None:
+        auth_rate_limiter.record_failure(client_ip)
+        log_auth_attempt(
+            success=False,
+            client_ip=client_ip,
+            method="db-user",
+            reason="unknown user",
+        )
+        return ToolResult.failure(Status.AUTH, _FAILURE_MSG)
+
+    # Constant-time PBKDF2 verification.
+    if not verify_api_key(provided, matched.key_hash):
+        auth_rate_limiter.record_failure(client_ip)
+        log_auth_attempt(
+            success=False,
+            client_ip=client_ip,
+            method="db-user",
+            reason="invalid key",
+        )
+        return ToolResult.failure(Status.AUTH, _FAILURE_MSG)
+
+    auth_rate_limiter.reset(client_ip)
+    log_auth_attempt(success=True, client_ip=client_ip, method="db-user")
+    return None
+
+
+def _require_auth_simple() -> "ToolResult | None":
+    """Simple-mode endpoint auth: shared CALDAV_MCP_API_KEY token.
 
     Returns ``None`` on success, or a structured auth :class:`ToolResult` to
     return to the client when authentication fails. Authentication is disabled
@@ -147,19 +281,7 @@ def _require_auth() -> "ToolResult | None":
         )
 
     headers = _hdrs()()
-    provided = ""
-    auth_method = "none"
-    auth = headers.get(HDR_AUTHORIZATION, "")
-    if auth:
-        scheme, _, token = auth.partition(" ")
-        if scheme.lower() == "bearer":
-            provided = token.strip()
-            auth_method = "bearer"
-    if not provided:
-        key = headers.get(HDR_API_KEY, "").strip()
-        if key:
-            provided = key
-            auth_method = "api-key"
+    provided, auth_method = _extract_key(headers)
 
     if provided and _const_eq(provided, expected):
         auth_rate_limiter.reset(client_ip)
@@ -173,7 +295,7 @@ def _require_auth() -> "ToolResult | None":
         method=auth_method,
         reason="invalid token",
     )
-    return ToolResult.failure(Status.AUTH, "unauthorized - missing or invalid API token")
+    return ToolResult.failure(Status.AUTH, _FAILURE_MSG)
 
 
 def _resolve_credentials() -> tuple:

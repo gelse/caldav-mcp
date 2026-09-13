@@ -30,6 +30,7 @@ HDR_USERNAME = "x-caldav-username"
 HDR_PASSWORD = "x-caldav-password"
 HDR_AUTHORIZATION = "authorization"
 HDR_API_KEY = "x-api-key"
+HDR_MCP_USERNAME = "x-mcp-username"
 
 
 def _server_tz() -> tzinfo:
