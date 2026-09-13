@@ -41,6 +41,28 @@ from caldav_mcp.config import (
 from caldav_mcp.errors import AuthError, Status, ToolResult
 from caldav_mcp.rate_limit import auth_rate_limiter
 
+# ---------------------------------------------------------------------------
+# Pro-user snapshot (populated at startup in db mode — Step M4.1 stub)
+# ---------------------------------------------------------------------------
+_pro_users: tuple = ()  # populated by configure_pro_users; tuple[ProUser, ...]
+
+
+def configure_pro_users(users: tuple) -> None:
+    """Install the pro-user snapshot from the DB loader (called once at startup)."""
+    global _pro_users  # noqa: PLW0603
+    _pro_users = users
+
+
+def get_pro_users() -> tuple:
+    """Return the installed pro-user snapshot."""
+    return _pro_users
+
+
+def reset_pro_users() -> None:
+    """Clear the pro-user snapshot (for testing)."""
+    global _pro_users  # noqa: PLW0603
+    _pro_users = ()
+
 
 def _cfg():
     """Lazy accessor for ``caldav_mcp.config`` – avoids circular top-level import."""

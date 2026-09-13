@@ -248,18 +248,38 @@ def main() -> None:
 
     load_server_config()  # raises on invalid port/tz/path
 
-    # Eager, fail-fast singleton install.
-    configure_app_config(load_app_config())
-    app = get_app_config()
-    if (
-        app.mode == "env"
-        and app.config is not None
-        and (not app.config.remotes[0].username or not app.config.remotes[0].password)
-    ):
-        log.warning(
-            "CALDAV_URL is set but CALDAV_USERNAME/CALDAV_PASSWORD are missing — "
-            "direct-mode requests will fail until all three env vars are provided"
+    # --- Pro-mode branch (DB_CONFIG_ENABLED) ---
+    from caldav_mcp.config import DB_CONFIG_ENABLED  # noqa: E402
+
+    if DB_CONFIG_ENABLED:
+        from caldav_mcp.auth import configure_pro_users
+        from caldav_mcp.db_loader import load_pro_state
+
+        pro = load_pro_state(
+            os.environ["CALDAV_MCP_DB_PATH"].strip(),
+            os.environ["CALDAV_MCP_CONFIG_SECRET"].strip(),
         )
+        configure_app_config(pro.app_config)
+        configure_pro_users(pro.users)
+        if API_KEY:
+            log.warning(
+                "CALDAV_MCP_API_KEY is set but ignored in pro mode (DB user auth is active)"
+            )
+        if os.environ.get("CALDAV_URL", "").strip():
+            log.warning("CALDAV_URL/USERNAME/PASSWORD are ignored in pro mode")
+    else:
+        # --- Simple-mode wiring (env / header) — unchanged from M2.2 ---
+        configure_app_config(load_app_config())
+        app = get_app_config()
+        if (
+            app.mode == "env"
+            and app.config is not None
+            and (not app.config.remotes[0].username or not app.config.remotes[0].password)
+        ):
+            log.warning(
+                "CALDAV_URL is set but CALDAV_USERNAME/CALDAV_PASSWORD are missing — "
+                "direct-mode requests will fail until all three env vars are provided"
+            )
 
     ssl_cfg = _build_ssl_config()
     run_kwargs: dict[str, Any] = {

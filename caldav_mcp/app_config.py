@@ -79,8 +79,9 @@ class Config:
 class AppConfig:
     """Top-level application config produced by :func:`load_app_config`."""
 
-    mode: Literal["env", "header"]
-    config: Config | None  # None in header mode
+    mode: Literal["env", "header", "db"]
+    config: Config | None  # None in header mode and in "db" mode
+    configs: tuple[Config, ...] = ()  # populated only in "db" mode
 
 
 # ---------------------------------------------------------------------------
@@ -144,10 +145,51 @@ def implicit_remote(app: AppConfig) -> Remote:
 
     In env mode this is the direct remote carrying the env credentials; in
     header mode it is :data:`PASSTHROUGH_REMOTE`.
+
+    Raises ``ValueError`` in "db" mode — db mode has no single implicit
+    remote; callers must use :func:`find_remote` instead.
     """
+    if app.mode == "db":
+        raise ValueError(
+            "implicit_remote() is not available in db mode; "
+            "use find_remote() to address remotes explicitly"
+        )
     if app.mode == "env" and app.config is not None:
         return app.config.remotes[0]
     return PASSTHROUGH_REMOTE
+
+
+# ---------------------------------------------------------------------------
+# Lookup helpers (linear scans — fine for startup-sized data)
+# ---------------------------------------------------------------------------
+
+
+def find_config(app: AppConfig, config_name: str) -> Config | None:
+    """Return the named config from *app*, or ``None`` if not found."""
+    if app.config is not None and app.config.name == config_name:
+        return app.config
+    for cfg in app.configs:
+        if cfg.name == config_name:
+            return cfg
+    return None
+
+
+def find_remote(config: Config, remote_name: str) -> Remote | None:
+    """Return the named remote from *config*, or ``None`` if not found."""
+    for remote in config.remotes:
+        if remote.name == remote_name:
+            return remote
+    return None
+
+
+def find_calendar(config: Config, remote_name: str, calendar_name: str) -> Calendar | None:
+    """Return the named calendar within *remote_name*, or ``None`` if not found."""
+    for rname, calendars in config.calendars:
+        if rname == remote_name:
+            for cal in calendars:
+                if cal.name == calendar_name:
+                    return cal
+    return None
 
 
 # ---------------------------------------------------------------------------

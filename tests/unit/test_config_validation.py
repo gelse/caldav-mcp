@@ -3,7 +3,7 @@
 import pytest
 from pydantic import ValidationError
 
-from caldav_mcp.config_schema import CalDAVConfig, ServerConfig
+from caldav_mcp.config_schema import CalDAVConfig, ServerConfig, load_server_config
 
 
 class TestServerConfig:
@@ -63,3 +63,60 @@ class TestCalDAVConfig:
     def test_no_hostname_invalid(self):
         with pytest.raises(ValidationError, match="hostname"):
             CalDAVConfig(url="https://")
+
+
+class TestDBConfigEnabled:
+    """Tests for DB_CONFIG_ENABLED startup validation (Step M4.1)."""
+
+    def test_missing_db_path_raises_value_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DB_CONFIG_ENABLED", "true")
+        monkeypatch.delenv("CALDAV_MCP_DB_PATH", raising=False)
+        monkeypatch.setenv("CALDAV_MCP_CONFIG_SECRET", "some-secret")
+        with pytest.raises(ValueError, match="CALDAV_MCP_DB_PATH"):
+            load_server_config()
+
+    def test_missing_config_secret_raises_value_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("DB_CONFIG_ENABLED", "true")
+        monkeypatch.setenv("CALDAV_MCP_DB_PATH", "/tmp/store.db")
+        monkeypatch.delenv("CALDAV_MCP_CONFIG_SECRET", raising=False)
+        with pytest.raises(ValueError, match="CALDAV_MCP_CONFIG_SECRET"):
+            load_server_config()
+
+    def test_both_missing_raises_naming_both(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DB_CONFIG_ENABLED", "true")
+        monkeypatch.delenv("CALDAV_MCP_DB_PATH", raising=False)
+        monkeypatch.delenv("CALDAV_MCP_CONFIG_SECRET", raising=False)
+        with pytest.raises(ValueError, match="CALDAV_MCP_DB_PATH.*CALDAV_MCP_CONFIG_SECRET"):
+            load_server_config()
+
+    def test_empty_db_path_after_strip_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DB_CONFIG_ENABLED", "true")
+        monkeypatch.setenv("CALDAV_MCP_DB_PATH", "   ")
+        monkeypatch.setenv("CALDAV_MCP_CONFIG_SECRET", "some-secret")
+        with pytest.raises(ValueError, match="CALDAV_MCP_DB_PATH"):
+            load_server_config()
+
+    def test_both_set_loads(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DB_CONFIG_ENABLED", "true")
+        monkeypatch.setenv("CALDAV_MCP_DB_PATH", "/tmp/store.db")
+        monkeypatch.setenv("CALDAV_MCP_CONFIG_SECRET", "some-secret")
+        # Should not raise
+        cfg = load_server_config()
+        assert cfg.port == 8080
+
+    def test_disabled_no_requirement(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("DB_CONFIG_ENABLED", raising=False)
+        monkeypatch.delenv("CALDAV_MCP_DB_PATH", raising=False)
+        monkeypatch.delenv("CALDAV_MCP_CONFIG_SECRET", raising=False)
+        # Should not raise — DB vars not required when DB_CONFIG_ENABLED is false
+        cfg = load_server_config()
+        assert cfg.port == 8080
+
+    def test_false_value_no_requirement(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DB_CONFIG_ENABLED", "false")
+        monkeypatch.delenv("CALDAV_MCP_DB_PATH", raising=False)
+        monkeypatch.delenv("CALDAV_MCP_CONFIG_SECRET", raising=False)
+        cfg = load_server_config()
+        assert cfg.port == 8080

@@ -71,5 +71,12 @@ READ_ONLY = os.environ.get("CALDAV_MCP_READ_ONLY", "false").lower() in (
     "yes",
 )
 
+# Pro mode: load config and users from the SQLite store at startup.
+DB_CONFIG_ENABLED = os.environ.get("DB_CONFIG_ENABLED", "false").lower() in (
+    "true",
+    "1",
+    "yes",
+)
+
 # Log format: "text" or "json"
 LOG_FORMAT = os.environ.get("CALDAV_MCP_LOG_FORMAT", "text")

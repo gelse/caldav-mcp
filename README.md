@@ -473,6 +473,7 @@ Pydantic.
 | `CALDAV_MCP_READ_ONLY` | `false` | Hide write tools; only query tools are exposed when `true` |
 | `CALDAV_MCP_CONFIG_SECRET` | `""` | Master key for encrypting CalDAV passwords in the SQLite config store at rest (config store / CLI; pro mode planned). CLI encrypts, server decrypts. Changing it invalidates stored ciphertexts. |
 | `CALDAV_MCP_DB_PATH` | `""` | Path to the SQLite configuration store (config store / CLI; pro mode planned). Used by the CLI; `--db` flag takes precedence. |
+| `DB_CONFIG_ENABLED` | `false` | Enable pro mode: load config and users from the SQLite store; requires CALDAV_MCP_DB_PATH and CALDAV_MCP_CONFIG_SECRET; CALDAV_MCP_API_KEY is ignored. |
 | `TZ` | `""` (UTC) | IANA timezone (e.g. `Europe/Vienna`) for today/week boundaries |
 
 </details>
