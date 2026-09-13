@@ -71,12 +71,14 @@ flowchart LR
 ### Stateless, per-request architecture
 
 The server maintains **no session state** between requests. CalDAV credentials
-are resolved in one of two mutually exclusive modes:
+are resolved through a read-only config singleton loaded once at startup.
+The singleton encodes two mutually exclusive modes:
 
 - **Environment mode** — set `CALDAV_URL`, `CALDAV_USERNAME`,
   `CALDAV_PASSWORD` as environment variables. The `X-Caldav-*` request
-  headers are ignored. This is the simplest setup for single-account
-  deployments.
+  headers are ignored entirely. `X-Caldav-Username` and `X-Caldav-Password`
+  are reserved for a future passthrough mode. This is the simplest setup
+  for single-account deployments.
 - **Header mode** — omit the environment variables and send
   `X-Caldav-Url`, `X-Caldav-Username`, `X-Caldav-Password` on every
   request. This allows a single server instance to serve multiple
@@ -93,10 +95,11 @@ Two authentication layers sit between the client and the CalDAV server:
 1. **MCP endpoint auth** — optional API key via `Authorization: Bearer` or
    `X-Api-Key` header. When `CALDAV_MCP_API_KEY` is unset, the endpoint is
    open. Protects the MCP endpoint itself.
-2. **CalDAV credentials** — resolved from environment variables when
-   `CALDAV_URL` is set (environment mode), or from `X-Caldav-*` request
-   headers when `CALDAV_URL` is unset (header mode). Authenticate against
-   the actual CalDAV server.
+2. **CalDAV credentials** — resolved from the read-only config singleton
+   (`caldav_mcp.app_config`). In environment mode (`CALDAV_URL` set),
+   credentials come from environment variables and request headers are
+   ignored. In header mode (`CALDAV_URL` unset), the three `X-Caldav-*`
+   headers are required per request. Config changes take effect on restart.
 
 ## Supported CalDAV servers
 

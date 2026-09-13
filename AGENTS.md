@@ -26,6 +26,7 @@ caldav-mcp/
 │   │   ├── queries.py           #   Read-only tools
 │   │   ├── mutations.py         #   Write tools
 │   │   └── attendees.py         #   Attendee management
+│   ├── app_config.py            # Read-only startup config singleton — single source of connection/calendar data
 │   ├── auth.py                  # Two-layer auth (API key + CalDAV creds)
 │   ├── calendar.py              # CalDAV calendar selection & serialization
 │   ├── client_cache.py          # Thread-safe LRU cache for DAVClient
@@ -84,6 +85,8 @@ Two independent layers — both are optional but recommended:
 1. **MCP Endpoint Auth** (`CALDAV_MCP_API_KEY` env var): Bearer token or `X-Api-Key` header. Constant-time comparison, per-IP rate limiting. Protects the MCP endpoint itself.
 
 2. **CalDAV Credentials**: Mode-based resolution — when `CALDAV_URL` is set, all credentials come from the environment (`CALDAV_URL`, `CALDAV_USERNAME`, `CALDAV_PASSWORD`) and `X-Caldav-*` request headers are ignored (environment mode). When `CALDAV_URL` is unset, `X-Caldav-Url`, `X-Caldav-Username`, `X-Caldav-Password` headers are required on every request (header mode). No per-field mixing. `X-Caldav-Username` and `X-Caldav-Password` are reserved for a future passthrough mode and are ignored when `CALDAV_URL` is set.
+
+Credentials and remote identity flow through a read-only config singleton (`caldav_mcp.app_config`) loaded once at startup — config changes require a restart. In environment mode (`CALDAV_URL` set) the singleton carries a built-in direct remote and `X-Caldav-*` request headers are ignored; `X-Caldav-Username` and `X-Caldav-Password` are reserved for a future passthrough mode. In header mode (`CALDAV_URL` unset) all three `X-Caldav-*` headers are required per request.
 
 **Key design**: Server is stateless. Only in-memory state is the LRU client cache and rate limiter.
 

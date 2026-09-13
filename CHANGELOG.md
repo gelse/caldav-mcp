@@ -4,9 +4,14 @@
 
 ### Features
 - Add `CALDAV_MCP_READ_ONLY` flag to hide write tools at registration time
+- Read-only config singleton (`caldav_mcp.app_config`) as the single source of CalDAV connection data; simple mode backed by an env-derived built-in config
 
 ### Changed
 - **Breaking:** CalDAV credential resolution is now mode-based. If `CALDAV_URL` is set, all credentials come from the environment and `X-Caldav-Url`/`X-Caldav-Username`/`X-Caldav-Password` request headers are ignored (previously headers took precedence per-field). If `CALDAV_URL` is unset, the three `X-Caldav-*` headers are required per request. No per-field mixing. `X-Caldav-Username`/`X-Caldav-Password` are reserved for a future passthrough mode.
+- CalDAV credentials are resolved via the config singleton; behavior is unchanged from the mode-based rule described above
+
+### Note
+- Config changes take effect on restart
 
 ## v0.1.1 (2026-09-11)
 
