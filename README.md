@@ -471,6 +471,7 @@ Pydantic.
 | `CALDAV_MCP_PATH` | `/mcp` | Streamable HTTP endpoint path |
 | `CALDAV_MCP_API_KEY` | `""` (disabled) | Shared secret for MCP endpoint auth |
 | `CALDAV_MCP_READ_ONLY` | `false` | Hide write tools; only query tools are exposed when `true` |
+| `CALDAV_MCP_CONFIG_SECRET` | `""` | Master key source for encrypting CalDAV credentials in the SQLite config store at rest (CLI encrypts, server decrypts; required in pro mode) |
 | `TZ` | `""` (UTC) | IANA timezone (e.g. `Europe/Vienna`) for today/week boundaries |
 
 </details>
