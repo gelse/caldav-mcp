@@ -7,7 +7,8 @@ Two-layer authentication model
    ``Authorization: Bearer <token>`` or ``X-Api-Key: <token>`` header.
    Authentication is disabled when the env-var is unset.
 2. **CalDAV credentials** — resolved by :func:`_resolve_credentials` for
-   each tool invocation.  Mode-based precedence:
+   each tool invocation via the read-only config singleton
+   (:mod:`caldav_mcp.app_config`), which encodes the M1 mode rule.
 
    - **Env mode**: when ``CALDAV_URL`` is set (non-empty after stripping
      whitespace), all three values (URL, username, password) come from
@@ -26,8 +27,6 @@ Values that tests may mock (``API_KEY``, ``get_http_headers``) are read
 lazily via :func:`_cfg` / :func:`_hdrs` so that ``mock.patch.object(server, …)``
 patches are observed at call time.
 """
-
-import os
 
 from caldav_mcp.audit import log_auth_attempt
 
@@ -55,6 +54,13 @@ def _hdrs():
     from fastmcp.server.dependencies import get_http_headers  # noqa: E402
 
     return get_http_headers
+
+
+def _app():
+    """Lazy accessor for :mod:`caldav_mcp.app_config` – avoids circular import."""
+    from caldav_mcp import app_config  # noqa: E402  (deferred)
+
+    return app_config
 
 
 def _get_client_ip() -> str:
@@ -151,38 +157,45 @@ def _require_auth() -> "ToolResult | None":
 def _resolve_credentials() -> tuple:
     """Return ``(url, username, password)`` using mode-based credential resolution.
 
-    **Env mode** — when ``CALDAV_URL`` is set (non-empty after ``.strip()``),
-    all three values come from environment variables.  The ``X-Caldav-Url``,
-    ``X-Caldav-Username``, ``X-Caldav-Password`` headers are ignored entirely.
-    ``X-Caldav-Username`` and ``X-Caldav-Password`` are reserved for a future
-    passthrough mode and are ignored here.
+    Credentials are resolved from the read-only config singleton
+    (:func:`~caldav_mcp.app_config.get_app_config`), which encodes the M1
+    mode rule: direct remotes carry env-derived credentials; the passthrough
+    remote (header mode) carries per-request header credentials.
 
-    **Header mode** — when ``CALDAV_URL`` is unset or whitespace-only, all
+    **Env mode** (direct remote) — ``CALDAV_URL`` is set, so the singleton
+    carries env-derived URL / username / password.  ``X-Caldav-Url``,
+    ``X-Caldav-Username``, ``X-Caldav-Password`` headers are ignored
+    entirely.  ``X-Caldav-Username`` and ``X-Caldav-Password`` are reserved
+    for a future passthrough mode and are ignored here.
+
+    **Header mode** (passthrough remote) — ``CALDAV_URL`` is unset, so all
     three ``X-Caldav-*`` headers are required per request.
 
     Raises
     ------
     AuthError
-        * In env mode: when ``CALDAV_URL`` is set but ``CALDAV_USERNAME``
-          or ``CALDAV_PASSWORD`` are missing.
+        * In env mode: when the direct remote's username or password is
+          empty (``CALDAV_URL`` is set but ``CALDAV_USERNAME`` /
+          ``CALDAV_PASSWORD`` are missing).
         * In header mode: when any of the three required headers is missing.
     """
-    env_url = os.environ.get("CALDAV_URL", "").strip()
-    if env_url:
-        # Env mode: headers are ignored entirely (no per-field mixing).
-        # X-Caldav-Username / X-Caldav-Password are reserved for a future
-        # passthrough mode and are ignored here.
-        username = os.environ.get("CALDAV_USERNAME", "")
-        password = os.environ.get("CALDAV_PASSWORD", "")
+    app = _app().get_app_config()
+    remote = _app().implicit_remote(app)
+
+    if remote.auth_mode == "direct":
+        # Env mode: headers are ignored entirely (M1 rule). X-Caldav-Username /
+        # X-Caldav-Password are reserved for a future passthrough mode.
+        username = remote.username
+        password = remote.password
         if not username or not password:
             raise AuthError(
                 "CALDAV_URL is set but CALDAV_USERNAME/CALDAV_PASSWORD are missing. "
                 "Provide all three environment variables, or unset CALDAV_URL and "
                 "use the X-Caldav-Url, X-Caldav-Username, X-Caldav-Password headers."
             )
-        return env_url, username, password
+        return remote.url, username, password
 
-    # Header mode: all three headers are required per request.
+    # Passthrough (header mode): all three headers are required per request.
     headers = _hdrs()()
     url = headers.get(HDR_URL, "")
     username = headers.get(HDR_USERNAME, "")

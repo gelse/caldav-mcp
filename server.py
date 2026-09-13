@@ -236,14 +236,29 @@ def main() -> None:
     ``CALDAV_MCP_TLS_KEY`` environment variables are set.
     """
     # Validate configuration eagerly — fail fast with a clear message.
-    from caldav_mcp.config_schema import load_caldav_config, load_server_config
+    from caldav_mcp.app_config import (
+        configure_app_config,
+        get_app_config,
+        load_app_config,
+    )
+    from caldav_mcp.config_schema import load_server_config  # noqa: E402
+
+    # NOTE: load_caldav_config() in config_schema.py is superseded by the
+    # singleton loader above — kept as-is this milestone (M2.2).
 
     load_server_config()  # raises on invalid port/tz/path
-    caldav_cfg = load_caldav_config()
-    if caldav_cfg.url and not caldav_cfg.username:
+
+    # Eager, fail-fast singleton install.
+    configure_app_config(load_app_config())
+    app = get_app_config()
+    if (
+        app.mode == "env"
+        and app.config is not None
+        and (not app.config.remotes[0].username or not app.config.remotes[0].password)
+    ):
         log.warning(
-            "CALDAV_URL is set but CALDAV_USERNAME is missing — "
-            "credentials must come from HTTP headers at runtime"
+            "CALDAV_URL is set but CALDAV_USERNAME/CALDAV_PASSWORD are missing — "
+            "direct-mode requests will fail until all three env vars are provided"
         )
 
     ssl_cfg = _build_ssl_config()

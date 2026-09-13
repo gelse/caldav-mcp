@@ -158,24 +158,60 @@ def implicit_remote(app: AppConfig) -> Remote:
 # load_app_config) is harmless because the result is idempotent, and this
 # matches the existing client_cache singleton precedent.
 
-_app_config: AppConfig | None = None
+_UNSET = object()  # sentinel: no explicit configure_app_config() call yet
+
+_app_config: AppConfig | None = _UNSET  # type: ignore[assignment]
+_explicit: bool = False  # True when set via configure_app_config()
+_env_cache_key: str | None = None  # tracks env snapshot for cache invalidation
+
+
+def _env_cache_key_value() -> str:
+    """Return a snapshot string of the env vars that determine the config mode."""
+    return "|".join(
+        (
+            os.environ.get("CALDAV_URL", ""),
+            os.environ.get("CALDAV_USERNAME", ""),
+            os.environ.get("CALDAV_PASSWORD", ""),
+        )
+    )
 
 
 def configure_app_config(app: AppConfig) -> None:
-    """Install the process-wide config (called once at startup / in tests)."""
-    global _app_config  # noqa: PLW0603
+    """Install an explicit process-wide config (called once at startup / in tests).
+
+    When set, :func:`get_app_config` returns this value instead of
+    re-reading the environment.  Call :func:`reset_app_config` to clear
+    the override and restore lazy env loading.
+    """
+    global _app_config, _explicit, _env_cache_key  # noqa: PLW0603
     _app_config = app
+    _explicit = True
+    _env_cache_key = None
 
 
 def get_app_config() -> AppConfig:
-    """Return the installed config, loading it from env on first access."""
-    global _app_config  # noqa: PLW0603
-    if _app_config is None:
-        _app_config = load_app_config()
+    """Return the active config.
+
+    If an explicit config was installed via :func:`configure_app_config`,
+    return it.  Otherwise lazily load from ``os.environ``, caching the
+    result until the relevant env vars change (so that
+    ``mock.patch.dict(os.environ, …)`` in tests takes effect while
+    repeated calls within the same env context return the same object).
+    """
+    global _app_config, _explicit, _env_cache_key  # noqa: PLW0603
+    if _explicit and _app_config is not None:
+        return _app_config
+    key = _env_cache_key_value()
+    if _app_config is not None and _env_cache_key == key:
+        return _app_config  # cache hit — env unchanged
+    _app_config = load_app_config()
+    _env_cache_key = key
     return _app_config
 
 
 def reset_app_config() -> None:
-    """Drop the installed config (lazy re-load on next access; for tests)."""
-    global _app_config  # noqa: PLW0603
+    """Drop any explicit config; next :func:`get_app_config` re-reads env."""
+    global _app_config, _explicit, _env_cache_key  # noqa: PLW0603
     _app_config = None
+    _explicit = False
+    _env_cache_key = None

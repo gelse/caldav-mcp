@@ -115,6 +115,11 @@ def _resolve_client_and_calendar(
 ) -> tuple[Any, Any]:
     """Resolve auth, create/cache DAVClient, optionally resolve calendar.
 
+    Credentials and remote identity come from the read-only config singleton
+    (``caldav_mcp.app_config``); direct remotes carry env credentials, the
+    passthrough remote carries per-request header credentials.  Calendar
+    selection stays live against the CalDAV server via ``_get_calendar``.
+
     Returns (client, cal_or_None).
     Raises are caught by the caller's try/except.
     """
