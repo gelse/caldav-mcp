@@ -134,7 +134,7 @@ def _resolve_client_and_calendar(
     needs_calendar: bool,
     kwargs: dict,
     pro_user=None,
-) -> tuple[Any, Any]:
+) -> tuple[Any, Any] | ToolResult:
     """Resolve auth, create/cache DAVClient, optionally resolve calendar.
 
     **Simple mode** (``pro_user is None``): Credentials and remote identity
@@ -148,7 +148,10 @@ def _resolve_client_and_calendar(
     is built from the stored remote URL and credentials (direct) or from
     per-request ``X-Caldav-*`` headers (passthrough).
 
-    Returns (client, cal_or_None).
+    Returns (client, cal_or_None) on success, or a :class:`ToolResult`
+    failure when a calendar path is required but missing (read tools in
+    pro mode without an explicit dotted path).
+
     Raises are caught by the caller's try/except.
     """
     from caldav_mcp.app_config import get_app_config
@@ -157,37 +160,17 @@ def _resolve_client_and_calendar(
         app = get_app_config()
         if app.mode == "db":
             path = kwargs.get("calendar_name") or kwargs.get("source_calendar") or ""
-            resolution = resolve_addressed_calendar(app, pro_user, path)
-            remote = resolution.remote
 
-            if remote.auth_mode == "passthrough":
-                from fastmcp.server.dependencies import get_http_headers
-
-                headers = get_http_headers()
-                url = headers.get(HDR_URL, "")
-                hdr_username = headers.get(HDR_USERNAME, "")
-                pw = headers.get(HDR_PASSWORD, "")
-                if not url or not hdr_username or not pw:
-                    raise AuthError(
-                        "Missing CalDAV credentials. Provide the X-Caldav-Url, "
-                        "X-Caldav-Username, and X-Caldav-Password headers."
-                    )
-                user = hdr_username
-            else:
-                url = remote.url
-                user = remote.username
-                pw = remote.password
-
-            cache = get_cache()
-            client = cache.get(url, user)
-            if client is None:
-                client = DAVClient(  # type: ignore[operator]
-                    url=url,
-                    username=user,
-                    password=pw,
-                    ssl_verify_cert=CALDAV_VERIFY_SSL,
+            if not path:
+                return ToolResult.failure(
+                    Status.ERROR,
+                    "In pro mode this tool requires an explicit calendar "
+                    "identifier in 'config.remote.calendar' format. "
+                    "Please provide the full dotted path.",
                 )
-                cache.put(url, user, client)
+
+            resolution = resolve_addressed_calendar(app, pro_user, path)
+            client = _resolve_pro_remote_client(resolution.remote)
 
             cal = None
             if needs_calendar:
@@ -238,6 +221,11 @@ def _resolve_pro_remote_client(remote):
     For passthrough remotes, per-request ``X-Caldav-*`` headers supply the
     credentials.  The client is cached by ``(url, username)`` like any other.
 
+    For passthrough clients, a keyed hash of the password is stored alongside
+    the cached client and verified on each cache hit to prevent cross-user
+    escalation (a different caller supplying the same username but a wrong
+    password will not reuse another caller's cached client).
+
     Raises :class:`~caldav_mcp.errors.AuthError` when a passthrough remote
     is missing the required header credentials.
     """
@@ -254,6 +242,19 @@ def _resolve_pro_remote_client(remote):
                 "X-Caldav-Username, and X-Caldav-Password headers."
             )
         username = hdr_username
+        # Verify password on cache hit to prevent cross-user escalation.
+        cache = get_cache()
+        client = cache.get_with_password(url, username, pw)
+        if client is not None:
+            return client
+        client = DAVClient(  # type: ignore[operator]
+            url=url,
+            username=username,
+            password=pw,
+            ssl_verify_cert=CALDAV_VERIFY_SSL,
+        )
+        cache.put(url, username, client, password=pw)
+        return client
     else:
         url = remote.url
         username = remote.username
@@ -329,11 +330,16 @@ def with_caldav_client(needs_calendar=True, write=False):
                         )
 
                 # ── Client and calendar resolution ─────────────────────
-                client, cal = _resolve_client_and_calendar(
+                resolved = _resolve_client_and_calendar(
                     needs_calendar,
                     kwargs,
                     pro_user=pro_user,
                 )
+                # Early return when _resolve_client_and_calendar yields a
+                # ToolResult (e.g. missing dotted path in pro-mode reads).
+                if isinstance(resolved, ToolResult):
+                    return resolved
+                client, cal = resolved
 
                 # ── Handler invocation ─────────────────────────────────
                 # Pass pro_user to handlers that accept it (e.g.

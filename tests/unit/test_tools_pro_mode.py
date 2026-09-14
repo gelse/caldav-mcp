@@ -715,3 +715,180 @@ class TestSimpleModeWriteTools:
                 source_calendar="src",
             )
         assert result.status == Status.OK, f"Got: {result.status} — {result.message}"
+
+
+# ===================================================================
+# 15. Parameterless read tools → clear typed ERROR in pro mode
+# ===================================================================
+
+
+class TestParameterlessReadProMode:
+    """Read tools without a calendar arg yield a clear typed ERROR.
+
+    Before the fix, ``_resolve_client_and_calendar`` passed ``""`` to
+    ``resolve_addressed_calendar`` which raised a raw ValueError.
+    Now a ``ToolResult.failure(Status.ERROR, ...)`` is returned directly.
+    """
+
+    def test_list_calendars_no_calendar_param(self):
+        """caldav_list_calendars (needs_calendar=False) → typed ERROR."""
+        with mock.patch(
+            "caldav_mcp.tools._authenticate",
+            return_value=_auth_return(_USER_WORK),
+        ):
+            result = tools_mod.caldav_list_calendars()
+        assert result.status == Status.ERROR
+        assert "config.remote.calendar" in result.message.lower()
+
+    def test_get_events_no_calendar_param(self):
+        """caldav_get_events with default empty calendar_name → typed ERROR."""
+        with mock.patch(
+            "caldav_mcp.tools._authenticate",
+            return_value=_auth_return(_USER_WORK),
+        ):
+            result = tools_mod.caldav_get_events()
+        assert result.status == Status.ERROR
+        assert "config.remote.calendar" in result.message.lower()
+
+    def test_get_event_by_uid_no_calendar_param(self):
+        """caldav_get_event_by_uid with default empty calendar_name → typed ERROR."""
+        with mock.patch(
+            "caldav_mcp.tools._authenticate",
+            return_value=_auth_return(_USER_WORK),
+        ):
+            result = tools_mod.caldav_get_event_by_uid(uid="ev-1")
+        assert result.status == Status.ERROR
+        assert "config.remote.calendar" in result.message.lower()
+
+    def test_search_events_no_calendar_param(self):
+        """caldav_search_events with default empty calendar_name → typed ERROR."""
+        with mock.patch(
+            "caldav_mcp.tools._authenticate",
+            return_value=_auth_return(_USER_WORK),
+        ):
+            result = tools_mod.caldav_search_events(query="test")
+        assert result.status == Status.ERROR
+        assert "config.remote.calendar" in result.message.lower()
+
+    def test_get_events_dotted_path_resolves(self):
+        """caldav_get_events with a valid dotted path still resolves correctly."""
+        fake_cal = _fake_cal(name="team")
+        fake_client = _fake_client(cal=fake_cal)
+
+        with (
+            mock.patch("caldav_mcp.tools._authenticate", return_value=_auth_return(_USER_WORK)),
+            mock.patch("caldav_mcp.tools.DAVClient", return_value=fake_client),
+            mock.patch("caldav_mcp.tools._get_calendar", return_value=fake_cal),
+        ):
+            result = tools_mod.caldav_get_events(calendar_name="work.nc.team")
+        # Handler executes successfully (EMPTY is expected since no real events).
+        assert result.status in (Status.OK, Status.EMPTY)
+
+
+# ===================================================================
+# 16. Passthrough cache password verification
+# ===================================================================
+
+
+class TestPassthroughCachePasswordVerification:
+    """Passthrough cache-hit must verify the password to prevent escalation.
+
+    A second request with the same username but a DIFFERENT password must
+    NOT reuse the cached client (it should be treated as a miss and a
+    rebuild attempted).  A second request with the correct password DOES
+    reuse the cached client.
+    """
+
+    def test_wrong_password_does_not_reuse_cached_client(self):
+        """Wrong password on second request → cache miss, rebuild attempted."""
+        fake_cal = _fake_cal(name="mycal")
+        fake_client = _fake_client(cal=fake_cal)
+        # Two distinct client instances to prove a rebuild happened.
+        fake_client_2 = _fake_client(cal=fake_cal)
+        call_count = 0
+
+        def make_client(**kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return fake_client
+            return fake_client_2
+
+        headers_1 = {
+            "x-caldav-url": "https://pt.example/dav",
+            "x-caldav-username": "alice",
+            "x-caldav-password": "correct-password",
+        }
+        headers_2 = {
+            "x-caldav-url": "https://pt.example/dav",
+            "x-caldav-username": "alice",
+            "x-caldav-password": "WRONG-password",
+        }
+
+        with (
+            mock.patch("caldav_mcp.tools._authenticate", return_value=_auth_return(_USER_BOTH)),
+            mock.patch("caldav_mcp.tools.DAVClient", side_effect=make_client),
+            mock.patch("caldav_mcp.tools._get_calendar", return_value=fake_cal),
+            mock.patch(
+                "fastmcp.server.dependencies.get_http_headers",
+                return_value=headers_1,
+            ),
+        ):
+            result_1 = tools_mod.caldav_create_event(
+                summary="E1",
+                start="2026-01-15T10:00",
+                calendar_name="personal.passthrough.mycal",
+            )
+        assert result_1.status == Status.OK
+
+        # Second call with the WRONG password for the same username.
+        with (
+            mock.patch("caldav_mcp.tools._authenticate", return_value=_auth_return(_USER_BOTH)),
+            mock.patch("caldav_mcp.tools.DAVClient", side_effect=make_client),
+            mock.patch("caldav_mcp.tools._get_calendar", return_value=fake_cal),
+            mock.patch(
+                "fastmcp.server.dependencies.get_http_headers",
+                return_value=headers_2,
+            ),
+        ):
+            tools_mod.caldav_create_event(
+                summary="E2",
+                start="2026-01-15T11:00",
+                calendar_name="personal.passthrough.mycal",
+            )
+        # A new DAVClient was built — proof the cache did NOT return the
+        # wrong-password entry.
+        assert call_count == 2, "Expected two DAVClient constructions (no cache reuse)"
+
+    def test_correct_password_reuses_cached_client(self):
+        """Correct password on second request → cache hit, single client."""
+        fake_cal = _fake_cal(name="mycal")
+        fake_client = _fake_client(cal=fake_cal)
+        recorder = mock.MagicMock(return_value=fake_client)
+        headers = {
+            "x-caldav-url": "https://pt.example/dav",
+            "x-caldav-username": "alice",
+            "x-caldav-password": "correct-password",
+        }
+
+        with (
+            mock.patch("caldav_mcp.tools._authenticate", return_value=_auth_return(_USER_BOTH)),
+            mock.patch("caldav_mcp.tools.DAVClient", recorder),
+            mock.patch("caldav_mcp.tools._get_calendar", return_value=fake_cal),
+            mock.patch(
+                "fastmcp.server.dependencies.get_http_headers",
+                return_value=headers,
+            ),
+        ):
+            tools_mod.caldav_create_event(
+                summary="E1",
+                start="2026-01-15T10:00",
+                calendar_name="personal.passthrough.mycal",
+            )
+            tools_mod.caldav_create_event(
+                summary="E2",
+                start="2026-01-15T11:00",
+                calendar_name="personal.passthrough.mycal",
+            )
+        # Only one DAVClient built — cache reuse with matching password.
+        assert recorder.call_count == 1
