@@ -400,28 +400,29 @@ def test_list_attendees_auth_error():
 # ── Section 9: caldav_get_today_events ───────────────────────────────────
 
 
-def test_get_today_events_delegates():
-    mock_result = server.ToolResult.success(message="ok", data=[{"uid": "x"}])
-    events_patch = mock.patch(
-        "caldav_mcp.tools.queries.caldav_get_events",
-        return_value=mock_result,
-    )
+def test_get_today_events_calls_core():
+    """caldav_get_today_events calls _get_events_core with correct time window."""
+    fake_client = mock.MagicMock()
     with (
-        mock.patch("caldav_mcp.tools.queries._require_auth", return_value=None),
-        events_patch as mock_get,
+        mock.patch("caldav_mcp.tools._require_auth", return_value=None),
+        mock.patch(
+            "caldav_mcp.tools._resolve_client_and_calendar",
+            return_value=(fake_client, object()),
+        ),
+        mock.patch("caldav_mcp.tools.queries._get_events_core", return_value=[]) as mock_core,
+        mock.patch("caldav_mcp.tools.queries._get_calendar", return_value=object()),
     ):
         result = server.caldav_get_today_events(calendar_name="Work")
-    assert result is mock_result
-    mock_get.assert_called_once()
-    call_kwargs = mock_get.call_args[1]
-    assert call_kwargs["calendar_name"] == "Work"
+    assert result.status == server.Status.EMPTY
+    mock_core.assert_called_once()
+    call_kwargs = mock_core.call_args[1]
     assert "start" in call_kwargs
     assert "end" in call_kwargs
 
 
 def test_get_today_events_auth_error():
     auth_result = server.ToolResult.failure(Status.AUTH, "unauthorized")
-    with mock.patch("caldav_mcp.tools.queries._require_auth", return_value=auth_result):
+    with mock.patch("caldav_mcp.tools._require_auth", return_value=auth_result):
         result = server.caldav_get_today_events()
     assert result.status == Status.AUTH
 
@@ -429,28 +430,29 @@ def test_get_today_events_auth_error():
 # ── Section 10: caldav_get_week_events ───────────────────────────────────
 
 
-def test_get_week_events_delegates():
-    mock_result = server.ToolResult.success(message="ok", data=[{"uid": "x"}])
-    events_patch = mock.patch(
-        "caldav_mcp.tools.queries.caldav_get_events",
-        return_value=mock_result,
-    )
+def test_get_week_events_calls_core():
+    """caldav_get_week_events calls _get_events_core with correct time window."""
+    fake_client = mock.MagicMock()
     with (
-        mock.patch("caldav_mcp.tools.queries._require_auth", return_value=None),
-        events_patch as mock_get,
+        mock.patch("caldav_mcp.tools._require_auth", return_value=None),
+        mock.patch(
+            "caldav_mcp.tools._resolve_client_and_calendar",
+            return_value=(fake_client, object()),
+        ),
+        mock.patch("caldav_mcp.tools.queries._get_events_core", return_value=[]) as mock_core,
+        mock.patch("caldav_mcp.tools.queries._get_calendar", return_value=object()),
     ):
         result = server.caldav_get_week_events(calendar_name="Work")
-    assert result is mock_result
-    mock_get.assert_called_once()
-    call_kwargs = mock_get.call_args[1]
-    assert call_kwargs["calendar_name"] == "Work"
+    assert result.status == server.Status.EMPTY
+    mock_core.assert_called_once()
+    call_kwargs = mock_core.call_args[1]
     assert "start" in call_kwargs
     assert "end" in call_kwargs
 
 
 def test_get_week_events_auth_error():
     auth_result = server.ToolResult.failure(Status.AUTH, "unauthorized")
-    with mock.patch("caldav_mcp.tools.queries._require_auth", return_value=auth_result):
+    with mock.patch("caldav_mcp.tools._require_auth", return_value=auth_result):
         result = server.caldav_get_week_events()
     assert result.status == Status.AUTH
 

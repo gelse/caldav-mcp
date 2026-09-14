@@ -137,6 +137,28 @@ def _is_pro_mode() -> bool:
     return bool(app_mod.get_app_config().mode == "db")
 
 
+def _capture_credential_headers() -> dict[str, str]:
+    """Capture the current request's ``X-Caldav-*`` headers.
+
+    Returns a copy of the three CalDAV credential headers from the current
+    HTTP request context.  Used by the fan-out executor to propagate
+    passthrough credentials across sequential remote calls.
+
+    In direct-credential (env) mode the returned dict is empty — passthrough
+    scopes that rely on these headers will raise :class:`AuthError` at
+    resolution time.
+    """
+    try:
+        headers = _hdrs()()
+        return {
+            HDR_URL: headers.get(HDR_URL, ""),
+            HDR_USERNAME: headers.get(HDR_USERNAME, ""),
+            HDR_PASSWORD: headers.get(HDR_PASSWORD, ""),
+        }
+    except Exception:
+        return {}
+
+
 def _extract_key(headers: dict[str, str]) -> tuple[str, str]:
     """Extract the provided API key from Bearer or X-Api-Key headers.
 
