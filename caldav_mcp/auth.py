@@ -159,8 +159,52 @@ def _extract_key(headers: dict[str, str]) -> tuple[str, str]:
     return provided, auth_method
 
 
+def _authenticate() -> "tuple[ProUser | None, ToolResult | None]":
+    """Resolve the authenticated user and verify credentials.
+
+    Returns ``(pro_user, None)`` on success — *pro_user* is the
+    :class:`~caldav_mcp.db_loader.ProUser` in pro mode, ``None`` in simple
+    mode.  Returns ``(None, failure_result)`` on failure.
+
+    This is the single entry-point for all endpoint authentication; callers
+    use it to obtain both the auth gate and the resolved pro user (which is
+    then forwarded to the addressing layer for access filtering).
+
+    In pro mode the matched :class:`ProUser` is returned on success — this
+    is the key difference from :func:`_require_auth` which discards it.
+    """
+    if _is_pro_mode():
+        err = _require_auth_db_user()
+        if err is not None:
+            return None, err
+        # Auth succeeded — locate the matched user for forwarding.
+        matched = _find_matched_pro_user()
+        return matched, None
+    return None, _require_auth_simple()
+
+
+def _find_matched_pro_user() -> "ProUser | None":
+    """Return the :class:`ProUser` that matches the current request headers.
+
+    This performs the same header scan as :func:`_require_auth_db_user` but
+    returns the matched user instead of a ``ToolResult``.  Called only when
+    auth has already succeeded — no rate-limit or audit side-effects.
+    """
+    headers = _hdrs()()
+    username = headers.get(HDR_MCP_USERNAME, "").strip()
+    for user in get_pro_users():
+        if user.username == username:
+            return user
+    return None  # pragma: no cover (auth already succeeded)
+
+
 def _require_auth() -> "ToolResult | None":
-    """Enforce MCP endpoint authentication.
+    """Enforce MCP endpoint authentication (thin wrapper).
+
+    Delegates to :func:`_authenticate` and returns only the failure half.
+    Retained for backward compatibility — existing tests that patch
+    ``caldav_mcp.tools._require_auth`` or ``caldav_mcp.auth._require_auth``
+    continue to work.
 
     In **pro mode** (``mode == "db"``) authentication uses DB users: the
     username arrives in ``X-Mcp-Username`` and the key via Bearer /
@@ -173,9 +217,8 @@ def _require_auth() -> "ToolResult | None":
     return to the client when authentication fails.  Integrates rate limiting
     (per client IP) and structured audit logging.
     """
-    if _is_pro_mode():
-        return _require_auth_db_user()
-    return _require_auth_simple()
+    _pro_user, err = _authenticate()
+    return err
 
 
 def _require_auth_db_user() -> "ToolResult | None":

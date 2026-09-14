@@ -37,20 +37,31 @@ from caldav import DAVClient  # type: ignore[attr-defined]
 from caldav.lib.error import DAVError
 
 from caldav_mcp import mcp as mcp  # noqa: F401  (re-exported)
+from caldav_mcp.addressing import parse_dotted_path, resolve_addressed_calendar
 from caldav_mcp.audit import log_error, log_operation
+from caldav_mcp.auth import (
+    _authenticate,
+    _resolve_credentials,
+)
 from caldav_mcp.auth import (
     _get_client_ip as _get_client_ip,  # noqa: F401  (re-exported)
 )
 from caldav_mcp.auth import (
-    _require_auth,
-    _resolve_credentials,
+    _require_auth as _require_auth,  # noqa: F811  (re-exported for test patching)
 )
 from caldav_mcp.calendar import _get_calendar
 from caldav_mcp.client_cache import get_cache
-from caldav_mcp.config import CALDAV_VERIFY_SSL, READ_ONLY
+from caldav_mcp.config import (
+    CALDAV_VERIFY_SSL,
+    HDR_PASSWORD,
+    HDR_URL,
+    HDR_USERNAME,
+    READ_ONLY,
+)
 from caldav_mcp.errors import (
     AuthError,
     NotFoundError,
+    Status,
     ToolResult,
     _render_error,
 )
@@ -83,15 +94,24 @@ def _empty(message: str = "") -> ToolResult:
     return ToolResult.empty(message=message)
 
 
+# Parameters always injected by the decorator — excluded from the public signature.
+_ALWAYS_INJECTED = frozenset({"client", "pro_user", "write"})
+
+
 def _filter_public_params(
     sig: inspect.Signature,
     needs_calendar: bool,
 ) -> list[inspect.Parameter]:
-    """Return the parameters visible to FastMCP (excluding injected client/cal)."""
+    """Return the parameters visible to FastMCP (excluding injected ones).
+
+    ``client`` and ``pro_user`` are always excluded.  ``cal`` is excluded
+    only when *needs_calendar* is ``True`` (the decorator injects it).
+    ``write`` is a decorator-only flag, never exposed.
+    """
     return [
         p
         for name, p in sig.parameters.items()
-        if name != "client" and (not needs_calendar or name != "cal")
+        if name not in _ALWAYS_INJECTED and (not needs_calendar or name != "cal")
     ]
 
 
@@ -103,7 +123,7 @@ def _build_wrapper_annotations(
     annotations = {
         k: v
         for k, v in fn.__annotations__.items()
-        if k != "return" and k != "client" and (not needs_calendar or k != "cal")
+        if k != "return" and k not in _ALWAYS_INJECTED and (not needs_calendar or k != "cal")
     }
     annotations["return"] = fn.__annotations__.get("return")
     return annotations
@@ -112,17 +132,68 @@ def _build_wrapper_annotations(
 def _resolve_client_and_calendar(
     needs_calendar: bool,
     kwargs: dict,
+    pro_user=None,
 ) -> tuple[Any, Any]:
     """Resolve auth, create/cache DAVClient, optionally resolve calendar.
 
-    Credentials and remote identity come from the read-only config singleton
-    (``caldav_mcp.app_config``); direct remotes carry env credentials, the
-    passthrough remote carries per-request header credentials.  Calendar
-    selection stays live against the CalDAV server via ``_get_calendar``.
+    **Simple mode** (``pro_user is None``): Credentials and remote identity
+    come from the read-only config singleton (``caldav_mcp.app_config``);
+    direct remotes carry env credentials, the passthrough remote carries
+    per-request header credentials.
+
+    **Pro mode** (``pro_user is not None``): The dotted path
+    ``config.remote.calendar`` is parsed and resolved via
+    :func:`~caldav_mcp.addressing.resolve_addressed_calendar`.  The client
+    is built from the stored remote URL and credentials (direct) or from
+    per-request ``X-Caldav-*`` headers (passthrough).
 
     Returns (client, cal_or_None).
     Raises are caught by the caller's try/except.
     """
+    from caldav_mcp.app_config import get_app_config
+
+    if pro_user is not None:
+        app = get_app_config()
+        if app.mode == "db":
+            path = kwargs.get("calendar_name") or kwargs.get("source_calendar") or ""
+            resolution = resolve_addressed_calendar(app, pro_user, path)
+            remote = resolution.remote
+
+            if remote.auth_mode == "passthrough":
+                from fastmcp.server.dependencies import get_http_headers
+
+                headers = get_http_headers()
+                url = headers.get(HDR_URL, "")
+                hdr_username = headers.get(HDR_USERNAME, "")
+                pw = headers.get(HDR_PASSWORD, "")
+                if not url or not hdr_username or not pw:
+                    raise AuthError(
+                        "Missing CalDAV credentials. Provide the X-Caldav-Url, "
+                        "X-Caldav-Username, and X-Caldav-Password headers."
+                    )
+                user = hdr_username
+            else:
+                url = remote.url
+                user = remote.username
+                pw = remote.password
+
+            cache = get_cache()
+            client = cache.get(url, user)
+            if client is None:
+                client = DAVClient(  # type: ignore[operator]
+                    url=url,
+                    username=user,
+                    password=pw,
+                    ssl_verify_cert=CALDAV_VERIFY_SSL,
+                )
+                cache.put(url, user, client)
+
+            cal = None
+            if needs_calendar:
+                cal = _get_calendar(client, resolution.calendar_name)
+            return client, cal
+
+    # ── Simple mode (unchanged) ────────────────────────────────────────
     url, user, pw = _resolve_credentials()
 
     cache = get_cache()
@@ -159,12 +230,63 @@ def mcp_tool_if_writable(annotations):
     return decorator
 
 
-def with_caldav_client(needs_calendar=True):
+def _resolve_pro_remote_client(remote):
+    """Build or reuse a DAVClient for the given pro-mode *remote*.
+
+    For direct remotes, the stored URL and credentials are used.
+    For passthrough remotes, per-request ``X-Caldav-*`` headers supply the
+    credentials.  The client is cached by ``(url, username)`` like any other.
+
+    Raises :class:`~caldav_mcp.errors.AuthError` when a passthrough remote
+    is missing the required header credentials.
+    """
+    if remote.auth_mode == "passthrough":
+        from fastmcp.server.dependencies import get_http_headers
+
+        headers = get_http_headers()
+        url = headers.get(HDR_URL, "")
+        hdr_username = headers.get(HDR_USERNAME, "")
+        pw = headers.get(HDR_PASSWORD, "")
+        if not url or not hdr_username or not pw:
+            raise AuthError(
+                "Missing CalDAV credentials. Provide the X-Caldav-Url, "
+                "X-Caldav-Username, and X-Caldav-Password headers."
+            )
+        username = hdr_username
+    else:
+        url = remote.url
+        username = remote.username
+        pw = remote.password
+
+    cache = get_cache()
+    client = cache.get(url, username)
+    if client is None:
+        client = DAVClient(  # type: ignore[operator]
+            url=url,
+            username=username,
+            password=pw,
+            ssl_verify_cert=CALDAV_VERIFY_SSL,
+        )
+        cache.put(url, username, client)
+    return client
+
+
+def with_caldav_client(needs_calendar=True, write=False):
     """Decorator that handles auth, client creation, and error classification.
 
     The wrapped function receives ``client`` and optionally ``cal`` as injected
     keyword arguments.  The public signature exposed to FastMCP excludes these
     injected parameters.
+
+    Parameters
+    ----------
+    needs_calendar : bool
+        When ``True`` (default) a ``cal`` parameter is injected.
+    write : bool
+        When ``True`` the tool is a write tool.  In pro mode
+        (``mode == "db"``) a dotted ``config.remote.calendar`` path is
+        **required** in ``calendar_name`` — a plain name is rejected with a
+        typed validation failure *before* any client or calendar resolution.
     """
 
     def decorator(fn):
@@ -174,14 +296,44 @@ def with_caldav_client(needs_calendar=True):
         def wrapper(*_args, **kwargs):
             start_time = time.monotonic()
             try:
-                error = _require_auth()
+                # ── Endpoint authentication ────────────────────────────
+                pro_user, error = _authenticate()
                 if error:
                     return error
-                client, cal = _resolve_client_and_calendar(needs_calendar, kwargs)
+
+                # ── Pro-mode write-tool gate ───────────────────────────
+                if write and pro_user is not None:
+                    # Check calendar_name (most write tools) or source_calendar
+                    # (caldav_move_event).
+                    cal_name = kwargs.get("calendar_name") or kwargs.get("source_calendar") or ""
+                    try:
+                        parse_dotted_path(cal_name)
+                    except ValueError:
+                        return ToolResult.failure(
+                            Status.ERROR,
+                            "Pro mode requires an explicit calendar identifier "
+                            "in 'config.remote.calendar' format. "
+                            "Please provide the full dotted path.",
+                        )
+
+                # ── Client and calendar resolution ─────────────────────
+                client, cal = _resolve_client_and_calendar(
+                    needs_calendar,
+                    kwargs,
+                    pro_user=pro_user,
+                )
+
+                # ── Handler invocation ─────────────────────────────────
+                # Pass pro_user to handlers that accept it (e.g.
+                # caldav_move_event for target resolution in pro mode).
+                handler_kwargs = dict(kwargs)
+                if "pro_user" in sig.parameters:
+                    handler_kwargs["pro_user"] = pro_user
                 if needs_calendar:
-                    result = fn(client=client, cal=cal, **kwargs)
+                    result = fn(client=client, cal=cal, **handler_kwargs)
                 else:
-                    result = fn(client=client, **kwargs)
+                    result = fn(client=client, **handler_kwargs)
+
                 duration_ms = (time.monotonic() - start_time) * 1000
                 log_operation(
                     tool_name=fn.__name__,
