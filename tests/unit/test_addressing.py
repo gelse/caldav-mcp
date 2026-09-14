@@ -250,6 +250,23 @@ class TestResolveAddressedCalendarAccessDenied:
         # Same error type (both are ValueErrors — no enumeration)
         assert type(exc_denied.value) is type(exc_unknown.value) is ValueError
 
+    def test_identical_error_denied_vs_notfound_same_path(self):
+        """Same path addressed by a denied vs a permitted user → identical error.
+
+        Using the *same* path string is the only way to assert byte-for-byte
+        message equality: for an identical path the access-denied branch and
+        the not-found branch must be indistinguishable (no enumeration).
+        """
+        path = "config-b.remote-b1.no-such-cal"
+        with pytest.raises(ValueError) as exc_denied:
+            # User A is not granted config-b → access denied before lookups.
+            resolve_addressed_calendar(_DB_APP, _USER_A, path)
+        with pytest.raises(ValueError) as exc_notfound:
+            # USER_BOTH is granted config-b → access passes, calendar is unknown.
+            resolve_addressed_calendar(_DB_APP, _USER_BOTH, path)
+        assert type(exc_denied.value) is type(exc_notfound.value)
+        assert str(exc_denied.value) == str(exc_notfound.value)
+
     def test_user_a_granted_config_a_resolves(self):
         """User A with a path into config-a resolves successfully."""
         res = resolve_addressed_calendar(_DB_APP, _USER_A, "config-a.remote-a1.cal-a1-1")

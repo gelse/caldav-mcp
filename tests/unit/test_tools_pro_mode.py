@@ -29,7 +29,7 @@ from caldav_mcp.app_config import (
     reset_app_config,
 )
 from caldav_mcp.db_loader import ProUser
-from caldav_mcp.errors import Status
+from caldav_mcp.errors import Status, ToolResult
 from caldav_mcp.tools import get_cache
 
 # ---------------------------------------------------------------------------
@@ -113,6 +113,34 @@ def _fake_client(cal=None):
 def _auth_return(pro_user):
     """Return the ``(pro_user, error)`` tuple for ``_authenticate`` patches."""
     return (pro_user, None)
+
+
+# ===================================================================
+# Auth gate is honored before any client construction
+# ===================================================================
+
+
+class TestAuthGate:
+    """The endpoint auth gate short-circuits before client resolution.
+
+    ``with_caldav_client`` consults ``_authenticate()`` (M4.3 §2); a failure
+    result must be returned as-is with no ``DAVClient`` constructed.
+    """
+
+    def test_auth_failure_before_client_construction(self):
+        failure = ToolResult.failure(Status.AUTH, "unauthorized")
+        with (
+            mock.patch("caldav_mcp.tools._authenticate", return_value=(None, failure)),
+            mock.patch("caldav_mcp.tools.DAVClient") as mock_dav,
+        ):
+            result = tools_mod.caldav_create_event(
+                summary="Test",
+                start="2026-01-15T10:00",
+                calendar_name="work.nc.team",
+            )
+        assert result is failure
+        assert result.status == Status.AUTH
+        mock_dav.assert_not_called()
 
 
 # ===================================================================
