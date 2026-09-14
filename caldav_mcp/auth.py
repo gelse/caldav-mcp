@@ -172,15 +172,18 @@ def _authenticate() -> "tuple[ProUser | None, ToolResult | None]":
 
     In pro mode the matched :class:`ProUser` is returned on success — this
     is the key difference from :func:`_require_auth` which discards it.
+
+    Internally delegates to :func:`_require_auth` so that tests which patch
+    ``caldav_mcp.auth._require_auth`` short-circuit this function.
     """
+    err = _require_auth()
+    if err is not None:
+        return None, err
+    # Auth succeeded — locate the matched user for forwarding (pro mode only).
     if _is_pro_mode():
-        err = _require_auth_db_user()
-        if err is not None:
-            return None, err
-        # Auth succeeded — locate the matched user for forwarding.
         matched = _find_matched_pro_user()
         return matched, None
-    return None, _require_auth_simple()
+    return None, None
 
 
 def _find_matched_pro_user() -> "ProUser | None":
@@ -199,12 +202,7 @@ def _find_matched_pro_user() -> "ProUser | None":
 
 
 def _require_auth() -> "ToolResult | None":
-    """Enforce MCP endpoint authentication (thin wrapper).
-
-    Delegates to :func:`_authenticate` and returns only the failure half.
-    Retained for backward compatibility — existing tests that patch
-    ``caldav_mcp.tools._require_auth`` or ``caldav_mcp.auth._require_auth``
-    continue to work.
+    """Enforce MCP endpoint authentication.
 
     In **pro mode** (``mode == "db"``) authentication uses DB users: the
     username arrives in ``X-Mcp-Username`` and the key via Bearer /
@@ -216,9 +214,15 @@ def _require_auth() -> "ToolResult | None":
     Returns ``None`` on success, or a structured auth :class:`ToolResult` to
     return to the client when authentication fails.  Integrates rate limiting
     (per client IP) and structured audit logging.
+
+    This is the auth gate used by :func:`~caldav_mcp.auth._authenticate`
+    and by the ``with_caldav_client`` decorator (via module-level lookup).
+    Patching ``caldav_mcp.auth._require_auth`` or
+    ``caldav_mcp.tools._require_auth`` short-circuits authentication.
     """
-    _pro_user, err = _authenticate()
-    return err
+    if _is_pro_mode():
+        return _require_auth_db_user()
+    return _require_auth_simple()
 
 
 def _require_auth_db_user() -> "ToolResult | None":

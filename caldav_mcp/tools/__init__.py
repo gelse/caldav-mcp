@@ -41,6 +41,7 @@ from caldav_mcp.addressing import parse_dotted_path, resolve_addressed_calendar
 from caldav_mcp.audit import log_error, log_operation
 from caldav_mcp.auth import (
     _authenticate,
+    _is_pro_mode,
     _resolve_credentials,
 )
 from caldav_mcp.auth import (
@@ -297,9 +298,20 @@ def with_caldav_client(needs_calendar=True, write=False):
             start_time = time.monotonic()
             try:
                 # ── Endpoint authentication ────────────────────────────
-                pro_user, error = _authenticate()
-                if error:
-                    return error
+                # Simple mode: use globals() lookup so patching
+                # caldav_mcp.tools._require_auth short-circuits here.
+                # Pro mode: delegate to _authenticate() which routes
+                # through _require_auth() so patching
+                # caldav_mcp.auth._require_auth also short-circuits.
+                if _is_pro_mode():
+                    pro_user, error = _authenticate()
+                    if error:
+                        return error
+                else:
+                    auth_err = globals()["_require_auth"]()
+                    if auth_err is not None:
+                        return auth_err
+                    pro_user = None
 
                 # ── Pro-mode write-tool gate ───────────────────────────
                 if write and pro_user is not None:

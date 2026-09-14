@@ -481,26 +481,30 @@ class TestMoveEventProMode:
 
         src_cal.event_by_uid.return_value = fake_event
 
-        src_client_call_count = 0
-        dst_client_call_count = 0
-
-        def make_client(url="", username="", password="", **kwargs):
-            nonlocal src_client_call_count, dst_client_call_count
-            if "cal.example" in url:
-                src_client_call_count += 1
+        def resolve_remote(remote):
+            """Return the appropriate client based on the remote."""
+            if remote.name == "nc":
                 return src_client
-            elif "pt.example" in url:
-                dst_client_call_count += 1
+            if remote.name == "passthrough":
                 return dst_client
             return mock.MagicMock()
 
+        def get_calendar(client, cal_name):
+            """Assert resolved bare names are used, not dotted paths."""
+            assert "." not in cal_name, f"Expected bare calendar name, got dotted path: {cal_name}"
+            if cal_name == "team":
+                return src_cal
+            if cal_name == "mycal":
+                return dst_cal
+            raise AssertionError(f"Unexpected calendar name: {cal_name}")
+
         with (
             mock.patch("caldav_mcp.tools._authenticate", return_value=_auth_return(_USER_BOTH)),
-            mock.patch("caldav_mcp.tools.DAVClient", side_effect=make_client),
-            # _get_calendar is imported directly in mutations.py
-            mock.patch("caldav_mcp.tools.mutations._get_calendar", side_effect=[src_cal, dst_cal]),
-            # _resolve_pro_remote_client is called in the handler for the target
-            mock.patch("caldav_mcp.tools._resolve_pro_remote_client", return_value=dst_client),
+            mock.patch(
+                "caldav_mcp.tools._resolve_pro_remote_client",
+                side_effect=resolve_remote,
+            ),
+            mock.patch("caldav_mcp.tools.mutations._get_calendar", side_effect=get_calendar),
         ):
             result = tools_mod.caldav_move_event(
                 uid="ev-1",
@@ -508,7 +512,84 @@ class TestMoveEventProMode:
                 target_calendar="personal.passthrough.mycal",
             )
         assert result.status == Status.OK, f"Got: {result.status} — {result.message}"
-        assert src_client_call_count == 1
+
+    def test_move_source_resolved_bare_name(self):
+        """Raw dotted source name doesn't match live calendars; resolved bare name does.
+
+        This proves the source dotted path is resolved via the addressing
+        layer before being passed to _get_calendar.
+        """
+        from datetime import datetime
+
+        src_cal = _fake_cal(name="personal")
+        dst_cal = _fake_cal(name="shared")
+        src_client = _fake_client(cal=src_cal)
+        dst_client = _fake_client(cal=dst_cal)
+
+        from icalendar import Calendar as ICalCalendar
+        from icalendar import Event as ICalEvent
+
+        ical = ICalCalendar()
+        ev = ICalEvent()
+        ev.add("uid", "ev-2")
+        ev.add("summary", "Source Resolved")
+        ev.add("dtstart", datetime(2026, 2, 1, 9, 0))
+        ical.add_component(ev)
+
+        fake_event = mock.MagicMock()
+        fake_event.icalendar_component = ev
+        fake_event.data = ical.to_ical().decode("utf-8")
+        src_cal.event_by_uid.return_value = fake_event
+
+        def resolve_remote(remote):
+            if remote.name == "nc":
+                return src_client
+            if remote.name == "nc2":
+                return dst_client
+            return mock.MagicMock()
+
+        def get_calendar(client, cal_name):
+            """Return calendar based on the RESOLVED bare name."""
+            # The raw dotted path "work.nc.personal" would never match;
+            # only the resolved bare name "personal" should be used.
+            if cal_name == "personal":
+                return src_cal
+            if cal_name == "shared":
+                return dst_cal
+            raise AssertionError(
+                f"Unexpected calendar name: {cal_name!r} — source dotted path was not resolved"
+            )
+
+        with (
+            mock.patch("caldav_mcp.tools._authenticate", return_value=_auth_return(_USER_BOTH)),
+            mock.patch(
+                "caldav_mcp.tools._resolve_pro_remote_client",
+                side_effect=resolve_remote,
+            ),
+            mock.patch("caldav_mcp.tools.mutations._get_calendar", side_effect=get_calendar),
+        ):
+            result = tools_mod.caldav_move_event(
+                uid="ev-2",
+                source_calendar="work.nc.personal",
+                target_calendar="work.nc2.shared",
+            )
+        assert result.status == Status.OK, f"Got: {result.status} — {result.message}"
+
+    def test_move_source_non_granted_config_error(self):
+        """Source path into a non-granted config → generic addressing error."""
+        with (
+            mock.patch("caldav_mcp.tools._authenticate", return_value=_auth_return(_USER_WORK)),
+            mock.patch("caldav_mcp.tools.DAVClient") as mock_dav,
+        ):
+            result = tools_mod.caldav_move_event(
+                uid="ev-3",
+                source_calendar="personal.passthrough.mycal",
+                target_calendar="work.nc.team",
+            )
+        # User WORK has access to 'work' only; source is in 'personal' config.
+        # resolve_addressed_calendar raises ValueError → Status.ERROR.
+        assert result.status == Status.ERROR, f"Got: {result.status} — {result.message}"
+        mock_dav.assert_not_called()
 
     def test_move_target_no_access_error(self):
         """Target path without access → ERROR."""

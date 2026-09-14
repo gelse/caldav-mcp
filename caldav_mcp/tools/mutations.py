@@ -204,30 +204,35 @@ def caldav_move_event(
     the original.  This is not atomic — a failure after copy leaves a
     duplicate, which is the safer failure mode.
 
-    In pro mode the target_calendar is a dotted path; the ``pro_user``
-    (injected by the decorator) is used to resolve it via the addressing
-    layer.  Cross-remote moves are allowed — both clients come from the
-    same cache.
+    In pro mode both *source_calendar* and *target_calendar* are dotted
+    paths; the ``pro_user`` (injected by the decorator) is used to resolve
+    them via the addressing layer.  Cross-remote moves are allowed — both
+    clients come from the same cache.
     """
     try:
         from caldav_mcp.addressing import resolve_addressed_calendar
         from caldav_mcp.app_config import get_app_config
+        from caldav_mcp.tools import _resolve_pro_remote_client
 
-        src_cal = _get_calendar(client, source_calendar or None)
-
-        # In pro mode the target_calendar is a dotted path; resolve it
+        # In pro mode both source and target are dotted paths; resolve them
         # via the addressing layer (cross-remote moves are allowed — both
         # clients come from the same cache).
         if pro_user is not None:
             app = get_app_config()
-            resolution = resolve_addressed_calendar(app, pro_user, target_calendar)
-            target_remote = resolution.remote
-            # Build or reuse a DAVClient for the target remote
-            from caldav_mcp.tools import _resolve_pro_remote_client
 
-            dst_client = _resolve_pro_remote_client(target_remote)
-            dst_cal = _get_calendar(dst_client, resolution.calendar_name)
+            # Resolve the source calendar via the dotted path.
+            src_resolution = resolve_addressed_calendar(app, pro_user, source_calendar)
+            src_remote = src_resolution.remote
+            src_client = _resolve_pro_remote_client(src_remote)
+            src_cal = _get_calendar(src_client, src_resolution.calendar_name)
+
+            # Resolve the target calendar via the dotted path.
+            dst_resolution = resolve_addressed_calendar(app, pro_user, target_calendar)
+            dst_remote = dst_resolution.remote
+            dst_client = _resolve_pro_remote_client(dst_remote)
+            dst_cal = _get_calendar(dst_client, dst_resolution.calendar_name)
         else:
+            src_cal = _get_calendar(client, source_calendar or None)
             dst_cal = _get_calendar(client, target_calendar)
         event = src_cal.event_by_uid(uid)
         comp = _comp(event)
