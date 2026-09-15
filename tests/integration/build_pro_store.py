@@ -26,6 +26,7 @@ sys.path.insert(0, str(_PROJECT_ROOT))
 # compose service hard-codes this value in docker-compose.test.yaml.
 DEFAULT_DB_PATH = str(_PROJECT_ROOT / "tests" / "integration" / "pro-store" / "pro-store.db")
 RADICALE_URL = "http://radicale:5232"
+RADICALE2_URL = "http://radicale2:5232"
 
 
 def main() -> int:
@@ -41,7 +42,7 @@ def main() -> int:
     # Rebuild from scratch so repeated runs are idempotent.
     for stale in (Path(db_path), Path(f"{db_path}-wal"), Path(f"{db_path}-shm")):
         stale.unlink(missing_ok=True)
-    _build_pro_store(db_path, RADICALE_URL)
+    _build_pro_store(db_path, RADICALE_URL, RADICALE2_URL)
     print(f"Pro store built: {db_path}")
     return 0
 

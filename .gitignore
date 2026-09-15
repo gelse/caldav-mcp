@@ -11,3 +11,5 @@ docs/_build/
 # Generated integration-test artifacts
 tests/integration/pro-store/
 tests/integration/radicale-data/
+tests/integration/radicale2-data/*
+!tests/integration/radicale2-data/.gitkeep
