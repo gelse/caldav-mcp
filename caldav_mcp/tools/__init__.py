@@ -75,6 +75,8 @@ from caldav_mcp.fanout import (
 from caldav_mcp.fanout import (
     RemoteScope,
     accessible_scopes,
+    aggregate_remote_status,
+    render_fanout_message,
     run_fanout,
 )
 
@@ -449,7 +451,7 @@ def with_caldav_fanout(needs_calendar=True, write=False, once_per_remote=False):
                     filter_cal = ""
 
                 # ── Run fan-out ──────────────────────────────────────────
-                result = _execute_fanout(
+                result, remotes_map = _execute_fanout(
                     fn,
                     user_scopes,
                     credential_headers,
@@ -465,6 +467,7 @@ def with_caldav_fanout(needs_calendar=True, write=False, once_per_remote=False):
                     status=(result.status.value if hasattr(result, "status") else "unknown"),
                     duration_ms=duration_ms,
                     calendar_name=f"<fanout:{len(user_scopes)} scopes>",
+                    remotes=remotes_map,
                 )
                 return result
 
@@ -540,17 +543,18 @@ def _execute_fanout(
     needs_calendar,
     kwargs,
     once_per_remote=False,
-):
+) -> tuple[ToolResult, dict[str, str]]:
     """Execute the fan-out for a pro-mode read tool.
 
     Builds a per-scope ``query_fn`` that invokes *fn* with the resolved
     client and calendar, runs :func:`~caldav_mcp.fanout.run_fanout`, and
     converts the :class:`AggregatedResult` to a :class:`ToolResult`.
 
-    When ``once_per_remote`` is ``True`` the number of calendars per scope is
-    capped at one (``filter_cal`` if provided, else the first declared
-    calendar) so day/week/list fan out exactly once instead of repeating an
-    identical remote-wide query for every calendar.
+    Returns
+    -------
+    tuple[ToolResult, dict[str, str]]
+        The ToolResult and a mapping of ``"config.remote"`` → per-remote
+        status string for audit logging.
     """
     from caldav_mcp.calendar import _get_calendar as _get_cal
 
@@ -598,19 +602,39 @@ def _execute_fanout(
         # Wrap the handler's ToolResult into an AggregatedEntry so
         # run_fanout can aggregate across remotes.
         if hasattr(result, "status"):
-            if result.status in (Status.OK, Status.EMPTY, Status.NOT_FOUND):
+            if result.status == Status.OK:
                 entry = AggregatedEntry(
                     config_name=scope.config_name,
                     remote_name=scope.remote.name,
                     calendar_name=cal_name or "",
                     data=result.data,
+                    status="ok",
                 )
-            else:
+            elif result.status == Status.EMPTY:
+                entry = AggregatedEntry(
+                    config_name=scope.config_name,
+                    remote_name=scope.remote.name,
+                    calendar_name=cal_name or "",
+                    data=result.data,
+                    status="empty",
+                )
+            elif result.status == Status.NOT_FOUND:
                 entry = AggregatedEntry(
                     config_name=scope.config_name,
                     remote_name=scope.remote.name,
                     calendar_name=cal_name or "",
                     error=result.message or str(result.status),
+                    status="not_found",
+                )
+            else:
+                # AUTH, ERROR, and any other status → error/ok per the
+                # classification helper in fanout.py.
+                entry = AggregatedEntry(
+                    config_name=scope.config_name,
+                    remote_name=scope.remote.name,
+                    calendar_name=cal_name or "",
+                    error=result.message or str(result.status),
+                    status="error",
                 )
         else:
             entry = AggregatedEntry(
@@ -618,16 +642,34 @@ def _execute_fanout(
                 remote_name=scope.remote.name,
                 calendar_name=cal_name or "",
                 data=result,
+                status="ok",
             )
         return entry
 
     agg_result = run_fanout(user_scopes, credential_headers, query_fn)
 
+    # Build per-remote status map for audit logging.
+    # Aggregate per remote using the same severity rule as the render
+    # function — a remote with any failure is never reported as "ok".
+    from collections import OrderedDict
+
+    remote_groups: dict[str, list[AggregatedEntry]] = OrderedDict()
+    for entry in agg_result.entries:
+        key = f"{entry.config_name}.{entry.remote_name}"
+        remote_groups.setdefault(key, []).append(entry)
+
+    remotes_map: dict[str, str] = OrderedDict()
+    for key, group in remote_groups.items():
+        remotes_map[key] = aggregate_remote_status(group)
+
+    # Build the message via the shared builder.
+    message = render_fanout_message(agg_result.entries, agg_result.status)
+
     if agg_result.status == Status.EMPTY:
-        return ToolResult.empty(message=agg_result.message or "No accessible calendars")
+        return ToolResult.empty(message=message), remotes_map
 
     if agg_result.status == Status.ERROR:
-        return ToolResult.failure(Status.ERROR, agg_result.message)
+        return ToolResult.failure(Status.ERROR, message), remotes_map
 
     # Status.OK — build entries data list.
     entries_data = []
@@ -650,9 +692,9 @@ def _execute_fanout(
         entries_data.append(entry_dict)
 
     return ToolResult.success(
-        message=agg_result.message,
+        message=message,
         data=entries_data,
-    )
+    ), remotes_map
 
 
 def with_caldav_client(needs_calendar=True, write=False):

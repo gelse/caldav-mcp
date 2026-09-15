@@ -1,30 +1,41 @@
-"""Read-tool fan-out with per-remote aggregation (M4.4).
+"""Read-tool fan-out with per-remote aggregation (M5.1 partial-success).
 
 In pro (DB) mode, read tools execute across **all calendars of all remotes of
 all configs** the authenticated user may access, and aggregate results per
 remote into one :class:`~caldav_mcp.errors.ToolResult`.
 
-Aggregation shape (M4 contract — M5 may extend, not break)
-------------------------------------------------------------
+Per-remote status model
+-----------------------
 
 Each ``(remote × calendar)`` pair produces one :class:`AggregatedEntry` with
 addressing fields (``config_name``, ``remote_name``, ``calendar_name``) plus
-the handler's ``data`` payload and an optional ``error`` string.  The final
-:class:`~caldav_mcp.errors.ToolResult` is:
+the handler's ``data`` payload, an optional ``error`` string, and a per-entry
+``status`` string (one of ``"ok"`` | ``"empty"`` | ``"auth"`` | ``"error"`` |
+``"not_found"``).  Classification rules:
 
-* ``Status.OK`` with ``data`` = list of entries and a per-remote summary
-  ``message`` when **at least one** scope succeeds; failed entries carry
-  ``error="<exception text>"``.
-* ``Status.ERROR`` naming each failing remote when **all** scopes error.
-* ``Status.EMPTY`` for zero accessible calendars or all-empty results.
+* ``AuthError`` → ``"auth"``
+* ``NotFoundError`` → ``"not_found"``
+* Any other exception → ``"error"``
+* Query returning no data → ``"empty"``
+* Success → ``"ok"``
 
-M5 forward-compatibility promise
----------------------------------
+Top-level status rule (unchanged from M4.4)
+--------------------------------------------
 
-The ``AggregatedEntry`` shape and ``Status.OK/ERROR/EMPTY`` semantics are
-the stable contract.  M5 will add per-remote independent statuses, richer
-partial-failure reporting, and parallel execution — but will not break the
-entry fields or the three-way status rule established here.
+* ``Status.OK`` when **at least one** scope succeeds (``"ok"`` or ``"empty"``).
+* ``Status.ERROR`` when **all** scopes fail (``"auth"``/``"error"``/``"not_found"``).
+* ``Status.EMPTY`` for zero accessible calendars.
+
+Render format
+-------------
+
+The message is built by :func:`render_fanout_message` and always starts with
+the top-level tag (``OK`` / ``ERROR:[server]``) followed by a summary
+(``N ok, M error`` counts — ``"ok"`` and ``"empty"`` count as ok;
+``"auth"``/``"error"``/``"not_found"`` count as failures), then one
+``- [status] config.remote: detail`` line per remote in declaration order
+(grouped by ``(config_name, remote_name)`` when a remote spans several
+calendars).
 
 Sequential-execution decision (do not deviate)
 -----------------------------------------------
@@ -50,7 +61,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from caldav_mcp.app_config import AppConfig, Remote
-from caldav_mcp.errors import Status
+from caldav_mcp.errors import AuthError, NotFoundError, Status
 
 if __name__ != "caldav_mcp.fanout":
     # TYPE_CHECKING guard to avoid circular import at runtime
@@ -101,6 +112,9 @@ class AggregatedEntry:
         The handler's result payload (dict, list, etc.).
     error : str | None
         Exception text when this scope failed; ``None`` on success.
+    status : str
+        Per-entry status string (``"ok"`` | ``"empty"`` | ``"auth"`` |
+        ``"error"`` | ``"not_found"``).
     """
 
     config_name: str
@@ -108,6 +122,7 @@ class AggregatedEntry:
     calendar_name: str
     data: Any = None
     error: str | None = None
+    status: str = "ok"
 
 
 @dataclass(frozen=True)
@@ -186,9 +201,65 @@ def accessible_scopes(
 # Fan-out executor
 # ---------------------------------------------------------------------------
 
-# All exceptions that the fan-out query function might raise and that should
-# be captured as per-entry errors rather than propagated.
-_FANOUT_ERRORS = (Exception,)
+# ---------------------------------------------------------------------------
+# Per-scope exception classification
+# ---------------------------------------------------------------------------
+
+_VALID_STATUSES = frozenset({"ok", "empty", "auth", "error", "not_found"})
+
+# Severity ordering for per-remote aggregation: higher index = more severe.
+# When a remote spans several calendars with differing outcomes, we pick the
+# most severe entry status as the remote's representative status.
+_SEVERITY: dict[str, int] = {"ok": 0, "empty": 0, "not_found": 1, "auth": 2, "error": 3}
+
+
+def _classify_exception(exc: Exception) -> str:
+    """Map an exception to a per-entry status string.
+
+    ``AuthError`` → ``"auth"``, ``NotFoundError`` → ``"not_found"``,
+    anything else → ``"error"``.
+    """
+    if isinstance(exc, AuthError):
+        return "auth"
+    if isinstance(exc, NotFoundError):
+        return "not_found"
+    return "error"
+
+
+def aggregate_remote_status(entries: list[AggregatedEntry] | tuple[AggregatedEntry, ...]) -> str:
+    """Derive a single per-remote status from a group of entries.
+
+    When a remote spans several calendars with differing outcomes (e.g.
+    one calendar succeeds and another fails), this function picks one
+    representative status for the whole remote.
+
+    **Rule** (deterministic, severity-based):
+
+    * If any entry has a failure status (``"error"``, ``"auth"``,
+      ``"not_found"``), return the most severe one using the fixed
+      priority ``error`` > ``auth`` > ``"not_found"``.  A remote with
+      at least one failure is never reported as ``"ok"``.
+    * If all entries are ``"ok"`` or ``"empty"``, return ``"ok"``.  A
+      remote with only non-failing entries always reports success.
+
+    Parameters
+    ----------
+    entries : list or tuple of AggregatedEntry
+        The entries belonging to one ``(config_name, remote_name)`` group.
+
+    Returns
+    -------
+    str
+        One of the valid status strings from :data:`_VALID_STATUSES`.
+    """
+    worst_status = "ok"
+    for e in entries:
+        if e.status not in _VALID_STATUSES:
+            # Defensive: treat unknown statuses as errors.
+            return "error"
+        if _SEVERITY[e.status] > _SEVERITY[worst_status]:
+            worst_status = e.status
+    return worst_status
 
 
 def run_fanout(
@@ -224,6 +295,7 @@ def run_fanout(
         try:
             _resolve_pro_client_for_scope(scope.remote, credential_headers)
         except Exception as exc:
+            status = _classify_exception(exc)
             # Cannot connect to this remote at all — create error entries
             # for each calendar in the scope.
             if scope.calendar_names:
@@ -234,6 +306,7 @@ def run_fanout(
                             remote_name=scope.remote.name,
                             calendar_name=cal_name,
                             error=str(exc),
+                            status=status,
                         )
                     )
             else:
@@ -243,6 +316,7 @@ def run_fanout(
                         remote_name=scope.remote.name,
                         calendar_name="",
                         error=str(exc),
+                        status=status,
                     )
                 )
             continue
@@ -263,12 +337,14 @@ def run_fanout(
                 if entry is not None:
                     entries.append(entry)
             except Exception as exc:
+                status = _classify_exception(exc)
                 entries.append(
                     AggregatedEntry(
                         config_name=scope.config_name,
                         remote_name=scope.remote.name,
                         calendar_name=cal_label,
                         error=str(exc),
+                        status=status,
                     )
                 )
 
@@ -280,52 +356,123 @@ def run_fanout(
 # ---------------------------------------------------------------------------
 
 
+def render_fanout_message(
+    entries: tuple[AggregatedEntry, ...],
+    top_status: Status,
+) -> str:
+    """Build the human-readable fan-out message.
+
+    The first line is the top-level tag (``OK`` / ``ERROR:[server]``) plus a
+    summary of counts (``N ok, M error``).  ``"ok"`` and ``"empty"`` count as
+    ok; ``"auth"``/``"error"``/``"not_found"`` count as failures.
+
+    Then one ``- [status] config.remote: detail`` line per **remote** in
+    declaration order.  When a remote spans several calendars, entries are
+    grouped into a single line with a count (e.g. ``3 calendars`` or
+    ``12 events``).  On failure the detail is the exception text.
+
+    Parameters
+    ----------
+    entries : tuple[AggregatedEntry, ...]
+        Ordered entries from the fan-out executor.
+    top_status : Status
+        The top-level status (``OK``, ``ERROR``, ``EMPTY``).
+
+    Returns
+    -------
+    str
+        Rendered message string (multi-line).
+    """
+    if not entries:
+        return "No accessible calendars"
+
+    # Count ok vs failure for the summary line.
+    ok_count = 0
+    fail_count = 0
+    for e in entries:
+        if e.status in ("ok", "empty"):
+            ok_count += 1
+        else:
+            fail_count += 1
+
+    # First line: tag + summary
+    tag = {
+        Status.OK: "OK",
+        Status.ERROR: "ERROR:[server]",
+        Status.EMPTY: "OK",
+    }[top_status]
+
+    summary_parts: list[str] = []
+    if ok_count:
+        summary_parts.append(f"{ok_count} ok")
+    if fail_count:
+        summary_parts.append(f"{fail_count} error")
+    summary = ", ".join(summary_parts) if summary_parts else "0 ok"
+
+    first_line = f"{tag} Fan-out across {len(entries)} scopes: {summary}"
+
+    # Group entries by (config_name, remote_name) preserving declaration order.
+    from collections import OrderedDict
+
+    remote_groups: OrderedDict[tuple[str, str], list[AggregatedEntry]] = OrderedDict()
+    for e in entries:
+        key = (e.config_name, e.remote_name)
+        remote_groups.setdefault(key, []).append(e)
+
+    detail_lines: list[str] = []
+    for (cfg, rname), group in remote_groups.items():
+        # Determine the detail for this remote group.
+        if all(g.status in ("ok", "empty") for g in group):
+            # Success: show count of calendars or events.
+            has_calendar = any(g.calendar_name for g in group)
+            if has_calendar:
+                detail = f"{len(group)} calendar{'s' if len(group) != 1 else ''}"
+            else:
+                detail = f"{len(group)} scope{'s' if len(group) != 1 else ''}"
+            detail_lines.append(f"- [ok] {cfg}.{rname}: {detail}")
+        elif all(g.status not in ("ok", "empty") for g in group):
+            # All failed for this remote: show first exception text.
+            err_text = next(g.error or "unknown error" for g in group)
+            status_tag = group[0].status
+            detail_lines.append(f"- [{status_tag}] {cfg}.{rname}: {err_text}")
+        else:
+            # Mixed outcomes within one remote (e.g. one calendar ok,
+            # another error).  Derive the remote's representative status
+            # using the shared severity rule.
+            remote_status = aggregate_remote_status(group)
+            ok_c = sum(1 for g in group if g.status in ("ok", "empty"))
+            err_c = len(group) - ok_c
+            detail_lines.append(f"- [{remote_status}] {cfg}.{rname}: {ok_c} ok, {err_c} error")
+
+    return first_line + "\n" + "\n".join(detail_lines)
+
+
 def _aggregate(entries: list[AggregatedEntry]) -> AggregatedResult:
     """Build an :class:`AggregatedResult` from the collected entries."""
     if not entries:
         return AggregatedResult(status=Status.EMPTY, message="No accessible calendars")
 
-    ok_count = sum(1 for e in entries if e.error is None)
+    ok_count = sum(1 for e in entries if e.status in ("ok", "empty"))
     err_count = len(entries) - ok_count
-
-    # Build per-remote summary lines.
-    remote_stats: dict[str, tuple[int, int]] = {}
-    for e in entries:
-        rname = e.remote_name
-        ok, err = remote_stats.get(rname, (0, 0))
-        if e.error is None:
-            remote_stats[rname] = (ok + 1, err)
-        else:
-            remote_stats[rname] = (ok, err + 1)
-
-    summary_parts: list[str] = []
-    for rname, (r_ok, r_err) in remote_stats.items():
-        if r_err == 0:
-            summary_parts.append(f"{rname}: {r_ok} ok")
-        elif r_ok == 0:
-            summary_parts.append(f"{rname}: {r_err} failed")
-        else:
-            summary_parts.append(f"{rname}: {r_ok} ok, {r_err} failed")
-    message = "; ".join(summary_parts)
 
     if err_count == len(entries):
         # All scopes failed → Status.ERROR
-        failing_remotes = sorted({e.remote_name for e in entries})
-        message = "All remotes failed: " + ", ".join(failing_remotes)
-        return AggregatedResult(
-            status=Status.ERROR,
-            message=message,
-            entries=tuple(entries),
-        )
-
-    if ok_count > 0:
+        top_status = Status.ERROR
+    elif ok_count > 0:
         # At least one succeeded → Status.OK
+        top_status = Status.OK
+    else:
+        # All entries present but none ok — defensive fallback.
+        # Preserve the M4.4 zero-scope EMPTY message text.
         return AggregatedResult(
-            status=Status.OK,
-            message=message,
+            status=Status.EMPTY,
+            message="No results",
             entries=tuple(entries),
         )
 
-    # All entries present but all have error (shouldn't happen given the
-    # err_count == len(entries) check above, but be defensive).
-    return AggregatedResult(status=Status.EMPTY, message="No results")
+    message = render_fanout_message(tuple(entries), top_status)
+    return AggregatedResult(
+        status=top_status,
+        message=message,
+        entries=tuple(entries),
+    )
