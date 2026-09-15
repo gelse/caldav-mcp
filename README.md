@@ -449,6 +449,35 @@ visible to MCP clients, making it safe to expose the endpoint without risk of
 data modification.  The write-tool Python functions remain importable for unit
 tests regardless of this flag.
 
+### Pro mode
+
+Pro mode (`DB_CONFIG_ENABLED=true`) loads configuration and users from the
+SQLite config store at startup, enabling multi-user, multi-account deployments.
+
+**Key differences from simple mode:**
+
+- **DB-user auth**: Clients must send `X-Mcp-Username: <username>` plus
+  `Authorization: Bearer <key>` (or `X-Api-Key`). The `CALDAV_MCP_API_KEY`
+  env var is **ignored** — only DB-stored user credentials are accepted.
+- **Fan-out reads**: Parameterless read tools (e.g. `caldav_list_calendars`,
+  `caldav_get_events`) fan out across all accessible remotes and aggregate
+  results per-remote.
+- **Dotted-path writes**: Write tools require a `config.remote.calendar`
+  dotted path (e.g. `main.radicale.work`) to uniquely identify the target
+  calendar. Plain calendar names are rejected.
+- **Restart-to-apply**: Config changes require a server restart. The store
+  is read once at startup and frozen into an immutable `AppConfig`.
+
+**Required env vars** (all three must be set):
+
+| Variable | Description |
+|----------|-------------|
+| `DB_CONFIG_ENABLED` | `true` to enable pro mode |
+| `CALDAV_MCP_DB_PATH` | Path to the SQLite config store |
+| `CALDAV_MCP_CONFIG_SECRET` | Master secret for credential encryption |
+
+See [`docs/cli.md`](docs/cli.md) for building the store with the CLI.
+
 ### Deployment recommendations
 
 - Bind to `127.0.0.1` or a private network unless you need remote access.
@@ -527,10 +556,10 @@ caldav-mcp includes a SQLite-backed configuration store and a CLI tool
 This is a building block for multi-user deployments — see
 [`docs/cli.md`](docs/cli.md) for the full CLI reference.
 
-> **Note:** The server currently **does not read the config store**.
-> In simple mode, CalDAV credentials are resolved from environment
-> variables or per-request headers. Pro mode, where the server loads
-> configuration from the store, is planned for M4.
+> **Note:** In simple mode, CalDAV credentials are resolved from environment
+> variables or per-request headers. In pro mode (`DB_CONFIG_ENABLED=true`),
+> the server loads configuration and users from the store at startup — see
+> the [Pro mode](#pro-mode) section above.
 
 ## Compatibility / limitations
 

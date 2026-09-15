@@ -102,4 +102,37 @@ The `Config` / `Remote` / `Calendar` dataclasses intentionally match the concept
 
 [`caldav_mcp/config_store.py`](../caldav_mcp/config_store.py) implements a SQLite-backed store with a schema-versioned table layout. [`caldav_mcp/config_cli.py`](../caldav_mcp/config_cli.py) provides the `caldav-mcp-config` CLI for managing users, configs, remotes, and calendars. [`caldav_mcp/config_crypto.py`](../caldav_mcp/config_crypto.py) handles Fernet encryption of CalDAV passwords at rest (keyed by `CALDAV_MCP_CONFIG_SECRET`).
 
-Store records map 1:1 onto the M2 `Config` / `Remote` / `Calendar` dataclasses so that the planned M4 DB loader can produce the same singleton shape without downstream changes. The CLI encrypts passwords on write; the server will decrypt on read in pro mode (planned M4). Today the server does not read the store — see [`docs/cli.md`](cli.md) for the full CLI reference.
+Store records map 1:1 onto the M2 `Config` / `Remote` / `Calendar` dataclasses so that the DB loader (M4) can produce the same singleton shape without downstream changes. The CLI encrypts passwords on write; the server decrypts on read in pro mode. See [`docs/cli.md`](cli.md) for the full CLI reference.
+
+### Pro mode (M4)
+
+Pro mode (`DB_CONFIG_ENABLED=true`) loads configuration and users from the SQLite store at startup via [`caldav_mcp/db_loader.py`](../caldav_mcp/db_loader.py).
+
+**Startup flow:**
+
+1. `load_pro_state(db_path, secret)` reads the store, decrypts CalDAV passwords via Fernet, and produces an `AppConfig` (mode `"db"`) + tuple of `ProUser` snapshots.
+2. `configure_app_config(pro.app_config)` installs the frozen config singleton.
+3. `configure_pro_users(pro.users)` installs the user list for auth.
+
+**Auth in pro mode:**
+
+- `X-Mcp-Username` header identifies the user; `Authorization: Bearer <key>` or `X-Api-Key` provides the API key.
+- Key verification uses PBKDF2-HMAC-SHA256 (`caldav_mcp/key_hash.py`).
+- `CALDAV_MCP_API_KEY` is ignored — only DB-stored user credentials are accepted.
+- Rate limiting applies per client IP as in simple mode.
+
+**Fan-out reads:**
+
+Parameterless read tools (e.g. `caldav_list_calendars`, `caldav_get_events`) fan out across all accessible remotes via [`caldav_mcp/fanout.py`](../caldav_mcp/fanout.py). Execution is sequential per remote; results are aggregated per-remote into `AggregatedEntry` objects. Mixed-success/partial-failure semantics are deferred to M5.
+
+**Dotted-path addressing:**
+
+Write tools require a `config.remote.calendar` dotted path (e.g. `main.radicale.work`) parsed by [`caldav_mcp/addressing.py`](../caldav_mcp/addressing.py). Plain calendar names are rejected with a typed error. For reads, an empty `calendar_name` fans out across all accessible calendars; a dotted path narrows to a single calendar.
+
+**Mode table:**
+
+| Mode | Config source | Auth | Write addressing |
+|------|--------------|------|-----------------|
+| Env | `CALDAV_URL` env var | `CALDAV_MCP_API_KEY` (optional) | Plain calendar name |
+| Header | `X-Caldav-*` per request | `CALDAV_MCP_API_KEY` (optional) | Plain calendar name |
+| DB (pro) | SQLite store at startup | DB users (`X-Mcp-Username` + key) | Dotted path required |

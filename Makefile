@@ -38,7 +38,9 @@ test-unit:
 
 .PHONY: test-integration
 test-integration:
-	docker compose -f docker-compose.test.yaml up -d --wait
+	@# Build the pro-mode SQLite store (needed by mcp-pro service)
+	@$(PYTHON) tests/integration/build_pro_store.py
+	@docker compose -f docker-compose.test.yaml up -d --build --wait
 	$(PYTHON) -m pytest tests/integration/ -m integration --timeout=60; \
 	EXIT=$$?; \
 	docker compose -f docker-compose.test.yaml down -v; \

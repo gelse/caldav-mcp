@@ -7,3 +7,7 @@ plans/
 
 # Documentation build
 docs/_build/
+
+# Generated integration-test artifacts
+tests/integration/pro-store/
+tests/integration/radicale-data/

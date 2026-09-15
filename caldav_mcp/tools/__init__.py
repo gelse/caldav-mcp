@@ -244,7 +244,7 @@ def _resolve_pro_remote_client(remote):
     if remote.auth_mode == "passthrough":
         from fastmcp.server.dependencies import get_http_headers
 
-        headers = get_http_headers()
+        headers = get_http_headers(include={"authorization"})
         url = headers.get(HDR_URL, "")
         hdr_username = headers.get(HDR_USERNAME, "")
         pw = headers.get(HDR_PASSWORD, "")

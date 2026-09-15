@@ -80,13 +80,15 @@ caldav-mcp/
 
 ## Authentication Model
 
-Two independent layers — both are optional but recommended:
+Three independent layers — all optional but recommended:
 
-1. **MCP Endpoint Auth** (`CALDAV_MCP_API_KEY` env var): Bearer token or `X-Api-Key` header. Constant-time comparison, per-IP rate limiting. Protects the MCP endpoint itself.
+1. **MCP Endpoint Auth — simple mode** (`CALDAV_MCP_API_KEY` env var): Bearer token or `X-Api-Key` header. Constant-time comparison, per-IP rate limiting. Protects the MCP endpoint itself.
 
-2. **CalDAV Credentials**: Mode-based resolution — when `CALDAV_URL` is set, all credentials come from the environment (`CALDAV_URL`, `CALDAV_USERNAME`, `CALDAV_PASSWORD`) and `X-Caldav-*` request headers are ignored (environment mode). When `CALDAV_URL` is unset, `X-Caldav-Url`, `X-Caldav-Username`, `X-Caldav-Password` headers are required on every request (header mode). No per-field mixing. `X-Caldav-Username` and `X-Caldav-Password` are reserved for a future passthrough mode and are ignored when `CALDAV_URL` is set.
+2. **MCP Endpoint Auth — pro mode** (`DB_CONFIG_ENABLED=true`): `X-Mcp-Username` header identifies the DB user; `Authorization: Bearer <key>` or `X-Api-Key` provides the API key. PBKDF2-HMAC-SHA256 verification against stored hashes. `CALDAV_MCP_API_KEY` is **ignored** in pro mode.
 
-Credentials and remote identity flow through a read-only config singleton (`caldav_mcp.app_config`) loaded once at startup — config changes require a restart. In environment mode (`CALDAV_URL` set) the singleton carries a built-in direct remote and `X-Caldav-*` request headers are ignored; `X-Caldav-Username` and `X-Caldav-Password` are reserved for a future passthrough mode. In header mode (`CALDAV_URL` unset) all three `X-Caldav-*` headers are required per request.
+3. **CalDAV Credentials**: Mode-based resolution — when `CALDAV_URL` is set, all credentials come from the environment (`CALDAV_URL`, `CALDAV_USERNAME`, `CALDAV_PASSWORD`) and `X-Caldav-*` request headers are ignored (environment mode). When `CALDAV_URL` is unset, `X-Caldav-Url`, `X-Caldav-Username`, `X-Caldav-Password` headers are required on every request (header mode). No per-field mixing. `X-Caldav-Username` and `X-Caldav-Password` are reserved for a future passthrough mode and are ignored when `CALDAV_URL` is set.
+
+Credentials and remote identity flow through a read-only config singleton (`caldav_mcp.app_config`) loaded once at startup — config changes require a restart. In environment mode (`CALDAV_URL` set) the singleton carries a built-in direct remote and `X-Caldav-*` request headers are ignored; `X-Caldav-Username` and `X-Caldav-Password` are reserved for a future passthrough mode. In header mode (`CALDAV_URL` unset) all three `X-Caldav-*` headers are required per request. In pro mode (`DB_CONFIG_ENABLED=true`) the singleton is loaded from the SQLite store and carries multiple configs/remotes; `X-Caldav-*` headers are ignored.
 
 **Key design**: Server is stateless. Only in-memory state is the LRU client cache and rate limiter.
 
@@ -96,7 +98,7 @@ All config via environment variables, validated at startup with Pydantic:
 
 | Variable | Description |
 |----------|-------------|
-| `CALDAV_MCP_API_KEY` | API key for MCP endpoint auth (optional) |
+| `CALDAV_MCP_API_KEY` | API key for simple-mode endpoint auth (optional; ignored in pro mode) |
 | `CALDAV_URL` | CalDAV server URL. When set, all credentials come from env and `X-Caldav-*` headers are ignored (environment mode). When unset, `X-Caldav-*` headers are required (header mode). |
 | `CALDAV_USERNAME` | CalDAV username (environment mode). Ignored in header mode. |
 | `CALDAV_PASSWORD` | CalDAV password (environment mode). Ignored in header mode. |
@@ -111,6 +113,9 @@ All config via environment variables, validated at startup with Pydantic:
 | `CALDAV_MCP_READ_ONLY` | Hide write tools; only query tools are exposed when `true` (default `false`) |
 | `CALDAV_MCP_RATE_LIMIT_MAX_FAILURES` | Max failed auth attempts per IP before rate limiting (default `10`) |
 | `CALDAV_MCP_RATE_LIMIT_WINDOW_SECONDS` | Sliding window for rate limiting in seconds (default `60`) |
+| `DB_CONFIG_ENABLED` | Enable pro mode: load config and users from SQLite store; requires `CALDAV_MCP_DB_PATH` and `CALDAV_MCP_CONFIG_SECRET` |
+| `CALDAV_MCP_DB_PATH` | Path to the SQLite configuration store (pro mode) |
+| `CALDAV_MCP_CONFIG_SECRET` | Master secret for encrypting CalDAV credentials at rest (pro mode) |
 
 ## Deployment
 

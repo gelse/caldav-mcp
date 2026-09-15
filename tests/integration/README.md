@@ -30,11 +30,12 @@
 - `test_crdl_lifecycle.py` — Full CRUD lifecycle for calendars and events
 - `test_multi_calendar.py` — Operations across multiple calendars
 - `test_concurrent_access.py` — Concurrent read/write patterns
+- `test_pro_mode.py` — Pro-mode DB auth, fan-out reads, dotted-path writes
 
 ## Configuration
 
 The Radicale test server uses:
-- **User:** `testuser` / **Password:** `testpass`
+- **Users:** `testuser` / `testpass` (simple mode), `userA` / `testpassA`, `userB` / `testpassB` (pro mode)
 - **Port:** `5232`
 - **Storage:** Filesystem-backed (`tests/integration/radicale-data/`)
 
@@ -42,3 +43,10 @@ Environment variables to override defaults:
 - `RADICALE_URL` — Server URL (default: `http://localhost:5232`)
 - `RADICALE_USER` — Username (default: `testuser`)
 - `RADICALE_PASS` — Password (default: `testpass`)
+
+### Pro-mode tests
+
+Pro-mode tests (`test_pro_mode.py`) require the `mcp-pro` Docker Compose service
+running with `DB_CONFIG_ENABLED=true`. The Makefile builds the SQLite store
+automatically before starting compose. The MCP server is available at
+`http://localhost:8080/mcp`.

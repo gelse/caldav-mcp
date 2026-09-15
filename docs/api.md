@@ -1,5 +1,53 @@
 # API Reference
 
+## Authentication headers
+
+All requests to `/mcp` require authentication when `CALDAV_MCP_API_KEY` is set (simple mode) or when `DB_CONFIG_ENABLED=true` (pro mode).
+
+| Header | Required | Description |
+|--------|----------|-------------|
+| `Authorization: Bearer <token>` | Yes | API key (simple mode) or DB user key (pro mode) |
+| `X-Api-Key: <token>` | Alternative | Same as Bearer; either header is accepted |
+| `X-Mcp-Username` | Pro mode only | DB username; required when `DB_CONFIG_ENABLED=true` |
+| `X-Caldav-Url` | Header mode only | CalDAV server URL (when `CALDAV_URL` is unset) |
+| `X-Caldav-Username` | Header mode only | CalDAV username (when `CALDAV_URL` is unset) |
+| `X-Caldav-Password` | Header mode only | CalDAV password (when `CALDAV_URL` is unset) |
+
+## Addressing model
+
+**Simple mode** (env / header): tools accept a plain `calendar_name` string (e.g. `"work"`). The calendar is looked up from the configured remote.
+
+**Pro mode** (`DB_CONFIG_ENABLED=true`): write tools require a dotted-path identifier in the form `config.remote.calendar` (e.g. `"main.radicale.work"`). Plain names are rejected with an error. For parameterless read tools (e.g. `caldav_list_calendars`), an empty `calendar_name` fans out across all accessible remotes and calendars. A dotted path narrows the query to a single calendar.
+
+## Aggregated read results (pro mode)
+
+Read tools fan out across every accessible remote and return one entry per `(config, remote, calendar)` pair. Each entry is addressed by the dotted path components and carries the tool's own payload under `data`. The top-level `message` is a per-remote summary; `status` is `ok` when at least one entry succeeded, `error` when all failed, and `empty` when nothing matched.
+
+```json
+{
+  "status": "ok",
+  "message": "radicale: 1 ok; radicale-mirror: 1 ok",
+  "data": [
+    {
+      "config_name": "main",
+      "remote_name": "radicale",
+      "calendar_name": "personal",
+      "data": [{"name": "personal", "url": "http://radicale:5232/userA/…/"}],
+      "error": null
+    },
+    {
+      "config_name": "mirror",
+      "remote_name": "radicale-mirror",
+      "calendar_name": "shared",
+      "data": [{"name": "shared", "url": "http://radicale:5232/userB/…/"}],
+      "error": null
+    }
+  ]
+}
+```
+
+A failing scope keeps the same entry shape with `data: null` and an `error` string, so partial failures remain addressable. Per-remote partial-failure status design is deferred to M5.
+
 ## MCP Tools
 
 All tools are accessible via the Streamable HTTP endpoint at `/mcp`.

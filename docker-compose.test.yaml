@@ -17,3 +17,34 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  mcp-pro:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: caldav-mcp-pro-test
+    ports:
+      - "8080:8080"
+    depends_on:
+      radicale:
+        condition: service_healthy
+    environment:
+      # DB-config mode (pro mode)
+      DB_CONFIG_ENABLED: "true"
+      CALDAV_MCP_DB_PATH: /data/pro-store.db
+      CALDAV_MCP_CONFIG_SECRET: "test-integration-pro-secret-do-not-use-in-production"
+      # Server settings
+      CALDAV_MCP_PORT: "8080"
+      CALDAV_MCP_PATH: "/mcp"
+      CALDAV_MCP_READ_ONLY: "false"
+      CALDAV_MCP_CALDAV_VERIFY_SSL: "true"
+      CALDAV_MCP_LOG_FORMAT: "text"
+      TZ: UTC
+    volumes:
+      - ./tests/integration/pro-store:/data:ro
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import socket; s=socket.socket(); s.settimeout(3); s.connect(('127.0.0.1',8080)); s.close()"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s

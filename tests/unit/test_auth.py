@@ -216,3 +216,35 @@ def test_header_mode_header_url_with_env_username():
     assert url == "https://header.example.com/caldav"
     assert username == "header-user"
     assert password == "header-pass"
+
+
+# ---------------------------------------------------------------------------
+# Regression: F1 — Authorization header must survive get_http_headers() call
+# ---------------------------------------------------------------------------
+
+
+def test_hdrs_includes_authorization():
+    """_hdrs() wrapper must call get_http_headers with include={'authorization'}.
+
+    FastMCP strips ``authorization`` by default; the wrapper must explicitly
+    request it so that Bearer auth works in both simple and pro mode.
+    """
+    sentinel = {"authorization": "Bearer real-token"}
+    mock_ghh = mock.MagicMock(return_value=sentinel)
+    with mock.patch("fastmcp.server.dependencies.get_http_headers", mock_ghh):
+        result = auth._hdrs()()
+    assert result is sentinel
+    mock_ghh.assert_called_once_with(include={"authorization"})
+
+
+def test_bearer_auth_works_end_to_end():
+    """End-to-end: Authorization: Bearer header reaches _extract_key via real _hdrs.
+
+    Verifies the F1 fix: _hdrs() passes include={'authorization'} so the
+    Bearer token is not silently dropped before auth can read it.
+    """
+    with mock.patch.object(config, "API_KEY", "the-secret"):
+        mock_ghh = mock.MagicMock(return_value={"authorization": "Bearer the-secret"})
+        with mock.patch("fastmcp.server.dependencies.get_http_headers", mock_ghh):
+            result = auth._require_auth()
+    assert result is None, "Bearer auth must succeed when get_http_headers includes authorization"
