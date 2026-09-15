@@ -31,7 +31,7 @@ _RO_ANNOTATIONS = {
 
 
 @mcp_tool_if_writable(annotations=_WRITE_ANNOTATIONS)
-@with_caldav_client()
+@with_caldav_client(write=True)
 def caldav_add_attendee(
     client,
     cal,
@@ -67,7 +67,7 @@ def caldav_add_attendee(
 
 
 @mcp_tool_if_writable(annotations=_WRITE_ANNOTATIONS)
-@with_caldav_client()
+@with_caldav_client(write=True)
 def caldav_remove_attendee(client, cal, uid: str, email: str, calendar_name: str = ""):
     """Remove an attendee from an existing event."""
     event = cal.event_by_uid(uid)
@@ -101,7 +101,7 @@ def caldav_remove_attendee(client, cal, uid: str, email: str, calendar_name: str
 
 
 @mcp.tool(annotations=_RO_ANNOTATIONS)
-@with_caldav_client()
+@with_caldav_client(write=True)
 def caldav_list_attendees(client, cal, uid: str, calendar_name: str = ""):
     """List attendees of an event."""
     event = cal.event_by_uid(uid)

@@ -8,6 +8,7 @@ dependencies = [
     "caldav==3.2.1",
     "fastmcp==3.4.7",
     "requests>=2.28.0",
+    "cryptography>=44.0.1",
 ]
 
 [project.optional-dependencies]
@@ -26,6 +27,7 @@ docs = [
 
 [project.scripts]
 caldav-mcp = "server:main"
+caldav-mcp-config = "caldav_mcp.config_cli:main"
 
 [project.urls]
 Documentation = "https://github.com/gelse/caldav-mcp/tree/main/docs"

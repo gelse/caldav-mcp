@@ -38,7 +38,9 @@ test-unit:
 
 .PHONY: test-integration
 test-integration:
-	docker compose -f docker-compose.test.yaml up -d --wait
+	@# Build the pro-mode SQLite store (needed by mcp-pro service)
+	@$(PYTHON) tests/integration/build_pro_store.py
+	@docker compose -f docker-compose.test.yaml up -d --build --wait
 	$(PYTHON) -m pytest tests/integration/ -m integration --timeout=60; \
 	EXIT=$$?; \
 	docker compose -f docker-compose.test.yaml down -v; \
@@ -103,3 +105,4 @@ docs-check:
 	@test -f docs/architecture.md && echo "✓ docs/architecture.md exists" || (echo "✗ docs/architecture.md missing" && exit 1)
 	@test -f docs/api.md && echo "✓ docs/api.md exists" || (echo "✗ docs/api.md missing" && exit 1)
 	@test -f docs/contributing.md && echo "✓ docs/contributing.md exists" || (echo "✗ docs/contributing.md missing" && exit 1)
+	@test -f docs/cli.md && echo "✓ docs/cli.md exists" || (echo "✗ docs/cli.md missing" && exit 1)
