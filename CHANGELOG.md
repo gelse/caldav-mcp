@@ -1,19 +1,32 @@
 # Changelog
 
-## Unreleased
+## M5 — Partial-failure reporting and documentation
 
 ### Features
-- Add `CALDAV_MCP_READ_ONLY` flag to hide write tools at registration time
-- Read-only config singleton (`caldav_mcp.app_config`) as the single source of CalDAV connection data; simple mode backed by an env-derived built-in config
+- **Partial-failure reporting (M5.1):** Read-tool fan-out now reports per-remote statuses (`ok`, `empty`, `auth`, `error`, `not_found`) and renders bracketed per-remote detail lines in the `message` field. One remote's failure never masks other remotes' results.
+- **Multi-remote integration tests (M5.2):** Two-Radicale-server integration suite covering fan-out, passthrough, header/env precedence, and bad-credentials edge cases.
+- **Read-only mode:** `CALDAV_MCP_READ_ONLY` flag hides write tools at registration time. In read-only mode only 8 read-only tools are visible to MCP clients.
+
+### Features (M1–M4)
+- **M1 header-precedence rule:** CalDAV credential resolution is mode-based — when `CALDAV_URL` is set, `X-Caldav-*` request headers are ignored entirely (no per-field mixing). When `CALDAV_URL` is unset, all three `X-Caldav-*` headers are required per request.
+- **Config singleton:** Read-only `AppConfig` as the single source of CalDAV connection data; env/header/db modes.
 - **Pro mode (M4):** `DB_CONFIG_ENABLED=true` loads config and users from the SQLite store at startup. DB-user auth (`X-Mcp-Username` + Bearer/`X-Api-Key`), fan-out reads across remotes, dotted-path write addressing (`config.remote.calendar`).
+- **Config store and CLI (M3):** SQLite-backed store with `caldav-mcp-config` CLI for managing users, configs, remotes, and calendars. Fernet encryption of CalDAV passwords at rest (`CALDAV_MCP_CONFIG_SECRET`).
+- **Partial-failure reporting (M5.1):** Per-remote status classification, `render_fanout_message` with bracketed detail lines, severity-based aggregation for mixed-outcome remotes.
 
 ### Changed
-- **Breaking:** CalDAV credential resolution is now mode-based. If `CALDAV_URL` is set, all credentials come from the environment and `X-Caldav-Url`/`X-Caldav-Username`/`X-Caldav-Password` request headers are ignored (previously headers took precedence per-field). If `CALDAV_URL` is unset, the three `X-Caldav-*` headers are required per request. No per-field mixing. `X-Caldav-Username`/`X-Caldav-Password` are reserved for a future passthrough mode.
-- CalDAV credentials are resolved via the config singleton; behavior is unchanged from the mode-based rule described above
-- **Behavioral:** `CALDAV_MCP_API_KEY` is ignored in pro mode (`DB_CONFIG_ENABLED=true`). Only DB-stored user credentials are accepted.
+- **Breaking (M1):** CalDAV credential resolution is now mode-based. If `CALDAV_URL` is set, all credentials come from the environment and `X-Caldav-*` request headers are ignored (previously headers took precedence per-field). If `CALDAV_URL` is unset, the three `X-Caldav-*` headers are required per request. No per-field mixing. `X-Caldav-Username`/`X-Caldav-Password` are reserved for a future passthrough mode.
+- **Breaking (M4):** `CALDAV_MCP_API_KEY` is ignored in pro mode (`DB_CONFIG_ENABLED=true`). Only DB-stored user credentials are accepted.
 
-### Note
-- Config changes take effect on restart
+### New environment variables
+- `DB_CONFIG_ENABLED` — enable pro mode (default: `false`)
+- `CALDAV_MCP_DB_PATH` — path to the SQLite configuration store (default: `""`)
+- `CALDAV_MCP_CONFIG_SECRET` — master secret for encrypting CalDAV credentials at rest (default: `""`)
+
+### Upgrade notes
+- **M1 header-precedence change:** Clients that previously sent `X-Caldav-*` headers while `CALDAV_URL` was set now get environment credentials instead of header credentials. If you relied on headers overriding env vars, remove `CALDAV_URL` and use header mode.
+- **Pro mode:** `CALDAV_MCP_API_KEY` is ignored when `DB_CONFIG_ENABLED=true`. Use `X-Mcp-Username` + DB-stored key instead.
+- **Restart-to-apply:** Configuration changes (env vars, store modifications) require a server restart. There is no hot reload.
 
 ## v0.1.1 (2026-09-11)
 

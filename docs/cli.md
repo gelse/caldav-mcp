@@ -4,11 +4,14 @@ The `caldav-mcp-config` CLI manages the SQLite-backed configuration store.
 This store is designed for multi-user, multi-server deployments where a
 single server instance must route requests to different CalDAV accounts.
 
-> **Current status:** The server does **not** read the config store yet.
-> Store data is consumed only in **pro mode** (planned M4). In simple mode
-> the server continues to use environment variables or per-request headers
-> as described in [`docs/api.md`](api.md). The CLI is fully functional
-> today — you can populate the store in preparation for pro mode.
+> **How the CLI and server work together:**
+> The CLI manages the SQLite store; the server reads it at startup in pro
+> mode (`DB_CONFIG_ENABLED=true`). The `CALDAV_MCP_CONFIG_SECRET` must
+> **match** between CLI and server — the CLI encrypts passwords with it, and
+> the server decrypts them on startup. Config changes require a server
+> restart (the store is frozen into an immutable `AppConfig` at startup).
+> In simple mode the server continues to use environment variables or
+> per-request headers as described in [`docs/api.md`](api.md).
 
 ## Concepts
 
@@ -424,6 +427,9 @@ rm -f "$STORE"
 - **No hot reload** — the server reads configuration at startup. Changes
   to the store require a server restart (inherited from the singleton
   design of [`caldav_mcp/app_config.py`](../caldav_mcp/app_config.py)).
-- **Server does not read the store yet** — pro mode, where the server
-  loads from the SQLite store instead of environment variables, is planned
-  for M4. The store is managed exclusively by the CLI today.
+
+## Cross-references
+
+- **Environment variables**: see the [Configuration reference](../README.md#configuration-reference) in README.md for the full env-var table.
+- **Pro mode behavior**: see the [Pro mode](../README.md#pro-mode) section in README.md and [`docs/architecture.md`](architecture.md#pro-mode) for fan-out, auth, and dotted-path details.
+- **Wire format**: see [`docs/api.md`](api.md) for headers, addressing, and the aggregated result shape.

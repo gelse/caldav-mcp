@@ -72,7 +72,7 @@ flowchart LR
 
 The server maintains **no session state** between requests. CalDAV credentials
 are resolved through a read-only config singleton loaded once at startup.
-The singleton encodes two mutually exclusive modes:
+The singleton encodes three mutually exclusive modes:
 
 - **Environment mode** — set `CALDAV_URL`, `CALDAV_USERNAME`,
   `CALDAV_PASSWORD` as environment variables. The `X-Caldav-*` request
@@ -83,23 +83,33 @@ The singleton encodes two mutually exclusive modes:
   `X-Caldav-Url`, `X-Caldav-Username`, `X-Caldav-Password` on every
   request. This allows a single server instance to serve multiple
   CalDAV accounts without restarts or reconfiguration.
+- **Pro mode** (`DB_CONFIG_ENABLED=true`) — configuration and users are
+  loaded from a SQLite store at startup. Multiple named configs and
+  remotes can coexist; read tools fan out across all accessible remotes
+  and aggregate results per-remote. Write tools require a
+  `config.remote.calendar` dotted path. See [Pro mode](#pro-mode) below.
 
-No per-field mixing: either all three credentials come from the environment,
-or all three come from the request headers.
+No per-field mixing between modes: either all three credentials come from the
+environment, or all three come from the request headers, or they come from
+the stored config. In pro mode, request `X-Caldav-*` headers apply only to
+passthrough remotes.
 
-- **No database, no persistent account state** — the only in-memory state is
-  a thread-safe LRU cache of CalDAV client connections.
+- **Stateless design** — the only in-memory state is a thread-safe LRU cache
+  of CalDAV client connections and a rate limiter.
 
 Two authentication layers sit between the client and the CalDAV server:
 
 1. **MCP endpoint auth** — optional API key via `Authorization: Bearer` or
    `X-Api-Key` header. When `CALDAV_MCP_API_KEY` is unset, the endpoint is
-   open. Protects the MCP endpoint itself.
+   open. In pro mode, DB-user credentials replace the env API key (see
+   [Pro mode](#pro-mode)). Protects the MCP endpoint itself.
 2. **CalDAV credentials** — resolved from the read-only config singleton
    (`caldav_mcp.app_config`). In environment mode (`CALDAV_URL` set),
    credentials come from environment variables and request headers are
    ignored. In header mode (`CALDAV_URL` unset), the three `X-Caldav-*`
-   headers are required per request. Config changes take effect on restart.
+   headers are required per request. In pro mode, stored credentials are
+   used for direct remotes and per-request headers for passthrough remotes.
+   Config changes take effect on restart.
 
 ## Supported CalDAV servers
 
@@ -404,8 +414,11 @@ docker compose up -d
 - Token comparison uses constant-time comparison to prevent timing attacks.
 - **When `CALDAV_MCP_API_KEY` is unset, the endpoint is open. Do not expose
   it to the public internet without authentication.**
+- In pro mode (`DB_CONFIG_ENABLED=true`), `CALDAV_MCP_API_KEY` is **ignored**.
+  Clients must send `X-Mcp-Username` plus `Authorization: Bearer <key>` (or
+  `X-Api-Key`). Verification uses PBKDF2-HMAC-SHA256 against stored hashes.
 
-**CalDAV credentials** are resolved in one of two mutually exclusive modes:
+**CalDAV credentials** are resolved in one of three mutually exclusive modes:
 
 - **Environment mode** (`CALDAV_URL` is set): all credentials come from
   environment variables (`CALDAV_URL`, `CALDAV_USERNAME`, `CALDAV_PASSWORD`).
@@ -413,6 +426,9 @@ docker compose up -d
 - **Header mode** (`CALDAV_URL` is unset): credentials are read from
   `X-Caldav-Url`, `X-Caldav-Username`, `X-Caldav-Password` request headers,
   which are required on every request.
+- **Pro mode** (`DB_CONFIG_ENABLED=true`): credentials come from the SQLite
+  store. Direct remotes use stored credentials; passthrough remotes use
+  per-request `X-Caldav-*` headers. See [Pro mode](#pro-mode).
 
 No per-field mixing. `X-Caldav-Username` and `X-Caldav-Password` are
 reserved for a future passthrough mode and are ignored when `CALDAV_URL` is set.
@@ -460,8 +476,13 @@ SQLite config store at startup, enabling multi-user, multi-account deployments.
   `Authorization: Bearer <key>` (or `X-Api-Key`). The `CALDAV_MCP_API_KEY`
   env var is **ignored** — only DB-stored user credentials are accepted.
 - **Fan-out reads**: Parameterless read tools (e.g. `caldav_list_calendars`,
-  `caldav_get_events`) fan out across all accessible remotes and aggregate
-  results per-remote.
+  `caldav_get_events`) fan out sequentially across all accessible remotes
+  and aggregate results per-remote. One remote's failure never masks others'
+  results.
+- **Partial-failure reporting**: Each scope produces an entry with a status
+  (`ok`, `empty`, `auth`, `error`, `not_found`). The top-level result is `OK`
+  when at least one scope succeeds, `ERROR` when all fail, and `EMPTY` when
+  there are zero accessible calendars.
 - **Dotted-path writes**: Write tools require a `config.remote.calendar`
   dotted path (e.g. `main.radicale.work`) to uniquely identify the target
   calendar. Plain calendar names are rejected.
@@ -476,7 +497,48 @@ SQLite config store at startup, enabling multi-user, multi-account deployments.
 | `CALDAV_MCP_DB_PATH` | Path to the SQLite config store |
 | `CALDAV_MCP_CONFIG_SECRET` | Master secret for credential encryption |
 
-See [`docs/cli.md`](docs/cli.md) for building the store with the CLI.
+See [`docs/cli.md`](docs/cli.md) for building the store with the CLI. The same
+`CALDAV_MCP_CONFIG_SECRET` must be used by both the CLI and the server.
+
+#### Deploying the SQLite store
+
+The config store is a SQLite file on disk. Mount it into the container using
+a named volume or a bind mount:
+
+```yaml
+# docker-compose.yaml — named volume example
+services:
+  caldav-mcp:
+    volumes:
+      - caldav-config:/data
+    environment:
+      CALDAV_MCP_DB_PATH: /data/store.db
+      CALDAV_MCP_CONFIG_SECRET: ${CALDAV_MCP_CONFIG_SECRET}
+
+volumes:
+  caldav-config:
+```
+
+```bash
+# Bind-mount example
+docker run -d \
+  -v /host/path/store.db:/data/store.db \
+  -e CALDAV_MCP_DB_PATH=/data/store.db \
+  -e CALDAV_MCP_CONFIG_SECRET=your-secret \
+  -e DB_CONFIG_ENABLED=true \
+  ghcr.io/gelse/caldav-mcp:latest
+```
+
+Initialize the store before first start:
+
+```bash
+export CALDAV_MCP_CONFIG_SECRET=your-secret
+caldav-mcp-config --db store.db config add --name work
+caldav-mcp-config --db store.db user add --username alice --key mykey
+```
+
+After modifying the store (adding/removing configs, users, or remotes),
+**restart the server** to pick up changes.
 
 ### Deployment recommendations
 
@@ -500,9 +562,9 @@ Pydantic.
 | `CALDAV_MCP_PATH` | `/mcp` | Streamable HTTP endpoint path |
 | `CALDAV_MCP_API_KEY` | `""` (disabled) | Shared secret for MCP endpoint auth |
 | `CALDAV_MCP_READ_ONLY` | `false` | Hide write tools; only query tools are exposed when `true` |
-| `CALDAV_MCP_CONFIG_SECRET` | `""` | Master key for encrypting CalDAV passwords in the SQLite config store at rest (config store / CLI; pro mode planned). CLI encrypts, server decrypts. Changing it invalidates stored ciphertexts. |
-| `CALDAV_MCP_DB_PATH` | `""` | Path to the SQLite configuration store (config store / CLI; pro mode planned). Used by the CLI; `--db` flag takes precedence. |
-| `DB_CONFIG_ENABLED` | `false` | Enable pro mode: load config and users from the SQLite store; requires CALDAV_MCP_DB_PATH and CALDAV_MCP_CONFIG_SECRET; CALDAV_MCP_API_KEY is ignored. |
+| `CALDAV_MCP_CONFIG_SECRET` | `""` | Master secret for encrypting CalDAV passwords at rest in the SQLite store. Required by the CLI (encrypt) and server (decrypt). Changing it invalidates stored ciphertexts. |
+| `CALDAV_MCP_DB_PATH` | `""` | Path to the SQLite configuration store. Required by the CLI and by the server in pro mode; `--db` CLI flag takes precedence. |
+| `DB_CONFIG_ENABLED` | `false` | Enable pro mode: load config and users from the SQLite store; requires `CALDAV_MCP_DB_PATH` and `CALDAV_MCP_CONFIG_SECRET`; `CALDAV_MCP_API_KEY` is ignored. |
 | `TZ` | `""` (UTC) | IANA timezone (e.g. `Europe/Vienna`) for today/week boundaries |
 
 </details>
@@ -555,6 +617,10 @@ caldav-mcp includes a SQLite-backed configuration store and a CLI tool
 (`caldav-mcp-config`) for managing users, configs, remotes, and calendars.
 This is a building block for multi-user deployments — see
 [`docs/cli.md`](docs/cli.md) for the full CLI reference.
+
+The `CALDAV_MCP_CONFIG_SECRET` must match between CLI and server: the CLI
+encrypts passwords with this secret, and the server decrypts them on startup.
+Changing the secret invalidates all stored ciphertexts.
 
 > **Note:** In simple mode, CalDAV credentials are resolved from environment
 > variables or per-request headers. In pro mode (`DB_CONFIG_ENABLED=true`),
@@ -619,11 +685,19 @@ caldav-mcp/
 │   │   ├── queries.py        #   Read-only tools (7)
 │   │   ├── mutations.py      #   Write tools (4)
 │   │   └── attendees.py      #   Attendee management (3)
+│   ├── app_config.py         # Read-only startup config singleton (env/header/db modes)
 │   ├── auth.py               # Two-layer auth (API key + CalDAV creds)
 │   ├── calendar.py           # CalDAV calendar selection & serialization
 │   ├── client_cache.py       # Thread-safe LRU cache for DAVClient
 │   ├── config.py             # Env var parsing, header constants
 │   ├── config_schema.py      # Pydantic startup validation
+│   ├── config_store.py       # SQLite-backed configuration store
+│   ├── config_cli.py         # CLI for managing the config store
+│   ├── config_crypto.py      # Fernet encryption for stored credentials
+│   ├── db_loader.py          # Pro-mode DB loader (store → AppConfig + users)
+│   ├── fanout.py             # Fan-out executor, per-remote aggregation
+│   ├── addressing.py         # Dotted-path calendar addressing (pro mode)
+│   ├── key_hash.py           # PBKDF2-HMAC-SHA256 key hashing
 │   ├── datetime_utils.py     # Date/time parsing, timezone helpers
 │   ├── errors.py             # Typed exceptions, ToolResult dataclass
 │   ├── event_builder.py      # Pure iCalendar VEVENT construction

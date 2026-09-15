@@ -26,12 +26,19 @@ caldav-mcp/
 │   │   ├── queries.py           #   Read-only tools
 │   │   ├── mutations.py         #   Write tools
 │   │   └── attendees.py         #   Attendee management
-│   ├── app_config.py            # Read-only startup config singleton — single source of connection/calendar data
+│   ├── app_config.py            # Read-only startup config singleton (env/header/db modes)
 │   ├── auth.py                  # Two-layer auth (API key + CalDAV creds)
 │   ├── calendar.py              # CalDAV calendar selection & serialization
 │   ├── client_cache.py          # Thread-safe LRU cache for DAVClient
 │   ├── config.py                # Env var parsing, header constants
 │   ├── config_schema.py         # Pydantic startup validation
+│   ├── config_store.py          # SQLite-backed configuration store
+│   ├── config_cli.py            # CLI for managing the config store
+│   ├── config_crypto.py         # Fernet encryption for stored credentials
+│   ├── db_loader.py             # Pro-mode DB loader (store → AppConfig + users)
+│   ├── fanout.py                # Fan-out executor, per-remote aggregation
+│   ├── addressing.py            # Dotted-path calendar addressing (pro mode)
+│   ├── key_hash.py              # PBKDF2-HMAC-SHA256 key hashing
 │   ├── datetime_utils.py        # Date/time parsing, timezone helpers
 │   ├── errors.py                # Typed exceptions, ToolResult dataclass
 │   ├── event_builder.py         # Pure iCalendar VEVENT construction
@@ -58,7 +65,7 @@ caldav-mcp/
 | `caldav_list_calendars` | List available calendars |
 | `caldav_get_events` | Get events in date range |
 | `caldav_get_today_events` | Events for today |
-| `caldav_get_week_events` | Events for current week |
+| `caldav_get_week_events` | Events for the next 7 days |
 | `caldav_get_event_by_uid` | Single event by UID |
 | `caldav_search_events` | Text search across events |
 | `caldav_get_freebusy` | Free/busy information |

@@ -9,9 +9,19 @@ All requests to `/mcp` require authentication when `CALDAV_MCP_API_KEY` is set (
 | `Authorization: Bearer <token>` | Yes | API key (simple mode) or DB user key (pro mode) |
 | `X-Api-Key: <token>` | Alternative | Same as Bearer; either header is accepted |
 | `X-Mcp-Username` | Pro mode only | DB username; required when `DB_CONFIG_ENABLED=true` |
-| `X-Caldav-Url` | Header mode only | CalDAV server URL (when `CALDAV_URL` is unset) |
-| `X-Caldav-Username` | Header mode only | CalDAV username (when `CALDAV_URL` is unset) |
-| `X-Caldav-Password` | Header mode only | CalDAV password (when `CALDAV_URL` is unset) |
+| `X-Caldav-Url` | Header mode / passthrough | CalDAV server URL (required in header mode; used for passthrough remotes in pro mode; ignored in env mode) |
+| `X-Caldav-Username` | Header mode / passthrough | CalDAV username (same semantics as `X-Caldav-Url`) |
+| `X-Caldav-Password` | Header mode / passthrough | CalDAV password (same semantics as `X-Caldav-Url`) |
+
+**Header semantics by mode:**
+
+| Mode | `X-Caldav-*` behavior |
+|------|----------------------|
+| Env (`CALDAV_URL` set) | Ignored entirely |
+| Header (`CALDAV_URL` unset) | Required on every request — all three headers |
+| Pro (`DB_CONFIG_ENABLED=true`) | Used only for passthrough remotes; ignored for direct remotes |
+
+`X-Caldav-Username` and `X-Caldav-Password` are reserved for a future passthrough mode and are ignored when `CALDAV_URL` is set.
 
 ## Addressing model
 
@@ -19,34 +29,82 @@ All requests to `/mcp` require authentication when `CALDAV_MCP_API_KEY` is set (
 
 **Pro mode** (`DB_CONFIG_ENABLED=true`): write tools require a dotted-path identifier in the form `config.remote.calendar` (e.g. `"main.radicale.work"`). Plain names are rejected with an error. For parameterless read tools (e.g. `caldav_list_calendars`), an empty `calendar_name` fans out across all accessible remotes and calendars. A dotted path narrows the query to a single calendar.
 
+Dotted paths have exactly three dot-separated segments. Config, remote, and calendar names must not contain dots (enforced by the store's charset regex). See [`docs/cli.md`](cli.md) for managing configs, remotes, and calendars.
+
 ## Aggregated read results (pro mode)
 
-Read tools fan out across every accessible remote and return one entry per `(config, remote, calendar)` pair. Each entry is addressed by the dotted path components and carries the tool's own payload under `data`. The top-level `message` is a per-remote summary; `status` is `ok` when at least one entry succeeded, `error` when all failed, and `empty` when nothing matched.
+Read tools fan out across every accessible remote and return one entry per `(config, remote, calendar)` pair. Each entry is addressed by the dotted path components (`config_name`, `remote_name`, `calendar_name`) and carries either the tool's own payload under `data` or, on failure, an `error` string. The per-entry status vocabulary below is what the rendered `message` reports for each remote — it is not a separate JSON field on each entry.
+
+### Per-entry status vocabulary
+
+| Status | Meaning |
+|--------|---------|
+| `ok` | Success — data returned |
+| `empty` | Success — no matching data (zero results) |
+| `auth` | `AuthError` — missing or invalid CalDAV credentials |
+| `not_found` | `NotFoundError` — calendar or event does not exist |
+| `error` | Any other exception |
+
+### Top-level status
+
+- `status`: `ok` when at least one entry succeeded, `error` when all failed, `empty` for zero accessible calendars.
+- `message`: human-readable per-remote summary (see rendered format below).
+
+### Example: `caldav_get_events` with partial failure
 
 ```json
 {
   "status": "ok",
-  "message": "radicale: 1 ok; radicale-mirror: 1 ok",
+  "message": "OK Fan-out across 3 scopes: 2 ok, 1 error\n- [ok] work.nextcloud: 2 calendars\n- [error] work.radicale: connection refused",
   "data": [
     {
-      "config_name": "main",
-      "remote_name": "radicale",
-      "calendar_name": "personal",
-      "data": [{"name": "personal", "url": "http://radicale:5232/userA/…/"}],
-      "error": null
+      "config_name": "work",
+      "remote_name": "nextcloud",
+      "calendar_name": "meetings",
+      "data": [
+        {"uid": "evt-1@nextcloud", "summary": "Sprint planning", "dtstart": "2026-09-15T10:00:00", "dtend": "2026-09-15T11:00:00"}
+      ]
     },
     {
-      "config_name": "mirror",
-      "remote_name": "radicale-mirror",
-      "calendar_name": "shared",
-      "data": [{"name": "shared", "url": "http://radicale:5232/userB/…/"}],
-      "error": null
+      "config_name": "work",
+      "remote_name": "nextcloud",
+      "calendar_name": "personal",
+      "data": [
+        {"uid": "evt-2@nextcloud", "summary": "Dentist", "dtstart": "2026-09-16T14:00:00", "dtend": "2026-09-16T15:00:00"}
+      ]
+    },
+    {
+      "config_name": "work",
+      "remote_name": "radicale",
+      "calendar_name": "personal",
+      "error": "connection refused"
     }
   ]
 }
 ```
 
-A failing scope keeps the same entry shape with `data: null` and an `error` string, so partial failures remain addressable. Per-remote partial-failure status design is deferred to M5.
+### Rendered message format
+
+The `message` field is produced by `render_fanout_message` and always follows this structure:
+
+1. **First line**: top-level tag (`OK` / `ERROR:[server]`) + scope count + ok/error counts
+2. **Detail lines**: one `- [status] config.remote: detail` line per remote in declaration order
+
+When a remote spans several calendars, entries are grouped into a single line with a count (e.g. `2 calendars`). On failure, the detail is the exception text. Mixed outcomes within one remote use severity-based status (highest: `error` > `auth` > `not_found`).
+
+```
+OK Fan-out across 3 scopes: 2 ok, 1 error
+- [ok] work.nextcloud: 2 calendars
+- [error] work.radicale: connection refused
+```
+
+For all-failed results, the first line uses the `ERROR:[server]` tag:
+
+```
+ERROR:[server] Fan-out across 2 scopes: 2 error
+- [auth] work.nextcloud: unauthorized - missing credentials
+- [error] work.radicale: connection refused
+```
 
 ## MCP Tools
 
