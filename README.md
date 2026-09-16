@@ -107,7 +107,7 @@ Client-specific config files (Claude Desktop, Claude Code, Cursor, VS Code, Open
 caldav-mcp is Python-based (not Node), so npx is not an option. Docker means:
 
 - No local Python, venv, or dependency management — the pre-built image has everything pinned.
-- Multi-arch support — runs anywhere Docker runs.
+- Pinned dependencies — the image is built once in CI with fully pinned requirements, identical on every host.
 - One container shared by your entire homelab or team, serving multiple AI clients.
 
 ## The 14 tools
