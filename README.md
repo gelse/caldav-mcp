@@ -2,11 +2,7 @@
 
 **Give AI assistants full read/write access to any CalDAV calendar.**
 
-A self-hosted bridge between Model Context Protocol clients and your CalDAV
-infrastructure. Connect Claude, Codex, Cursor, VS Code, and other AI assistants
-to Nextcloud, Radicale, Baikal, and any RFC 4791 calendar server. Query events,
-create meetings, manage attendees, and move events between calendars — all
-through a single Docker container with no database and no external dependencies.
+A self-hosted MCP bridge between AI assistants and CalDAV servers. Connect Claude, Cursor, VS Code, and others to Nextcloud, Radicale, Baikal, and any RFC 4791 server through a single Docker container.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org)
@@ -15,189 +11,57 @@ through a single Docker container with no database and no external dependencies.
 [![Release](https://img.shields.io/github/v/release/gelse/caldav-mcp)](https://github.com/gelse/caldav-mcp/releases)
 [![M8ven Score](https://m8ven.ai/badge/mcp/gelse-caldav-mcp-p1nzjs?v=90357b3ccae3ec55ec82a3b6459ff45c)](https://m8ven.ai/mcp/gelse-caldav-mcp-p1nzjs)
 
-## What it does
+## What problem does it solve
 
-caldav-mcp gives your AI assistant direct access to your calendar. Instead of
-copy-pasting events or switching tabs, ask your assistant to do it:
+Bridges any MCP-compatible AI client (Claude, Cursor, VS Code, Codex, …) to
+any RFC 4791 CalDAV server (Nextcloud, Radicale, Baikal, …) so the assistant
+can read and write your calendar directly.
 
-- **"What's on my calendar tomorrow?"** → [`caldav_get_today_events`](caldav_mcp/tools/queries.py)
-- **"Find my next dentist appointment."** → [`caldav_search_events`](caldav_mcp/tools/queries.py)
-- **"Create a meeting next Tuesday at 14:00."** → [`caldav_create_event`](caldav_mcp/tools/mutations.py)
-- **"Move this event to my personal calendar."** → [`caldav_move_event`](caldav_mcp/tools/mutations.py)
-- **"When am I free next week?"** → [`caldav_get_freebusy`](caldav_mcp/tools/queries.py)
-- **"Add Alice and Bob to this event."** → [`caldav_add_attendee`](caldav_mcp/tools/attendees.py)
-- **"Delete the duplicate appointment."** → [`caldav_delete_event`](caldav_mcp/tools/mutations.py)
+Ask your assistant:
 
-## Why caldav-mcp
+- **"What's on my calendar tomorrow?"** — [`caldav_get_today_events`](caldav_mcp/tools/queries.py)
+- **"Create a meeting next Tuesday at 14:00."** — [`caldav_create_event`](caldav_mcp/tools/mutations.py)
+- **"Move this event to my personal calendar."** — [`caldav_move_event`](caldav_mcp/tools/mutations.py)
+- **"When am I free next week?"** — [`caldav_get_freebusy`](caldav_mcp/tools/queries.py)
 
-| | |
-|---|---|
-| **Self-hosted AI assistants** | Keep your AI calendar access on your own infrastructure. No third-party SaaS, no data leaves your network. |
-| **Nextcloud / Radicale / Baikal integration** | Works with any RFC 4791 CalDAV server. Radicale is integration-tested in CI, Nextcloud is used in development. Baikal, ownCloud, iCloud, and Fastmail are protocol-compatible. |
-| **Centralized MCP infrastructure** | One server instance for your entire homelab or team. Multiple AI clients connect to the same endpoint. |
-| **Multiple CalDAV accounts** | Credentials travel per-request in HTTP headers — a single server serves different CalDAV accounts without restarts or reconfiguration. |
-| **Docker / homelab deployment** | One Docker image, one `docker compose up`. No database, no background workers, no sidecars. Runs anywhere Docker runs. |
-| **Full read/write access** | 14 focused tools covering calendar discovery, event queries, creation, updates, deletion, moves, and attendee management. |
-| **Security built in** | Optional API-key authentication with constant-time comparison, per-IP rate limiting with exponential backoff, input sanitization, and structured audit logging. |
+## What it does NOT do
 
-## How it works
-
-```mermaid
-flowchart LR
-    subgraph "MCP Client"
-        AI["AI / MCP Client\n(Claude, Cursor, VS Code, …)"]
-    end
-
-    subgraph "caldav-mcp"
-        EP["/mcp\nStreamable HTTP"]
-        AK["API Key Auth\n(optional)"]
-        RL["Per-IP Rate\nLimiting"]
-    end
-
-    subgraph "CalDAV Providers"
-        N["Nextcloud"]
-        R["Radicale"]
-        B["Baikal"]
-    end
-
-    AI -- "Streamable HTTP\n+ headers" --> EP
-    EP --> AK
-    EP --> RL
-    EP -- "CalDAV protocol" --> N
-    EP -- "CalDAV protocol" --> R
-    EP -- "CalDAV protocol" --> B
-```
-
-### Stateless, per-request architecture
-
-The server maintains **no session state** between requests. CalDAV credentials
-are resolved through a read-only config singleton loaded once at startup.
-The singleton encodes three mutually exclusive modes:
-
-- **Environment mode** — set `CALDAV_URL`, `CALDAV_USERNAME`,
-  `CALDAV_PASSWORD` as environment variables. The `X-Caldav-*` request
-  headers are ignored entirely. `X-Caldav-Username` and `X-Caldav-Password`
-  are reserved for a future passthrough mode. This is the simplest setup
-  for single-account deployments.
-- **Header mode** — omit the environment variables and send
-  `X-Caldav-Url`, `X-Caldav-Username`, `X-Caldav-Password` on every
-  request. This allows a single server instance to serve multiple
-  CalDAV accounts without restarts or reconfiguration.
-- **Pro mode** (`DB_CONFIG_ENABLED=true`) — configuration and users are
-  loaded from a SQLite store at startup. Multiple named configs and
-  remotes can coexist; read tools fan out across all accessible remotes
-  and aggregate results per-remote. Write tools require a
-  `config.remote.calendar` dotted path. See [Pro mode](#pro-mode) below.
-
-No per-field mixing between modes: either all three credentials come from the
-environment, or all three come from the request headers, or they come from
-the stored config. In pro mode, request `X-Caldav-*` headers apply only to
-passthrough remotes.
-
-- **Stateless design** — the only in-memory state is a thread-safe LRU cache
-  of CalDAV client connections and a rate limiter.
-
-Two authentication layers sit between the client and the CalDAV server:
-
-1. **MCP endpoint auth** — optional API key via `Authorization: Bearer` or
-   `X-Api-Key` header. When `CALDAV_MCP_API_KEY` is unset, the endpoint is
-   open. In pro mode, DB-user credentials replace the env API key (see
-   [Pro mode](#pro-mode)). Protects the MCP endpoint itself.
-2. **CalDAV credentials** — resolved from the read-only config singleton
-   (`caldav_mcp.app_config`). In environment mode (`CALDAV_URL` set),
-   credentials come from environment variables and request headers are
-   ignored. In header mode (`CALDAV_URL` unset), the three `X-Caldav-*`
-   headers are required per request. In pro mode, stored credentials are
-   used for direct remotes and per-request headers for passthrough remotes.
-   Config changes take effect on restart.
-
-## Supported CalDAV servers
-
-| Provider / Server | Status |
-| --- | --- |
-| [Radicale](https://radicale.org/) | Integration-tested (CI pipeline) |
-| [Nextcloud](https://nextcloud.com/) | Known to work (used in development) |
-| [Baikal](https://github.com/sabre-io/Baikal) | Protocol-compatible |
-| [ownCloud](https://owncloud.com/) | Protocol-compatible |
-| [iCloud](https://www.icloud.com/) | Protocol-compatible |
-| [Fastmail](https://www.fastmail.com/) | Protocol-compatible |
-| Other RFC 4791 CalDAV servers | Protocol-compatible |
-
-Any server that implements the [CalDAV standard (RFC 4791)](https://datatracker.ietf.org/doc/html/rfc4791)
-should work. If it doesn't, [open an issue](https://github.com/gelse/caldav-mcp/issues).
-
-## MCP tools (14)
-
-The server exposes 14 MCP tools across three categories.
-
-<details>
-<summary><strong>Calendar & queries (7)</strong></summary>
-
-| Tool | Description |
-| --- | --- |
-| [`caldav_list_calendars`](caldav_mcp/tools/queries.py) | List all available calendars for the configured account |
-| [`caldav_get_events`](caldav_mcp/tools/queries.py) | Get events in a date range |
-| [`caldav_get_today_events`](caldav_mcp/tools/queries.py) | Get events for today |
-| [`caldav_get_week_events`](caldav_mcp/tools/queries.py) | Get events for the next 7 days |
-| [`caldav_get_event_by_uid`](caldav_mcp/tools/queries.py) | Get a specific event by UID, including attendees |
-| [`caldav_search_events`](caldav_mcp/tools/queries.py) | Find events by text across summary, description, location, and categories |
-| [`caldav_get_freebusy`](caldav_mcp/tools/queries.py) | Get free/busy information for a time range |
-
-</details>
-
-<details>
-<summary><strong>Event management (4)</strong></summary>
-
-| Tool | Description |
-| --- | --- |
-| [`caldav_create_event`](caldav_mcp/tools/mutations.py) | Create a new event — supports recurring rules, priority, categories, and attendees |
-| [`caldav_update_event`](caldav_mcp/tools/mutations.py) | Partially update an existing event by UID |
-| [`caldav_delete_event`](caldav_mcp/tools/mutations.py) | Delete an event by UID |
-| [`caldav_move_event`](caldav_mcp/tools/mutations.py) | Move an event between calendars |
-
-</details>
-
-<details>
-<summary><strong>Attendees (3)</strong></summary>
-
-| Tool | Description |
-| --- | --- |
-| [`caldav_add_attendee`](caldav_mcp/tools/attendees.py) | Add an attendee to an event |
-| [`caldav_remove_attendee`](caldav_mcp/tools/attendees.py) | Remove an attendee from an event |
-| [`caldav_list_attendees`](caldav_mcp/tools/attendees.py) | List attendees of an event |
-
-</details>
-
-Full API documentation: [`docs/api.md`](docs/api.md).
+- **No stdio transport** — Streamable HTTP only. To use stdio, modify [`server.py`](server.py) to call `mcp.run()` instead of `mcp.run_http_async()`.
+- **Not a CalDAV server** — you need an existing CalDAV server (Nextcloud, Radicale, Baikal, etc.).
+- **No iTIP/imip scheduling** — attendees are stored on events, but no email invitations or scheduling messages are sent.
+- **Client-side search** — [`caldav_search_events`](caldav_mcp/tools/queries.py) fetches all events and filters locally. Works well for small-to-medium calendars; may be slow on very large ones.
+- **Non-atomic move** — [`caldav_move_event`](caldav_mcp/tools/mutations.py) copies the event then deletes the original. A failure after copy leaves a duplicate (the safer failure mode).
+- **No hot-reload** — config changes require a server restart. The store is frozen into an immutable singleton at startup.
+- **Self-hosted only** — not a SaaS. You run and operate the server yourself.
 
 ## Quick start
 
-### 1. Pull and run
+### docker-compose
 
-Pull the latest image:
-
-```bash
-docker pull ghcr.io/gelse/caldav-mcp:latest
+```yaml
+services:
+  caldav-mcp:
+    image: ghcr.io/gelse/caldav-mcp:latest
+    ports:
+      - "8600:8080"
+    environment:
+      CALDAV_URL: https://cloud.example.com/remote.php/dav/calendars/user/
+      CALDAV_USERNAME: user
+      CALDAV_PASSWORD: app-password
+      CALDAV_MCP_API_KEY: your-secret-token
+      TZ: Europe/Vienna
 ```
 
-Then run it directly (replace the environment variables with your values):
-
 ```bash
-docker run -d \
-  -p 8600:8080 \
-  -e CALDAV_URL=https://cloud.example.com/remote.php/dav/calendars/user/ \
-  -e CALDAV_USERNAME=user \
-  -e CALDAV_PASSWORD=app-password \
-  -e CALDAV_MCP_API_KEY=your-secret-token \
-  -e TZ=Europe/Vienna \
-  ghcr.io/gelse/caldav-mcp:latest
+docker compose up -d
 ```
 
-> **Note:** The `CALDAV_URL`, `CALDAV_USERNAME`, and `CALDAV_PASSWORD` environment variables are optional. When set, all three are used and `X-Caldav-*` request headers are ignored (environment mode). When omitted, CalDAV credentials must be sent per-request via the `X-Caldav-Url`, `X-Caldav-Username`, and `X-Caldav-Password` HTTP headers (header mode) — see [MCP client configuration](#mcp-client-configuration).
+> **Note:** `CALDAV_URL`, `CALDAV_USERNAME`, and `CALDAV_PASSWORD` are
+> optional. When set, `X-Caldav-*` request headers are ignored (environment
+> mode). When omitted, send `X-Caldav-Url`, `X-Caldav-Username`, and
+> `X-Caldav-Password` headers per request (header mode).
 
-The server is now running at `http://localhost:8600/mcp` (Streamable HTTP).
-
-### 2. Verify
+### Verify
 
 ```bash
 curl -s http://localhost:8600/mcp \
@@ -208,12 +72,7 @@ curl -s http://localhost:8600/mcp \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}'
 ```
 
-## MCP client configuration
-
-> **Streamable HTTP only** — the server does not support stdio transport.
-> Any MCP client that supports Streamable HTTP can connect.
-
-The standard configuration format with per-request CalDAV credentials:
+### MCP client config
 
 ```json
 {
@@ -232,516 +91,129 @@ The standard configuration format with per-request CalDAV credentials:
 }
 ```
 
-### Client-specific configuration
+Client-specific config files (Claude Desktop, Claude Code, Cursor, VS Code, OpenCode, OpenWebUI): see [`docs/clients.md`](docs/clients.md).
 
-#### Claude Desktop
+## Why this over other MCP calendar servers
 
-Config file location:
+- **Self-hosted** — no data leaves your network. No third-party SaaS.
+- **Stateless single container** — no database, no sidecars. Optional SQLite store for pro mode.
+- **Any RFC 4791 server** — Radicale CI-integration-tested, Nextcloud used in development. Baikal, ownCloud, iCloud, Fastmail are protocol-compatible.
+- **Multi-account without restarts** — credentials travel per-request in HTTP headers.
+- **Pro mode** — optional SQLite store with per-user keys, fan-out reads across multiple remotes. See [`docs/pro-mode.md`](docs/pro-mode.md).
+- **Security built in** — optional API key auth, per-IP rate limiting, structured audit logging, read-only mode.
 
-- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
-- **Linux**: `~/.config/Claude/claude_desktop_config.json`
+## Why Docker (not npx)
 
-Uses the `mcpServers` key. Custom Connectors added via the UI require a paid plan.
+caldav-mcp is Python-based (not Node), so npx is not an option. Docker means:
 
-#### Claude Code
+- No local Python, venv, or dependency management — the pre-built image has everything pinned.
+- Multi-arch support — runs anywhere Docker runs.
+- One container shared by your entire homelab or team, serving multiple AI clients.
 
-Config file locations:
+## The 14 tools
 
-- **Global**: `~/.claude/settings.json`
-- **Project**: `.mcp.json` (in project root)
+**Queries (7)** — read-only
 
-Uses the `mcpServers` key. You can also add via CLI:
+| Tool | Description |
+|------|-------------|
+| [`caldav_list_calendars`](caldav_mcp/tools/queries.py) | List all available calendars |
+| [`caldav_get_events`](caldav_mcp/tools/queries.py) | Get events in a date range |
+| [`caldav_get_today_events`](caldav_mcp/tools/queries.py) | Get events for today |
+| [`caldav_get_week_events`](caldav_mcp/tools/queries.py) | Get events for the next 7 days |
+| [`caldav_get_event_by_uid`](caldav_mcp/tools/queries.py) | Get a specific event by UID |
+| [`caldav_search_events`](caldav_mcp/tools/queries.py) | Find events by text |
+| [`caldav_get_freebusy`](caldav_mcp/tools/queries.py) | Get free/busy information |
 
-```bash
-claude mcp add --transport http caldav http://localhost:8600/mcp
-```
+**Mutations (4)** — write
 
-> **Note**: The CLI does not support setting custom headers. Add the
-> `headers` block manually in the JSON config after using the CLI command.
+| Tool | Description |
+|------|-------------|
+| [`caldav_create_event`](caldav_mcp/tools/mutations.py) | Create a new event |
+| [`caldav_update_event`](caldav_mcp/tools/mutations.py) | Partially update an existing event |
+| [`caldav_delete_event`](caldav_mcp/tools/mutations.py) | Delete an event |
+| [`caldav_move_event`](caldav_mcp/tools/mutations.py) | Move an event between calendars |
 
-#### Cursor
+**Attendees (3)**
 
-Config file locations:
+| Tool | Description |
+|------|-------------|
+| [`caldav_add_attendee`](caldav_mcp/tools/attendees.py) | Add an attendee to an event |
+| [`caldav_remove_attendee`](caldav_mcp/tools/attendees.py) | Remove an attendee from an event |
+| [`caldav_list_attendees`](caldav_mcp/tools/attendees.py) | List attendees of an event |
 
-- **Project**: `.cursor/mcp.json`
-- **Global**: `~/.cursor/mcp.json`
-
-Uses the `mcpServers` key.
-
-#### VS Code
-
-Config file location: `.vscode/mcp.json`
-
-**Uses the `servers` key**, not `mcpServers`:
-
-```json
-{
-  "servers": {
-    "caldav": {
-      "type": "http",
-      "url": "http://localhost:8600/mcp",
-      "headers": {
-        "Authorization": "Bearer YOUR_API_KEY",
-        "X-Caldav-Url": "https://cloud.example.com/remote.php/dav/calendars/user/",
-        "X-Caldav-Username": "user",
-        "X-Caldav-Password": "app-password"
-      }
-    }
-  }
-}
-```
-
-#### OpenCode
-
-Config file location: project root (e.g. `opencode.json`).
-
-Uses the `mcpServers` key with the standard format shown above.
-
-#### OpenWebUI
-
-Configure via **Admin Panel → Settings → Connections**. Add the MCP server
-URL and headers through the UI.
-
-### Multiple CalDAV accounts
-
-Because credentials travel per-request in HTTP headers, a single server
-instance can serve multiple CalDAV accounts. Configure each MCP client
-connection with different `X-Caldav-*` headers.
-
-## Deployment
-
-### Install from a release
-
-```bash
-# Clone at a specific version
-git clone --branch v0.1.0 https://github.com/gelse/caldav-mcp.git
-cd caldav-mcp
-cp .env.example .env
-# Edit .env with your CalDAV credentials
-docker compose up -d
-```
-
-### Using the public Docker image
-
-Docker image releases are published to the
-[GitHub Container Registry](https://github.com/gelse/caldav-mcp/pkgs/container/caldav-mcp).
-Pull the latest image:
-
-```bash
-docker pull ghcr.io/gelse/caldav-mcp:latest
-```
-
-Then run it directly (replace the environment variables with your values):
-
-```bash
-docker run -d \
-  -p 8600:8080 \
-  -e CALDAV_URL=https://cloud.example.com/remote.php/dav/calendars/user/ \
-  -e CALDAV_USERNAME=user \
-  -e CALDAV_PASSWORD=app-password \
-  -e CALDAV_MCP_API_KEY=your-secret-token \
-  -e TZ=Europe/Vienna \
-  ghcr.io/gelse/caldav-mcp:latest
-```
-
-> **Note:** The CalDAV credentials (`CALDAV_URL`, `CALDAV_USERNAME`, `CALDAV_PASSWORD`) are optional. When set, all three are used and `X-Caldav-*` request headers are ignored (environment mode). When omitted, provide credentials per-request via the `X-Caldav-Url`, `X-Caldav-Username`, and `X-Caldav-Password` HTTP headers in your MCP client configuration (header mode) — see [MCP client configuration](#mcp-client-configuration).
-
-### Local / private deployment
-
-The simplest setup — AI client and caldav-mcp on the same machine:
-
-```
-AI Client → http://localhost:8600/mcp → CalDAV Server
-```
-
-```bash
-docker compose up -d
-```
-
-The server listens on `localhost:8600` and is not accessible from the
-network unless you explicitly publish the port.
-
-### Remote / shared deployment
-
-For multi-user or remote access, put the server behind a TLS-terminating
-reverse proxy:
-
-```
-AI Client → HTTPS → reverse proxy → caldav-mcp → CalDAV Server
-```
-
-```nginx
-server {
-    listen 443 ssl;
-    server_name caldav-mcp.example.com;
-
-    ssl_certificate     /etc/ssl/certs/caldav-mcp.pem;
-    ssl_certificate_key /etc/ssl/private/caldav-mcp-key.pem;
-
-    location /mcp {
-        proxy_pass http://127.0.0.1:8600/mcp;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
-```
-
-### Built-in TLS
-
-If you prefer not to use a reverse proxy, enable built-in TLS:
-
-```bash
-CALDAV_MCP_TLS_CERT=/path/to/cert.pem \
-CALDAV_MCP_TLS_KEY=/path/to/key.pem \
-docker compose up -d
-```
-
-> ⚠️ **Do not expose the MCP endpoint publicly without both authentication
-> and TLS.** Without `CALDAV_MCP_API_KEY` set, the endpoint is open. Without
-> TLS, all traffic — including API keys and CalDAV passwords — is transmitted
-> in plaintext.
+Full API docs: [`docs/api.md`](docs/api.md).
 
 ## Authentication & security
 
-### Authentication
+- **API key auth** — optional `CALDAV_MCP_API_KEY` with constant-time comparison. Pro mode uses PBKDF2-HMAC-SHA256 DB-stored keys.
+- **Rate limiting** — per-IP sliding window (default: 10 failures / 60 s), configurable via `CALDAV_MCP_RATE_LIMIT_MAX_FAILURES` and `CALDAV_MCP_RATE_LIMIT_WINDOW_SECONDS`.
+- **Audit logging** — all auth attempts and tool operations logged. Set `CALDAV_MCP_LOG_FORMAT=json` for structured output.
+- **Read-only mode** — `CALDAV_MCP_READ_ONLY=true` hides all write tools, leaving only the 8 read-only tools visible.
 
-**MCP endpoint auth** (`CALDAV_MCP_API_KEY`):
+## Configuration essentials
 
-- Every request to `/mcp` must include `Authorization: Bearer <token>` or
-  `X-Api-Key: <token>`.
-- Token comparison uses constant-time comparison to prevent timing attacks.
-- **When `CALDAV_MCP_API_KEY` is unset, the endpoint is open. Do not expose
-  it to the public internet without authentication.**
-- In pro mode (`DB_CONFIG_ENABLED=true`), `CALDAV_MCP_API_KEY` is **ignored**.
-  Clients must send `X-Mcp-Username` plus `Authorization: Bearer <key>` (or
-  `X-Api-Key`). Verification uses PBKDF2-HMAC-SHA256 against stored hashes.
-
-**CalDAV credentials** are resolved in one of three mutually exclusive modes:
-
-- **Environment mode** (`CALDAV_URL` is set): all credentials come from
-  environment variables (`CALDAV_URL`, `CALDAV_USERNAME`, `CALDAV_PASSWORD`).
-  `X-Caldav-*` request headers are ignored.
-- **Header mode** (`CALDAV_URL` is unset): credentials are read from
-  `X-Caldav-Url`, `X-Caldav-Username`, `X-Caldav-Password` request headers,
-  which are required on every request.
-- **Pro mode** (`DB_CONFIG_ENABLED=true`): credentials come from the SQLite
-  store. Direct remotes use stored credentials; passthrough remotes use
-  per-request `X-Caldav-*` headers. See [Pro mode](#pro-mode).
-
-No per-field mixing. `X-Caldav-Username` and `X-Caldav-Password` are
-reserved for a future passthrough mode and are ignored when `CALDAV_URL` is set.
-
-### TLS
-
-- **Option A**: Enable built-in TLS by setting `CALDAV_MCP_TLS_CERT` and
-  `CALDAV_MCP_TLS_KEY`. The server listens on HTTPS directly.
-- **Option B**: Run behind a TLS-terminating reverse proxy (Traefik, Caddy,
-  nginx).
-
-Without TLS, all traffic — including API keys and CalDAV passwords — is
-transmitted in plaintext.
-
-### Rate limiting
-
-Failed authentication attempts are tracked per client IP using a sliding-window
-rate limiter with exponential backoff. Defaults: 10 failures per 60-second
-window. Configurable via `CALDAV_MCP_RATE_LIMIT_MAX_FAILURES` and
-`CALDAV_MCP_RATE_LIMIT_WINDOW_SECONDS`.
-
-### Audit logging
-
-All authentication attempts and tool operations are logged. Set
-`CALDAV_MCP_LOG_FORMAT=json` for structured JSON output suitable for log
-aggregation systems.
-
-### Read-only mode
-
-Set `CALDAV_MCP_READ_ONLY=true` to hide all write tools (create, update,
-delete, move, add/remove attendee) at registration time.  In read-only mode
-only 8 read-only tools (the 7 query tools plus `caldav_list_attendees`) are
-visible to MCP clients, making it safe to expose the endpoint without risk of
-data modification.  The write-tool Python functions remain importable for unit
-tests regardless of this flag.
-
-### Pro mode
-
-Pro mode (`DB_CONFIG_ENABLED=true`) loads configuration and users from the
-SQLite config store at startup, enabling multi-user, multi-account deployments.
-
-**Key differences from simple mode:**
-
-- **DB-user auth**: Clients must send `X-Mcp-Username: <username>` plus
-  `Authorization: Bearer <key>` (or `X-Api-Key`). The `CALDAV_MCP_API_KEY`
-  env var is **ignored** — only DB-stored user credentials are accepted.
-- **Fan-out reads**: Parameterless read tools (e.g. `caldav_list_calendars`,
-  `caldav_get_events`) fan out sequentially across all accessible remotes
-  and aggregate results per-remote. One remote's failure never masks others'
-  results.
-- **Partial-failure reporting**: Each scope produces an entry with a status
-  (`ok`, `empty`, `auth`, `error`, `not_found`). The top-level result is `OK`
-  when at least one scope succeeds, `ERROR` when all fail, and `EMPTY` when
-  there are zero accessible calendars.
-- **Dotted-path writes**: Write tools require a `config.remote.calendar`
-  dotted path (e.g. `main.radicale.work`) to uniquely identify the target
-  calendar. Plain calendar names are rejected.
-- **Restart-to-apply**: Config changes require a server restart. The store
-  is read once at startup and frozen into an immutable `AppConfig`.
-
-**Required env vars** (all three must be set):
+Most users only need these:
 
 | Variable | Description |
 |----------|-------------|
-| `DB_CONFIG_ENABLED` | `true` to enable pro mode |
-| `CALDAV_MCP_DB_PATH` | Path to the SQLite config store |
-| `CALDAV_MCP_CONFIG_SECRET` | Master secret for credential encryption |
+| `CALDAV_URL` | CalDAV server URL (set = env mode; unset = header mode) |
+| `CALDAV_USERNAME` | CalDAV username (env mode) |
+| `CALDAV_PASSWORD` | CalDAV password (env mode) |
+| `CALDAV_MCP_API_KEY` | API key for endpoint auth (optional) |
+| `TZ` | IANA timezone for today/week boundaries (default: UTC) |
+| `CALDAV_MCP_READ_ONLY` | `true` to hide write tools |
 
-See [`docs/cli.md`](docs/cli.md) for building the store with the CLI. The same
-`CALDAV_MCP_CONFIG_SECRET` must be used by both the CLI and the server.
+**Credential modes:** environment variables (env mode), per-request `X-Caldav-*` headers (header mode), or SQLite store (pro mode). No per-field mixing — all three credentials come from the same source. Full reference: [`docs/configuration.md`](docs/configuration.md).
 
-#### Deploying the SQLite store
+**Pro mode** (`DB_CONFIG_ENABLED=true`): loads users and configs from a SQLite store at startup. Supports per-user keys, fan-out reads across multiple remotes, and dotted-path writes. Requires `CALDAV_MCP_DB_PATH` and `CALDAV_MCP_CONFIG_SECRET`. Config changes require a restart. Details: [`docs/pro-mode.md`](docs/pro-mode.md), [`docs/cli.md`](docs/cli.md).
 
-The config store is a SQLite file on disk. Mount it into the container using
-a named volume or a bind mount:
+## Documentation
 
-```yaml
-# docker-compose.yaml — named volume example
-services:
-  caldav-mcp:
-    volumes:
-      - caldav-config:/data
-    environment:
-      CALDAV_MCP_DB_PATH: /data/store.db
-      CALDAV_MCP_CONFIG_SECRET: ${CALDAV_MCP_CONFIG_SECRET}
+| Document | Contents |
+|----------|----------|
+| [`docs/api.md`](docs/api.md) | API reference — auth headers, addressing, aggregated results |
+| [`docs/clients.md`](docs/clients.md) | MCP client configuration (Claude Desktop, Cursor, VS Code, …) |
+| [`docs/cli.md`](docs/cli.md) | Config store CLI (`caldav-mcp-config`) |
+| [`docs/configuration.md`](docs/configuration.md) | Full env var reference, TLS, reverse proxy, deployment |
+| [`docs/pro-mode.md`](docs/pro-mode.md) | Pro mode — SQLite store, fan-out, per-user auth |
+| [`docs/architecture.md`](docs/architecture.md) | Architecture and design decisions |
+| [`docs/contributing.md`](docs/contributing.md) | Development setup, code style, architecture rules |
 
-volumes:
-  caldav-config:
-```
+## Known gaps & planned features
 
-```bash
-# Bind-mount example
-docker run -d \
-  -v /host/path/store.db:/data/store.db \
-  -e CALDAV_MCP_DB_PATH=/data/store.db \
-  -e CALDAV_MCP_CONFIG_SECRET=your-secret \
-  -e DB_CONFIG_ENABLED=true \
-  ghcr.io/gelse/caldav-mcp:latest
-```
+- Client-side search does not scale to very large calendars.
+- `caldav_move_event` is non-atomic (copy + delete; duplicate on failure).
+- Config changes require a server restart — no hot-reload yet.
+- No stdio transport — Streamable HTTP only.
+- Version `0.1.0` — pre-1.0, API may change between releases.
+- `X-Caldav-Username` / `X-Caldav-Password` passthrough mode reserved for future use.
+- Future: hot-reload, pro-mode enhancements (see [`ideas/`](ideas/)).
 
-Initialize the store before first start:
+## FAQ
 
-```bash
-export CALDAV_MCP_CONFIG_SECRET=your-secret
-caldav-mcp-config --db store.db config add --name work
-caldav-mcp-config --db store.db user add --username alice --key mykey
-```
+**I get `ERROR:[auth] unauthorized`** — Set `CALDAV_MCP_API_KEY` and include
+`Authorization: Bearer <token>` (or `X-Api-Key`) in every request. When
+`CALDAV_MCP_API_KEY` is unset the endpoint is open, but never expose it
+to the internet without auth.
 
-After modifying the store (adding/removing configs, users, or remotes),
-**restart the server** to pick up changes.
+**Calendar not found** — Calendar names are **case-sensitive**. Run
+`caldav_list_calendars` to see the exact names your server reports.
 
-### Deployment recommendations
+**Events show wrong time** — Set the `TZ` environment variable to your IANA
+timezone (e.g. `Europe/Vienna`). Without it, today/week boundaries default
+to UTC.
 
-- Bind to `127.0.0.1` or a private network unless you need remote access.
-- Restrict access at the network/firewall layer to trusted hosts or a VPN.
-- Never commit CalDAV app passwords to version control.
-- Use a reverse proxy for TLS termination in production.
-- For read-only deployments, set `CALDAV_MCP_READ_ONLY=true`.
+**SSL certificate errors** — For self-signed certs, either import the CA into
+the system trust store or set `CALDAV_MCP_CALDAV_VERIFY_SSL=false` for
+testing.
 
-## Configuration reference
-
-All configuration is via environment variables, validated at startup with
-Pydantic.
-
-<details>
-<summary><strong>Server</strong></summary>
-
-| Variable | Default | Description |
-| --- | --- | --- |
-| `CALDAV_MCP_PORT` | `8080` | Listen port (inside container) |
-| `CALDAV_MCP_PATH` | `/mcp` | Streamable HTTP endpoint path |
-| `CALDAV_MCP_API_KEY` | `""` (disabled) | Shared secret for MCP endpoint auth |
-| `CALDAV_MCP_READ_ONLY` | `false` | Hide write tools; only query tools are exposed when `true` |
-| `CALDAV_MCP_CONFIG_SECRET` | `""` | Master secret for encrypting CalDAV passwords at rest in the SQLite store. Required by the CLI (encrypt) and server (decrypt). Changing it invalidates stored ciphertexts. |
-| `CALDAV_MCP_DB_PATH` | `""` | Path to the SQLite configuration store. Required by the CLI and by the server in pro mode; `--db` CLI flag takes precedence. |
-| `DB_CONFIG_ENABLED` | `false` | Enable pro mode: load config and users from the SQLite store; requires `CALDAV_MCP_DB_PATH` and `CALDAV_MCP_CONFIG_SECRET`; `CALDAV_MCP_API_KEY` is ignored. |
-| `TZ` | `""` (UTC) | IANA timezone (e.g. `Europe/Vienna`) for today/week boundaries |
-
-</details>
-
-<details>
-<summary><strong>CalDAV</strong></summary>
-
-| Variable | Default | Description |
-| --- | --- | --- |
-| `CALDAV_URL` | `""` | CalDAV server URL. When set, request headers are ignored and all credentials come from env (environment mode). When unset, `X-Caldav-*` headers are required (header mode). |
-| `CALDAV_USERNAME` | `""` | CalDAV username. Used in environment mode; ignored in header mode. |
-| `CALDAV_PASSWORD` | `""` | CalDAV password. Used in environment mode; ignored in header mode. |
-| `CALDAV_MCP_CALDAV_VERIFY_SSL` | `true` | Verify TLS certs on CalDAV connections. Set `false` only for testing with self-signed certs. |
-
-</details>
-
-<details>
-<summary><strong>TLS</strong></summary>
-
-| Variable | Default | Description |
-| --- | --- | --- |
-| `CALDAV_MCP_TLS_CERT` | `""` | Path to TLS certificate PEM file |
-| `CALDAV_MCP_TLS_KEY` | `""` | Path to TLS private key PEM file |
-| `CALDAV_MCP_TLS_CA_BUNDLE` | `""` | Optional CA bundle for custom certificate authorities |
-
-</details>
-
-<details>
-<summary><strong>Rate limiting</strong></summary>
-
-| Variable | Default | Description |
-| --- | --- | --- |
-| `CALDAV_MCP_RATE_LIMIT_MAX_FAILURES` | `10` | Max failed auth attempts per IP within the sliding window |
-| `CALDAV_MCP_RATE_LIMIT_WINDOW_SECONDS` | `60` | Sliding window duration in seconds |
-
-</details>
-
-<details>
-<summary><strong>Logging</strong></summary>
-
-| Variable | Default | Description |
-| --- | --- | --- |
-| `CALDAV_MCP_LOG_FORMAT` | `text` | Audit log format: `text` or `json` |
-
-</details>
-
-## Configuration store (CLI)
-
-caldav-mcp includes a SQLite-backed configuration store and a CLI tool
-(`caldav-mcp-config`) for managing users, configs, remotes, and calendars.
-This is a building block for multi-user deployments — see
-[`docs/cli.md`](docs/cli.md) for the full CLI reference.
-
-The `CALDAV_MCP_CONFIG_SECRET` must match between CLI and server: the CLI
-encrypts passwords with this secret, and the server decrypts them on startup.
-Changing the secret invalidates all stored ciphertexts.
-
-> **Note:** In simple mode, CalDAV credentials are resolved from environment
-> variables or per-request headers. In pro mode (`DB_CONFIG_ENABLED=true`),
-> the server loads configuration and users from the store at startup — see
-> the [Pro mode](#pro-mode) section above.
-
-## Compatibility / limitations
-
-- **Streamable HTTP only** — the server uses MCP Streamable HTTP transport.
-  There is no stdio transport. To use stdio, modify [`server.py`](server.py)
-  to call `mcp.run()` instead of `mcp.run_http_async()`.
-- **Search is client-side** — `caldav_search_events` fetches all events and
-  filters locally. This works well for small to medium calendars. Very large
-  calendars may experience slower search.
-- **Move is non-atomic** — `caldav_move_event` copies the event to the target
-  calendar with a new UID, then deletes the original. A failure after copy
-  leaves a duplicate (the safer failure mode).
-- **Published Docker image** — prebuilt images are available from
-  [GitHub Container Registry](https://github.com/gelse/caldav-mcp/pkgs/container/caldav-mcp).
-  Pull with `docker pull ghcr.io/gelse/caldav-mcp:latest` or build locally
-  with `docker build -t caldav-mcp .` / `docker compose up --build`.
-- **No GitHub releases yet** — the project is at version `0.1.0`.
-
-<details>
-<summary><strong>Development</strong></summary>
-
-### Setup
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-pip install -e ".[dev]"
-cp .env.example .env  # configure your CalDAV credentials
-```
-
-### Commands
-
-```bash
-make test              # Run unit tests
-make test-integration  # Run integration tests (requires docker-compose.test.yaml)
-make test-performance  # Run performance benchmarks
-make lint              # Lint with ruff (check + format)
-make typecheck         # Type check with mypy
-make check             # All checks: lint + typecheck + deps-check + test
-make deps-check        # Verify pyproject.toml and requirements.txt are in sync
-make build             # Build Docker image
-```
-
-Full contributing guide: [`docs/contributing.md`](docs/contributing.md).
-
-</details>
-
-<details>
-<summary><strong>Project structure</strong></summary>
-
-```
-caldav-mcp/
-├── server.py                 # Thin entrypoint, launches FastMCP HTTP server
-├── caldav_mcp/               # Core package
-│   ├── tools/                # MCP tool handlers
-│   │   ├── queries.py        #   Read-only tools (7)
-│   │   ├── mutations.py      #   Write tools (4)
-│   │   └── attendees.py      #   Attendee management (3)
-│   ├── app_config.py         # Read-only startup config singleton (env/header/db modes)
-│   ├── auth.py               # Two-layer auth (API key + CalDAV creds)
-│   ├── calendar.py           # CalDAV calendar selection & serialization
-│   ├── client_cache.py       # Thread-safe LRU cache for DAVClient
-│   ├── config.py             # Env var parsing, header constants
-│   ├── config_schema.py      # Pydantic startup validation
-│   ├── config_store.py       # SQLite-backed configuration store
-│   ├── config_cli.py         # CLI for managing the config store
-│   ├── config_crypto.py      # Fernet encryption for stored credentials
-│   ├── db_loader.py          # Pro-mode DB loader (store → AppConfig + users)
-│   ├── fanout.py             # Fan-out executor, per-remote aggregation
-│   ├── addressing.py         # Dotted-path calendar addressing (pro mode)
-│   ├── key_hash.py           # PBKDF2-HMAC-SHA256 key hashing
-│   ├── datetime_utils.py     # Date/time parsing, timezone helpers
-│   ├── errors.py             # Typed exceptions, ToolResult dataclass
-│   ├── event_builder.py      # Pure iCalendar VEVENT construction
-│   ├── sanitizers.py         # Input sanitization, field length limits
-│   ├── rate_limit.py         # Sliding-window rate limiter
-│   ├── audit.py              # Structured JSON audit logging
-│   ├── constants.py          # Shared string constants
-│   └── types.py              # CalDAVClient Protocol definition
-├── tests/                    # Unit, integration, performance
-├── docs/                     # Architecture, API, contributing docs
-├── Dockerfile                # Multi-stage Docker build
-├── docker-compose.yaml       # Production compose
-├── docker-compose.test.yaml  # Test compose with Radicale
-├── requirements.txt          # Runtime dependencies (pinned)
-├── pyproject.toml            # Dev config and dependencies
-└── Makefile                  # Build/test shortcuts
-```
-
-### Dependencies
-
-| Package | Version | Purpose |
-| --- | --- | --- |
-| [`fastmcp`](https://github.com/jlowin/fastmcp) | 3.4.7 | MCP server framework, Streamable HTTP transport |
-| [`caldav`](https://github.com/tobixen/python-caldav) | 3.2.1 | CalDAV client library |
-| [`icalendar`](https://github.com/collective/icalendar) | 7.2.2 | iCalendar RFC 5545 parsing/generation |
-| [`requests`](https://pypi.org/project/requests/) | >=2.28.0 | HTTP transport layer |
-
-</details>
-
-## Troubleshooting
-
-| Symptom | Cause | Fix |
-| --- | --- | --- |
-| `Connection refused` | CalDAV server unreachable | Verify `CALDAV_URL` is correct and the server is running |
-| `SSL: CERTIFICATE_VERIFY_FAILED` | Self-signed or invalid TLS cert | Import the server's CA into the system trust store, or set `CALDAV_MCP_CALDAV_VERIFY_SSL=false` for testing |
-| `ERROR:[auth] unauthorized` | Missing or invalid API token | Set `CALDAV_MCP_API_KEY` and include `Authorization: Bearer <token>` in your request |
-| `Missing CalDAV credentials` | No CalDAV headers or env vars | Provide `X-Caldav-*` headers or set `CALDAV_URL`/`CALDAV_USERNAME`/`CALDAV_PASSWORD` |
-| `Calendar 'X' not found` | Typo or wrong calendar name | Run `caldav_list_calendars` to see available names — they are case-sensitive |
-| Events show wrong time | Server timezone not set | Set the `TZ` env var to your IANA timezone (e.g. `Europe/Vienna`) |
+**Can I use stdio?** — Not out of the box. The server uses Streamable HTTP
+transport. To add stdio support, modify [`server.py`](server.py) to call
+`mcp.run()` instead of `mcp.run_http_async()`.
 
 ## Contributing
 
-See [`docs/contributing.md`](docs/contributing.md) for development setup, code
-style, and architecture rules.
+See [`docs/contributing.md`](docs/contributing.md).
 
 ## License
 

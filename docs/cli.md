@@ -430,6 +430,7 @@ rm -f "$STORE"
 
 ## Cross-references
 
-- **Environment variables**: see the [Configuration reference](../README.md#configuration-reference) in README.md for the full env-var table.
-- **Pro mode behavior**: see the [Pro mode](../README.md#pro-mode) section in README.md and [`docs/architecture.md`](architecture.md#pro-mode) for fan-out, auth, and dotted-path details.
+- **Environment variables**: see [`docs/configuration.md`](configuration.md) for the full env-var table.
+- **Pro mode behavior**: see [`docs/pro-mode.md`](pro-mode.md) and [`docs/architecture.md`](architecture.md) for fan-out, auth, and dotted-path details.
 - **Wire format**: see [`docs/api.md`](api.md) for headers, addressing, and the aggregated result shape.
+- **MCP client setup**: see [`docs/clients.md`](clients.md) for client-specific configuration.
