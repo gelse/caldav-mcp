@@ -50,7 +50,7 @@ _DESTRUCTIVE_ANNOTATIONS = {
 
 
 @mcp_tool_if_writable(annotations=_CREATE_ANNOTATIONS)
-@with_caldav_client()
+@with_caldav_client(write=True)
 def caldav_create_event(
     client,
     cal,
@@ -133,7 +133,7 @@ def caldav_create_event(
 
 
 @mcp_tool_if_writable(annotations=_UPDATE_ANNOTATIONS)
-@with_caldav_client()
+@with_caldav_client(write=True)
 def caldav_update_event(
     client,
     cal,
@@ -180,7 +180,7 @@ def caldav_update_event(
 
 
 @mcp_tool_if_writable(annotations=_DESTRUCTIVE_ANNOTATIONS)
-@with_caldav_client()
+@with_caldav_client(write=True)
 def caldav_delete_event(client, cal, uid: str, calendar_name: str = ""):
     """Delete an event by UID."""
     event = cal.event_by_uid(uid)
@@ -189,12 +189,13 @@ def caldav_delete_event(client, cal, uid: str, calendar_name: str = ""):
 
 
 @mcp_tool_if_writable(annotations=_DESTRUCTIVE_ANNOTATIONS)
-@with_caldav_client(needs_calendar=False)
+@with_caldav_client(needs_calendar=False, write=True)
 def caldav_move_event(
     client,
     uid: str,
     target_calendar: str,
     source_calendar: str = "",
+    pro_user=None,
 ):
     """Move an event to another calendar (copy to target with new UID, delete original).
 
@@ -202,10 +203,37 @@ def caldav_move_event(
     so we copy the event with a new UID to the target calendar and delete
     the original.  This is not atomic — a failure after copy leaves a
     duplicate, which is the safer failure mode.
+
+    In pro mode both *source_calendar* and *target_calendar* are dotted
+    paths; the ``pro_user`` (injected by the decorator) is used to resolve
+    them via the addressing layer.  Cross-remote moves are allowed — both
+    clients come from the same cache.
     """
     try:
-        src_cal = _get_calendar(client, source_calendar or None)
-        dst_cal = _get_calendar(client, target_calendar)
+        from caldav_mcp.addressing import resolve_addressed_calendar
+        from caldav_mcp.app_config import get_app_config
+        from caldav_mcp.tools import _resolve_pro_remote_client
+
+        # In pro mode both source and target are dotted paths; resolve them
+        # via the addressing layer (cross-remote moves are allowed — both
+        # clients come from the same cache).
+        if pro_user is not None:
+            app = get_app_config()
+
+            # Resolve the source calendar via the dotted path.
+            src_resolution = resolve_addressed_calendar(app, pro_user, source_calendar)
+            src_remote = src_resolution.remote
+            src_client = _resolve_pro_remote_client(src_remote)
+            src_cal = _get_calendar(src_client, src_resolution.calendar_name)
+
+            # Resolve the target calendar via the dotted path.
+            dst_resolution = resolve_addressed_calendar(app, pro_user, target_calendar)
+            dst_remote = dst_resolution.remote
+            dst_client = _resolve_pro_remote_client(dst_remote)
+            dst_cal = _get_calendar(dst_client, dst_resolution.calendar_name)
+        else:
+            src_cal = _get_calendar(client, source_calendar or None)
+            dst_cal = _get_calendar(client, target_calendar)
         event = src_cal.event_by_uid(uid)
         comp = _comp(event)
         if comp is None:

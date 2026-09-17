@@ -17,3 +17,101 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  radicale2:
+    image: tomsquest/docker-radicale:latest
+    container_name: radicale2-test
+    ports:
+      - "5233:5232"
+    volumes:
+      - ./tests/integration/radicale2-config:/etc/radicale
+      - ./tests/integration/radicale2-data:/data
+    environment:
+      - TZ=UTC
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5232/"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  mcp-pro:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: caldav-mcp-pro-test
+    ports:
+      - "8080:8080"
+    depends_on:
+      radicale:
+        condition: service_healthy
+    environment:
+      # DB-config mode (pro mode)
+      DB_CONFIG_ENABLED: "true"
+      CALDAV_MCP_DB_PATH: /data/pro-store.db
+      CALDAV_MCP_CONFIG_SECRET: "test-integration-pro-secret-do-not-use-in-production"
+      # Server settings
+      CALDAV_MCP_PORT: "8080"
+      CALDAV_MCP_PATH: "/mcp"
+      CALDAV_MCP_READ_ONLY: "false"
+      CALDAV_MCP_CALDAV_VERIFY_SSL: "true"
+      CALDAV_MCP_LOG_FORMAT: "text"
+      TZ: UTC
+    volumes:
+      - ./tests/integration/pro-store:/data:ro
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import socket; s=socket.socket(); s.settimeout(3); s.connect(('127.0.0.1',8080)); s.close()"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  mcp-simple:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: caldav-mcp-simple-test
+    ports:
+      - "8081:8080"
+    environment:
+      # Header mode (no CALDAV_URL) — all three X-Caldav-* headers required
+      CALDAV_MCP_API_KEY: "simple-test-key"
+      CALDAV_MCP_PORT: "8080"
+      CALDAV_MCP_PATH: "/mcp"
+      CALDAV_MCP_READ_ONLY: "false"
+      CALDAV_MCP_CALDAV_VERIFY_SSL: "true"
+      CALDAV_MCP_LOG_FORMAT: "text"
+      TZ: UTC
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import socket; s=socket.socket(); s.settimeout(3); s.connect(('127.0.0.1',8080)); s.close()"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  mcp-env:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: caldav-mcp-env-test
+    ports:
+      - "8082:8080"
+    depends_on:
+      radicale:
+        condition: service_healthy
+    environment:
+      # Env mode — CALDAV_URL set, X-Caldav-* headers ignored
+      CALDAV_URL: "http://radicale:5232"
+      CALDAV_USERNAME: "testuser"
+      CALDAV_PASSWORD: "testpass"
+      CALDAV_MCP_PORT: "8080"
+      CALDAV_MCP_PATH: "/mcp"
+      CALDAV_MCP_READ_ONLY: "false"
+      CALDAV_MCP_CALDAV_VERIFY_SSL: "true"
+      CALDAV_MCP_LOG_FORMAT: "text"
+      TZ: UTC
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import socket; s=socket.socket(); s.settimeout(3); s.connect(('127.0.0.1',8080)); s.close()"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
