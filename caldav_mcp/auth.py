@@ -43,10 +43,17 @@ def _cfg():
 
 
 def _hdrs():
-    """Lazy accessor for ``fastmcp.server.dependencies.get_http_headers``."""
+    """Lazy accessor for fastmcp get_http_headers, re-including 'authorization'.
+
+    fastmcp's get_http_headers() excludes the 'authorization' header from its
+    result by default (issue #18), so the returned callable re-includes it.
+    """
     from fastmcp.server.dependencies import get_http_headers  # noqa: E402
 
-    return get_http_headers
+    def _get() -> dict[str, str]:
+        return get_http_headers(include={"authorization"})
+
+    return _get
 
 
 def _get_client_ip() -> str:
