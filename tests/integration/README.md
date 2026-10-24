@@ -30,6 +30,8 @@
 - `test_crdl_lifecycle.py` — Full CRUD lifecycle for calendars and events
 - `test_multi_calendar.py` — Operations across multiple calendars
 - `test_concurrent_access.py` — Concurrent read/write patterns
+- `test_mcp_auth.py` — MCP endpoint auth headers, Bearer vs X-Api-Key (issue #18);
+  boots `server.py` in a subprocess, does not need Radicale
 
 ## Configuration
 
