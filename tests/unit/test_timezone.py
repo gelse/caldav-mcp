@@ -58,11 +58,29 @@ def test_tz_invalid_logs_warning_and_falls_back_to_utc():
 
 
 def test_now_carries_server_timezone():
-    """_now() and _start_of_day() must preserve the server timezone."""
-    with mock.patch("caldav_mcp.datetime_utils.SERVER_TZ", ZoneInfo("Europe/Vienna")):
+    """_now() and _start_of_day() must preserve the server timezone.
+
+    The wall clock is frozen to 2026-08-17 (mid-DST for Europe/Vienna) so the
+    UTC-offset assertion below is deterministic and independent of the real
+    current season — ``_now()`` normally returns the live clock, whose Vienna
+    offset flips between UTC+1 (October–March) and UTC+2 (April–September).
+    """
+
+    class _FrozenDateTime(datetime):
+        """datetime subclass with a frozen ``now()`` returning an August instant."""
+
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 8, 17, 15, 30, tzinfo=tz)
+
+    with (
+        mock.patch("caldav_mcp.datetime_utils.SERVER_TZ", ZoneInfo("Europe/Vienna")),
+        mock.patch("caldav_mcp.datetime_utils.datetime", _FrozenDateTime),
+    ):
         now = _now()
     assert now.tzinfo is ZoneInfo("Europe/Vienna")
-    # Europe/Vienna in late August is on DST (UTC+2).
+    # Europe/Vienna in late August is on DST (UTC+2) — the clock is frozen
+    # to 2026-08-17, so this holds regardless of when the test runs.
     assert now.utcoffset() == timedelta(hours=2)
 
 
