@@ -1,4 +1,4 @@
-"""Admin REST API for pro-mode user management (M2: read endpoints).
+"""Admin REST API for pro-mode user management (M2: read, M3: write).
 
 Plain REST routes on the existing FastMCP/Starlette app — never MCP tools
 (fixed constraint, Design (a)).  ``server.py`` registers them in the pro
@@ -25,6 +25,15 @@ request (Design (c); no long-lived connection, no ``check_same_thread``
 exposure) and funnel store errors through the single choke point
 :func:`_map_store_error` (Design (d)).  User payloads are always
 ``{"username", "configs"}`` — never ``key_hash``, never ``key``.
+
+M3 write routes follow the milestone flow: guard → parse/validate body →
+fresh store (with the ``get_user``/``list_configs`` pre-checks mandated by
+table (d)) → store call → ``log_admin_operation`` → JSON response carrying
+``"restart_required": true`` (restart-to-apply, Design (c) phase 1).  Every
+mutation body carries that flag; there is deliberately no key-rotation
+route (M4) and no hot reload (M5).  Plaintext keys are accepted only in
+request bodies, hashed with :func:`hash_api_key`, and never stored, logged,
+echoed, or returned (Design (f) hygiene rules).
 """
 
 from __future__ import annotations
@@ -49,6 +58,7 @@ from caldav_mcp.config_store import (
     UserRecord,
 )
 from caldav_mcp.errors import log
+from caldav_mcp.key_hash import hash_api_key
 from caldav_mcp.rate_limit import admin_rate_limiter
 
 # API-layer username transport guard limits (Design (d)) — not a store
@@ -168,6 +178,26 @@ def _user_payload(record: UserRecord) -> dict[str, object]:
     return {"username": record.username, "configs": list(record.config_names)}
 
 
+async def _read_json_body(request: Request) -> dict[str, object] | JSONResponse:
+    """Parse a JSON object request body (API-owned shape validation, Design (e)).
+
+    Returns the decoded object on success, otherwise the 400 response for a
+    wrong ``Content-Type``, malformed JSON, or a non-object body (edge-case
+    table).  Only *shape* is checked here — store-domain rules (username
+    non-empty, config-name charset) stay with the store, never duplicated.
+    """
+    content_type = request.headers.get("content-type", "")
+    if content_type.split(";")[0].strip().lower() != "application/json":
+        return JSONResponse({"error": "Content-Type must be application/json"}, status_code=400)
+    try:
+        body = await request.json()
+    except ValueError:  # json.JSONDecodeError and friends (ValueError subclass)
+        return JSONResponse({"error": "malformed JSON body"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "request body must be a JSON object"}, status_code=400)
+    return body
+
+
 # ---------------------------------------------------------------------------
 # GET handlers (M2 — read-only)
 # ---------------------------------------------------------------------------
@@ -212,6 +242,207 @@ async def _handle_get_user(request: Request) -> JSONResponse:
 
 
 # ---------------------------------------------------------------------------
+# Write handlers (M3 — restart-to-apply, Design (c) phase 1)
+#
+# Flow per the M3.1 block: guard → parse/validate body → fresh store (with
+# the table-(d) pre-checks) → store call → log_admin_operation → JSON
+# response with "restart_required": true.  Every store error funnels through
+# _map_store_error; no rotation route here (M4).
+# ---------------------------------------------------------------------------
+
+
+async def _handle_create_user(request: Request) -> JSONResponse:
+    """``POST /admin/users`` — create a user from ``{username, key}`` (201).
+
+    The plaintext key is hashed here and never stored, logged, echoed, or
+    returned (Design (f)); username emptiness and duplicate conflicts are
+    the store's to reject (Design (e)) → 400 / 409.
+    """
+    denied = _require_admin(request)
+    if denied is not None:
+        return denied
+    parsed = await _read_json_body(request)
+    if isinstance(parsed, JSONResponse):
+        return parsed
+    username = parsed.get("username")
+    if not isinstance(username, str):
+        return JSONResponse({"error": "username is required and must be a string"}, status_code=400)
+    key = parsed.get("key")
+    if not isinstance(key, str) or not key:
+        # API-owned non-empty key check, mirroring config_cli._handle_user_add.
+        return JSONResponse({"error": "key must be a non-empty string"}, status_code=400)
+    client_ip = _client_ip(request)
+    key_hash = hash_api_key(key)
+    try:
+        with ConfigStore(_db_path()) as store:
+            store.create_user(username, key_hash)
+    except Exception as exc:
+        log_admin_operation(
+            action="create_user", status="error", target_user=username, client_ip=client_ip
+        )
+        return _map_store_error(exc)
+    log_admin_operation(
+        action="create_user", status="ok", target_user=username, client_ip=client_ip
+    )
+    return JSONResponse(
+        {"username": username, "configs": [], "restart_required": True},
+        status_code=201,
+    )
+
+
+async def _handle_delete_user(request: Request) -> JSONResponse:
+    """``DELETE /admin/users/{username}`` — 200 + body (Risks: not 204).
+
+    Grants cascade via the schema FK (``user_configs`` ON DELETE CASCADE).
+    """
+    denied = _require_admin(request)
+    if denied is not None:
+        return denied
+    username = request.path_params.get("username", "")
+    transport_error = _username_transport_error(username)
+    if transport_error is not None:
+        return JSONResponse({"error": transport_error}, status_code=400)
+    client_ip = _client_ip(request)
+    try:
+        with ConfigStore(_db_path()) as store:
+            store.delete_user(username)
+    except Exception as exc:
+        log_admin_operation(
+            action="delete_user", status="error", target_user=username, client_ip=client_ip
+        )
+        return _map_store_error(exc)
+    log_admin_operation(
+        action="delete_user", status="ok", target_user=username, client_ip=client_ip
+    )
+    return JSONResponse({"deleted": True, "username": username, "restart_required": True})
+
+
+async def _handle_grant_config(request: Request) -> JSONResponse:
+    """``POST /admin/users/{username}/configs`` — grant (200, idempotent).
+
+    The store's ``grant_config`` owns existence/charset checks and the
+    single-passthrough constraint (→ 404 / 400); re-granting is a no-op.
+    """
+    denied = _require_admin(request)
+    if denied is not None:
+        return denied
+    username = request.path_params.get("username", "")
+    transport_error = _username_transport_error(username)
+    if transport_error is not None:
+        return JSONResponse({"error": transport_error}, status_code=400)
+    parsed = await _read_json_body(request)
+    if isinstance(parsed, JSONResponse):
+        return parsed
+    config_name = parsed.get("config")
+    if not isinstance(config_name, str):
+        return JSONResponse({"error": "config is required and must be a string"}, status_code=400)
+    client_ip = _client_ip(request)
+    try:
+        with ConfigStore(_db_path()) as store:
+            store.grant_config(username, config_name)
+            record = store.get_user(username)
+    except Exception as exc:
+        log_admin_operation(
+            action="grant_config", status="error", target_user=username, client_ip=client_ip
+        )
+        return _map_store_error(exc)
+    log_admin_operation(
+        action="grant_config", status="ok", target_user=username, client_ip=client_ip
+    )
+    return JSONResponse({**_user_payload(record), "restart_required": True})
+
+
+async def _handle_revoke_config(request: Request) -> JSONResponse:
+    """``DELETE /admin/users/{username}/configs/{config}`` — 200 + body.
+
+    Pre-checks ``store.get_user`` → 404 for an unknown user (the store's
+    ``revoke_config`` never raises ``StoreNotFoundError`` itself); revoking a
+    never-granted config is an idempotent no-op (store parity).
+    """
+    denied = _require_admin(request)
+    if denied is not None:
+        return denied
+    username = request.path_params.get("username", "")
+    transport_error = _username_transport_error(username)
+    if transport_error is not None:
+        return JSONResponse({"error": transport_error}, status_code=400)
+    config_name = request.path_params.get("config", "")
+    client_ip = _client_ip(request)
+    try:
+        with ConfigStore(_db_path()) as store:
+            store.get_user(username)  # pre-check → StoreNotFoundError → 404
+            store.revoke_config(username, config_name)
+    except Exception as exc:
+        log_admin_operation(
+            action="revoke_config", status="error", target_user=username, client_ip=client_ip
+        )
+        return _map_store_error(exc)
+    log_admin_operation(
+        action="revoke_config", status="ok", target_user=username, client_ip=client_ip
+    )
+    return JSONResponse(
+        {
+            "revoked": True,
+            "username": username,
+            "config": config_name,
+            "restart_required": True,
+        }
+    )
+
+
+async def _handle_replace_configs(request: Request) -> JSONResponse:
+    """``PUT /admin/users/{username}/configs`` — replace-all (200).
+
+    Pre-checks every requested name against ``store.list_configs`` so a
+    missing config yields a precise 404 naming the missing ones; 409 is
+    therefore reserved for a genuine FK race (a config deleted between the
+    pre-check and the write).  Single-passthrough violations surface as 400
+    via M1's in-store enforcement inside ``set_user_configs``'s transaction.
+    """
+    denied = _require_admin(request)
+    if denied is not None:
+        return denied
+    username = request.path_params.get("username", "")
+    transport_error = _username_transport_error(username)
+    if transport_error is not None:
+        return JSONResponse({"error": transport_error}, status_code=400)
+    parsed = await _read_json_body(request)
+    if isinstance(parsed, JSONResponse):
+        return parsed
+    configs = parsed.get("configs")
+    if not isinstance(configs, list):
+        return JSONResponse({"error": "configs is required and must be a list"}, status_code=400)
+    if any(not isinstance(name, str) for name in configs):
+        return JSONResponse({"error": "configs must be a list of strings"}, status_code=400)
+    # Set semantics: dedupe (first-seen order) so duplicate entries cannot
+    # surface as an IntegrityError→409 — 409 stays reserved for FK races.
+    unique_configs: list[str] = list(dict.fromkeys(configs))
+    client_ip = _client_ip(request)
+    try:
+        with ConfigStore(_db_path()) as store:
+            known = set(store.list_configs())
+            missing = [name for name in unique_configs if name not in known]
+            if missing:
+                raise StoreNotFoundError(
+                    "config not found: " + ", ".join(repr(name) for name in missing)
+                )
+            store.set_user_configs(username, unique_configs)
+            record = store.get_user(username)
+    except Exception as exc:
+        log_admin_operation(
+            action="set_user_configs",
+            status="error",
+            target_user=username,
+            client_ip=client_ip,
+        )
+        return _map_store_error(exc)
+    log_admin_operation(
+        action="set_user_configs", status="ok", target_user=username, client_ip=client_ip
+    )
+    return JSONResponse({**_user_payload(record), "restart_required": True})
+
+
+# ---------------------------------------------------------------------------
 # Registration
 # ---------------------------------------------------------------------------
 
@@ -219,10 +450,20 @@ async def _handle_get_user(request: Request) -> JSONResponse:
 def configure_admin_routes(mcp: FastMCP) -> None:
     """Register the admin REST routes on *mcp* (called from ``server.py``).
 
-    Only the two M2 read routes are registered; the write routes of M3/M4
-    do not exist yet, so requests to them yield framework 404/405.  Must be
-    called before ``run_http_async`` — fastmcp merges additional routes into
-    the streamable-http app with lowest precedence (M2.1 spike).
+    Registers the two M2 read routes and the five M3 write routes.  The M4
+    key-rotation route (``PUT /admin/users/{username}/key``) is deliberately
+    absent — requests to it yield framework 404.  Must be called before
+    ``run_http_async`` — fastmcp merges additional routes into the
+    streamable-http app with lowest precedence (M2.1 spike).
     """
+    # Read (M2).
     mcp.custom_route("/admin/users", methods=["GET"])(_handle_list_users)
     mcp.custom_route("/admin/users/{username}", methods=["GET"])(_handle_get_user)
+    # Write (M3.1) — restart-to-apply; no rotation route (M4).
+    mcp.custom_route("/admin/users", methods=["POST"])(_handle_create_user)
+    mcp.custom_route("/admin/users/{username}", methods=["DELETE"])(_handle_delete_user)
+    mcp.custom_route("/admin/users/{username}/configs", methods=["POST"])(_handle_grant_config)
+    mcp.custom_route("/admin/users/{username}/configs", methods=["PUT"])(_handle_replace_configs)
+    mcp.custom_route("/admin/users/{username}/configs/{config}", methods=["DELETE"])(
+        _handle_revoke_config
+    )
