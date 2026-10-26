@@ -21,6 +21,7 @@ class ServerConfig(BaseModel):
     port: int = 8080
     path: str = "/mcp"
     api_key: str = ""
+    admin_key: str = ""
     tz: str = ""
 
     @field_validator("port")
@@ -82,6 +83,8 @@ def load_server_config() -> ServerConfig:
     ``CALDAV_MCP_CONFIG_SECRET`` must be non-empty after stripping.
     ``CALDAV_URL`` / ``CALDAV_USERNAME`` / ``CALDAV_PASSWORD`` are accepted
     but ignored in pro mode (a warning is emitted in ``server.py``).
+    ``CALDAV_MCP_ADMIN_KEY`` is optional (defaults to empty); it is only
+    meaningful in pro mode (a warning is emitted in ``server.py`` otherwise).
     """
     db_enabled = os.environ.get("DB_CONFIG_ENABLED", "false").lower() in (
         "true",
@@ -105,6 +108,7 @@ def load_server_config() -> ServerConfig:
         port=int(os.environ.get("CALDAV_MCP_PORT", "8080")),
         path=os.environ.get("CALDAV_MCP_PATH", "/mcp"),
         api_key=os.environ.get("CALDAV_MCP_API_KEY", ""),
+        admin_key=os.environ.get("CALDAV_MCP_ADMIN_KEY", ""),
         tz=os.environ.get("TZ", ""),
     )
 

@@ -2,7 +2,8 @@
 
 import time
 
-from caldav_mcp.rate_limit import RateLimiter
+from caldav_mcp.config import RATE_LIMIT_MAX_FAILURES, RATE_LIMIT_WINDOW_SECONDS
+from caldav_mcp.rate_limit import RateLimiter, admin_rate_limiter, auth_rate_limiter
 
 
 def _make_limiter(max_failures=10, window_seconds=60):
@@ -144,3 +145,50 @@ def test_rate_limiter_new_key_not_limited():
     limiter = _make_limiter()
     assert limiter.is_rate_limited("brand-new-key") is False
     assert limiter.get_backoff_seconds("brand-new-key") == 0
+
+
+# ---------------------------------------------------------------------------
+# Admin vs auth singletons (issue-16 milestone M2.2)
+# ---------------------------------------------------------------------------
+
+
+def test_admin_and_auth_rate_limiters_are_distinct_instances():
+    """admin_rate_limiter and auth_rate_limiter are separate objects."""
+    assert admin_rate_limiter is not auth_rate_limiter
+
+
+def test_admin_rate_limiter_buckets_independent_from_auth():
+    """Exhausting the admin bucket leaves the auth bucket untouched (same key)."""
+    key = "m22-bucket-independence-admin"
+    try:
+        for _ in range(RATE_LIMIT_MAX_FAILURES):
+            admin_rate_limiter.record_failure(key)
+        assert admin_rate_limiter.is_rate_limited(key) is True
+        # Same key, other singleton → independent buckets, not rate-limited.
+        assert auth_rate_limiter.is_rate_limited(key) is False
+        assert auth_rate_limiter.get_backoff_seconds(key) == 0
+    finally:
+        admin_rate_limiter.reset(key)
+        auth_rate_limiter.reset(key)
+
+
+def test_auth_rate_limiter_buckets_independent_from_admin():
+    """Exhausting the auth bucket leaves the admin bucket untouched (same key)."""
+    key = "m22-bucket-independence-auth"
+    try:
+        for _ in range(RATE_LIMIT_MAX_FAILURES):
+            auth_rate_limiter.record_failure(key)
+        assert auth_rate_limiter.is_rate_limited(key) is True
+        assert admin_rate_limiter.is_rate_limited(key) is False
+        assert admin_rate_limiter.get_backoff_seconds(key) == 0
+    finally:
+        auth_rate_limiter.reset(key)
+        admin_rate_limiter.reset(key)
+
+
+def test_admin_rate_limiter_uses_shared_env_knobs():
+    """admin_rate_limiter is built from the same env knobs as auth_rate_limiter."""
+    assert admin_rate_limiter._max_failures == RATE_LIMIT_MAX_FAILURES
+    assert admin_rate_limiter._window == RATE_LIMIT_WINDOW_SECONDS
+    assert admin_rate_limiter._max_failures == auth_rate_limiter._max_failures
+    assert admin_rate_limiter._window == auth_rate_limiter._window

@@ -50,6 +50,40 @@ def log_auth_attempt(
         _audit_log.warning(json.dumps(entry))
 
 
+def log_admin_operation(
+    action: str,
+    status: str,
+    target_user: str = "",
+    client_ip: str = "unknown",
+) -> None:
+    """Log a completed admin API operation (CRUD outcome).
+
+    Parameters
+    ----------
+    action : str
+        Admin action performed (e.g. 'list_users', 'create_user',
+        'delete_user', 'rotate_key', 'grant_config').
+    status : str
+        Result status ('ok', 'error', ...).
+    target_user : str
+        Store username the operation targeted, if applicable.
+    client_ip : str
+        IP address of the requester (best-effort; may be proxied).
+
+    SECURITY: never accepts or records key or key-hash material — only the
+    action/status/target identifiers above (module rule, see header).
+    """
+    entry = {
+        "event": "admin",
+        "action": action,
+        "status": status,
+        "target_user": target_user,
+        "client_ip": client_ip,
+        "ts": time.time(),
+    }
+    _audit_log.info(json.dumps(entry))
+
+
 def log_operation(
     tool_name: str,
     status: str,

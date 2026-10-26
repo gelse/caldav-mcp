@@ -1,5 +1,11 @@
 """Tests for configuration validation (Finding 6.3)."""
 
+import logging
+import os
+import sys
+from types import SimpleNamespace
+from unittest import mock
+
 import pytest
 from pydantic import ValidationError
 
@@ -120,3 +126,144 @@ class TestDBConfigEnabled:
         monkeypatch.delenv("CALDAV_MCP_CONFIG_SECRET", raising=False)
         cfg = load_server_config()
         assert cfg.port == 8080
+
+
+# ---------------------------------------------------------------------------
+# CALDAV_MCP_ADMIN_KEY (issue-16 milestone M2.2)
+# ---------------------------------------------------------------------------
+
+
+def _reload_admin_key(env_val: str | None) -> str:
+    """Re-import ``caldav_mcp.config`` with a controlled ``CALDAV_MCP_ADMIN_KEY``.
+
+    Returns the resulting ``ADMIN_KEY`` constant.  ``sys.modules`` is restored
+    in a ``finally`` block so no cross-test pollution occurs (pattern mirrors
+    ``test_read_only_mode._reload_config``).
+    """
+    to_remove = [k for k in sys.modules if k.startswith("caldav_mcp")]
+    saved = {k: sys.modules[k] for k in to_remove}
+    for k in to_remove:
+        del sys.modules[k]
+
+    try:
+        if env_val is None:
+            # Ensure the var is truly absent.
+            patched = {k: v for k, v in os.environ.items() if k != "CALDAV_MCP_ADMIN_KEY"}
+        else:
+            patched = {**os.environ, "CALDAV_MCP_ADMIN_KEY": env_val}
+
+        with mock.patch.dict(os.environ, patched, clear=True):
+            from caldav_mcp import config as _cfg  # noqa: E402
+
+            return _cfg.ADMIN_KEY
+    finally:
+        # Restore all caldav_mcp modules to the pre-test state.
+        for k in [k for k in sys.modules if k.startswith("caldav_mcp")]:
+            del sys.modules[k]
+        sys.modules.update(saved)
+
+
+class TestAdminKey:
+    """``CALDAV_MCP_ADMIN_KEY`` plumbing (issue-16 milestone M2.2)."""
+
+    def test_server_config_admin_key_field_default(self) -> None:
+        """The ``admin_key`` field defaults to ``''`` on the model itself."""
+        assert ServerConfig().admin_key == ""
+
+    def test_load_server_config_default_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Unset env var → ``load_server_config().admin_key == ''``."""
+        monkeypatch.delenv("CALDAV_MCP_ADMIN_KEY", raising=False)
+        cfg = load_server_config()
+        assert cfg.admin_key == ""
+
+    def test_load_server_config_reads_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The env var is read through to ``admin_key``."""
+        monkeypatch.setenv("CALDAV_MCP_ADMIN_KEY", "test-admin-key")
+        cfg = load_server_config()
+        assert cfg.admin_key == "test-admin-key"
+
+    def test_load_server_config_empty_env_string(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """An empty env var stays empty (no implicit sentinel)."""
+        monkeypatch.setenv("CALDAV_MCP_ADMIN_KEY", "")
+        cfg = load_server_config()
+        assert cfg.admin_key == ""
+
+    @pytest.mark.parametrize(
+        ("env_val", "expected"),
+        [
+            (None, ""),
+            ("", ""),
+            ("test-admin-key", "test-admin-key"),
+        ],
+        ids=["unset", "empty", "set"],
+    )
+    def test_config_module_admin_key(self, env_val: str | None, expected: str) -> None:
+        """``caldav_mcp.config.ADMIN_KEY`` defaults to ``''`` and follows the env."""
+        assert _reload_admin_key(env_val) == expected
+
+
+def _run_main_simple_mode(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    admin_key: str,
+) -> list[str]:
+    """Run ``server.main()`` down the simple-mode path with side effects mocked.
+
+    Returns the WARNING-level log messages captured during the call.  The HTTP
+    server launch, the app-config singleton, and the pro/simple branch flags
+    are patched so the call is side-effect free.
+    """
+    import server
+    from caldav_mcp import app_config, config
+
+    monkeypatch.delenv("DB_CONFIG_ENABLED", raising=False)
+    monkeypatch.setenv("CALDAV_MCP_ADMIN_KEY", admin_key)
+
+    app_stub = SimpleNamespace(mode="header")
+    with (
+        mock.patch.object(config, "ADMIN_KEY", admin_key),
+        mock.patch.object(config, "DB_CONFIG_ENABLED", False),
+        mock.patch.object(app_config, "load_app_config", return_value=object()),
+        mock.patch.object(app_config, "configure_app_config"),
+        mock.patch.object(app_config, "get_app_config", return_value=app_stub),
+        mock.patch.object(server.mcp, "run_http_async", new=mock.AsyncMock()),
+        caplog.at_level(logging.WARNING, logger="caldav-mcp"),
+    ):
+        server.main()
+    return [record.getMessage() for record in caplog.records]
+
+
+class TestAdminKeyStartupWarning:
+    """``server.main()`` warns about ``CALDAV_MCP_ADMIN_KEY`` outside pro mode (M2.2)."""
+
+    def test_warns_when_admin_key_set(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A set ADMIN_KEY with DB_CONFIG_ENABLED false logs one warning."""
+        messages = _run_main_simple_mode(monkeypatch, caplog, "super-secret-admin-key")
+        admin_warnings = [m for m in messages if "CALDAV_MCP_ADMIN_KEY" in m]
+        assert len(admin_warnings) == 1
+        assert "ignored" in admin_warnings[0]
+        assert "pro mode" in admin_warnings[0]
+
+    def test_warns_without_echoing_key_value(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """The key value itself never appears in any log message (no-secrets rule)."""
+        secret = "super-secret-admin-key-do-not-log"
+        messages = _run_main_simple_mode(monkeypatch, caplog, secret)
+        for message in messages:
+            assert secret not in message
+
+    def test_no_warning_when_admin_key_unset(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """No CALDAV_MCP_ADMIN_KEY warning when the key is empty."""
+        messages = _run_main_simple_mode(monkeypatch, caplog, "")
+        assert not any("CALDAV_MCP_ADMIN_KEY" in m for m in messages)

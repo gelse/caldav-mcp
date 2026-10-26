@@ -249,7 +249,7 @@ def main() -> None:
     load_server_config()  # raises on invalid port/tz/path
 
     # --- Pro-mode branch (DB_CONFIG_ENABLED) ---
-    from caldav_mcp.config import DB_CONFIG_ENABLED  # noqa: E402
+    from caldav_mcp.config import ADMIN_KEY, DB_CONFIG_ENABLED  # noqa: E402
 
     if DB_CONFIG_ENABLED:
         from caldav_mcp.auth import configure_pro_users
@@ -269,6 +269,11 @@ def main() -> None:
             log.warning("CALDAV_URL/USERNAME/PASSWORD are ignored in pro mode")
     else:
         # --- Simple-mode wiring (env / header) — unchanged from M2.2 ---
+        if ADMIN_KEY:
+            log.warning(
+                "CALDAV_MCP_ADMIN_KEY is set but ignored outside pro mode "
+                "(admin API requires DB_CONFIG_ENABLED=true)"
+            )
         configure_app_config(load_app_config())
         app = get_app_config()
         if (
