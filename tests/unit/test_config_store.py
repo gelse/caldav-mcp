@@ -559,11 +559,15 @@ def test_pt_case_e_remove_user_config_link_always_allowed(tmp_path):
         # write path — including set_user_configs — enforces the
         # single-passthrough invariant, so the two-passthrough starting
         # state this test needs can only be built by bypassing the API.
-        conn = store._get_conn()
-        conn.execute(
+        # Use a separate connection with an explicit commit so the seed
+        # does not depend on the store connection's isolation settings.
+        seed_conn = sqlite3.connect(_store_path(tmp_path))
+        seed_conn.execute(
             "INSERT INTO user_configs (username, config_name) VALUES (?, ?)",
             ("alice", "c2"),
         )
+        seed_conn.commit()
+        seed_conn.close()
         # Now remove c2 — should not raise even though there are two
         # passthrough remotes across the configs (constraint is about the
         # user's reachable set; removing a config only loosens it).
