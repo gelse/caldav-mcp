@@ -5,7 +5,6 @@ from datetime import timedelta
 
 from icalendar import vRecur
 
-from caldav_mcp import mcp
 from caldav_mcp.calendar import (
     _comp,
     _get_calendar,
@@ -19,7 +18,13 @@ from caldav_mcp.constants import (
 )
 from caldav_mcp.datetime_utils import _now, _parse_dt
 from caldav_mcp.errors import Status, ToolResult
-from caldav_mcp.tools import _REMOTE_ERRORS, _ok, _render_error, with_caldav_client
+from caldav_mcp.tools import (
+    _REMOTE_ERRORS,
+    _ok,
+    _render_error,
+    mcp_tool_if_writable,
+    with_caldav_client,
+)
 
 # Create — writes a new resource; not idempotent (repeated calls create duplicates).
 _CREATE_ANNOTATIONS = {
@@ -44,8 +49,8 @@ _DESTRUCTIVE_ANNOTATIONS = {
 }
 
 
-@mcp.tool(annotations=_CREATE_ANNOTATIONS)
-@with_caldav_client()
+@mcp_tool_if_writable(annotations=_CREATE_ANNOTATIONS)
+@with_caldav_client(write=True)
 def caldav_create_event(
     client,
     cal,
@@ -127,8 +132,8 @@ def caldav_create_event(
     )
 
 
-@mcp.tool(annotations=_UPDATE_ANNOTATIONS)
-@with_caldav_client()
+@mcp_tool_if_writable(annotations=_UPDATE_ANNOTATIONS)
+@with_caldav_client(write=True)
 def caldav_update_event(
     client,
     cal,
@@ -174,8 +179,8 @@ def caldav_update_event(
     return _ok(message=f"Event {uid} updated", data={"uid": uid})
 
 
-@mcp.tool(annotations=_DESTRUCTIVE_ANNOTATIONS)
-@with_caldav_client()
+@mcp_tool_if_writable(annotations=_DESTRUCTIVE_ANNOTATIONS)
+@with_caldav_client(write=True)
 def caldav_delete_event(client, cal, uid: str, calendar_name: str = ""):
     """Delete an event by UID."""
     event = cal.event_by_uid(uid)
@@ -183,13 +188,14 @@ def caldav_delete_event(client, cal, uid: str, calendar_name: str = ""):
     return _ok(message=f"Deleted event {uid}", data={"uid": uid})
 
 
-@mcp.tool(annotations=_DESTRUCTIVE_ANNOTATIONS)
-@with_caldav_client(needs_calendar=False)
+@mcp_tool_if_writable(annotations=_DESTRUCTIVE_ANNOTATIONS)
+@with_caldav_client(needs_calendar=False, write=True)
 def caldav_move_event(
     client,
     uid: str,
     target_calendar: str,
     source_calendar: str = "",
+    pro_user=None,
 ):
     """Move an event to another calendar (copy to target with new UID, delete original).
 
@@ -197,10 +203,37 @@ def caldav_move_event(
     so we copy the event with a new UID to the target calendar and delete
     the original.  This is not atomic — a failure after copy leaves a
     duplicate, which is the safer failure mode.
+
+    In pro mode both *source_calendar* and *target_calendar* are dotted
+    paths; the ``pro_user`` (injected by the decorator) is used to resolve
+    them via the addressing layer.  Cross-remote moves are allowed — both
+    clients come from the same cache.
     """
     try:
-        src_cal = _get_calendar(client, source_calendar or None)
-        dst_cal = _get_calendar(client, target_calendar)
+        from caldav_mcp.addressing import resolve_addressed_calendar
+        from caldav_mcp.app_config import get_app_config
+        from caldav_mcp.tools import _resolve_pro_remote_client
+
+        # In pro mode both source and target are dotted paths; resolve them
+        # via the addressing layer (cross-remote moves are allowed — both
+        # clients come from the same cache).
+        if pro_user is not None:
+            app = get_app_config()
+
+            # Resolve the source calendar via the dotted path.
+            src_resolution = resolve_addressed_calendar(app, pro_user, source_calendar)
+            src_remote = src_resolution.remote
+            src_client = _resolve_pro_remote_client(src_remote)
+            src_cal = _get_calendar(src_client, src_resolution.calendar_name)
+
+            # Resolve the target calendar via the dotted path.
+            dst_resolution = resolve_addressed_calendar(app, pro_user, target_calendar)
+            dst_remote = dst_resolution.remote
+            dst_client = _resolve_pro_remote_client(dst_remote)
+            dst_cal = _get_calendar(dst_client, dst_resolution.calendar_name)
+        else:
+            src_cal = _get_calendar(client, source_calendar or None)
+            dst_cal = _get_calendar(client, target_calendar)
         event = src_cal.event_by_uid(uid)
         comp = _comp(event)
         if comp is None:

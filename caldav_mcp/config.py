@@ -30,6 +30,7 @@ HDR_USERNAME = "x-caldav-username"
 HDR_PASSWORD = "x-caldav-password"
 HDR_AUTHORIZATION = "authorization"
 HDR_API_KEY = "x-api-key"
+HDR_MCP_USERNAME = "x-mcp-username"
 
 
 def _server_tz() -> tzinfo:
@@ -59,6 +60,20 @@ TLS_CERT_PATH = os.environ.get("CALDAV_MCP_TLS_CERT", "")
 TLS_KEY_PATH = os.environ.get("CALDAV_MCP_TLS_KEY", "")
 TLS_CA_BUNDLE = os.environ.get("CALDAV_MCP_TLS_CA_BUNDLE", "")
 CALDAV_VERIFY_SSL = os.environ.get("CALDAV_MCP_CALDAV_VERIFY_SSL", "true").lower() in (
+    "true",
+    "1",
+    "yes",
+)
+
+# Read-only mode: when true, write tools are not registered on the MCP instance.
+READ_ONLY = os.environ.get("CALDAV_MCP_READ_ONLY", "false").lower() in (
+    "true",
+    "1",
+    "yes",
+)
+
+# Pro mode: load config and users from the SQLite store at startup.
+DB_CONFIG_ENABLED = os.environ.get("DB_CONFIG_ENABLED", "false").lower() in (
     "true",
     "1",
     "yes",

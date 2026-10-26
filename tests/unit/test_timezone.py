@@ -58,11 +58,29 @@ def test_tz_invalid_logs_warning_and_falls_back_to_utc():
 
 
 def test_now_carries_server_timezone():
-    """_now() and _start_of_day() must preserve the server timezone."""
-    with mock.patch("caldav_mcp.datetime_utils.SERVER_TZ", ZoneInfo("Europe/Vienna")):
+    """_now() and _start_of_day() must preserve the server timezone.
+
+    The wall clock is frozen to 2026-08-17 (mid-DST for Europe/Vienna) so the
+    UTC-offset assertion below is deterministic and independent of the real
+    current season — ``_now()`` normally returns the live clock, whose Vienna
+    offset flips between UTC+1 (October–March) and UTC+2 (April–September).
+    """
+
+    class _FrozenDateTime(datetime):
+        """datetime subclass with a frozen ``now()`` returning an August instant."""
+
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 8, 17, 15, 30, tzinfo=tz)
+
+    with (
+        mock.patch("caldav_mcp.datetime_utils.SERVER_TZ", ZoneInfo("Europe/Vienna")),
+        mock.patch("caldav_mcp.datetime_utils.datetime", _FrozenDateTime),
+    ):
         now = _now()
     assert now.tzinfo is ZoneInfo("Europe/Vienna")
-    # Europe/Vienna in late August is on DST (UTC+2).
+    # Europe/Vienna in late August is on DST (UTC+2) — the clock is frozen
+    # to 2026-08-17, so this holds regardless of when the test runs.
     assert now.utcoffset() == timedelta(hours=2)
 
 
@@ -118,15 +136,23 @@ def test_parse_dt_empty_input_returns_now():
 
 
 def test_get_today_events_starts_at_local_midnight():
-    """Optional: day helpers pass local-midnight ISO boundaries to get_events."""
+    """Day helpers pass local-midnight ISO boundaries to _get_events_core."""
     tz = ZoneInfo("Europe/Vienna")
     fake_now = datetime(2026, 8, 18, 15, 30, tzinfo=tz)
-    with mock.patch("caldav_mcp.datetime_utils.SERVER_TZ", tz):
-        with mock.patch("caldav_mcp.tools.queries._now", lambda: fake_now):
-            with mock.patch("caldav_mcp.tools.queries.caldav_get_events") as get_events:
-                get_events.return_value = server.ToolResult.success("ok")
-                server.caldav_get_today_events()
-    _, kwargs = get_events.call_args
+    fake_client = mock.MagicMock()
+    with (
+        mock.patch("caldav_mcp.datetime_utils.SERVER_TZ", tz),
+        mock.patch("caldav_mcp.tools.queries._now", lambda: fake_now),
+        mock.patch("caldav_mcp.tools.queries._get_events_core", return_value=[]) as core,
+        mock.patch("caldav_mcp.tools.queries._get_calendar", return_value=object()),
+        mock.patch("caldav_mcp.tools._require_auth", return_value=None),
+        mock.patch(
+            "caldav_mcp.tools._resolve_client_and_calendar",
+            return_value=(fake_client, object()),
+        ),
+    ):
+        server.caldav_get_today_events()
+    _, kwargs = core.call_args
     assert kwargs["start"] == "2026-08-18T00:00:00+02:00"
     assert kwargs["end"] == "2026-08-19T00:00:00+02:00"
 
@@ -134,11 +160,19 @@ def test_get_today_events_starts_at_local_midnight():
 def test_get_week_events_starts_at_local_midnight():
     tz = ZoneInfo("Europe/Vienna")
     fake_now = datetime(2026, 8, 18, 15, 30, tzinfo=tz)
-    with mock.patch("caldav_mcp.datetime_utils.SERVER_TZ", tz):
-        with mock.patch("caldav_mcp.tools.queries._now", lambda: fake_now):
-            with mock.patch("caldav_mcp.tools.queries.caldav_get_events") as get_events:
-                get_events.return_value = server.ToolResult.success("ok")
-                server.caldav_get_week_events()
-    _, kwargs = get_events.call_args
+    fake_client = mock.MagicMock()
+    with (
+        mock.patch("caldav_mcp.datetime_utils.SERVER_TZ", tz),
+        mock.patch("caldav_mcp.tools.queries._now", lambda: fake_now),
+        mock.patch("caldav_mcp.tools.queries._get_events_core", return_value=[]) as core,
+        mock.patch("caldav_mcp.tools.queries._get_calendar", return_value=object()),
+        mock.patch("caldav_mcp.tools._require_auth", return_value=None),
+        mock.patch(
+            "caldav_mcp.tools._resolve_client_and_calendar",
+            return_value=(fake_client, object()),
+        ),
+    ):
+        server.caldav_get_week_events()
+    _, kwargs = core.call_args
     assert kwargs["start"] == "2026-08-18T00:00:00+02:00"
     assert kwargs["end"] == "2026-08-25T00:00:00+02:00"

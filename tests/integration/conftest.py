@@ -16,6 +16,10 @@ RADICALE_URL = os.environ.get("RADICALE_URL", "http://localhost:5232")
 RADICALE_USER = os.environ.get("RADICALE_USER", "testuser")
 RADICALE_PASS = os.environ.get("RADICALE_PASS", "testpass")
 
+RADICALE2_URL = os.environ.get("RADICALE2_URL", "http://localhost:5233")
+RADICALE2_USER = os.environ.get("RADICALE2_USER", "testuser")
+RADICALE2_PASS = os.environ.get("RADICALE2_PASS", "testpass")
+
 
 @pytest.fixture(scope="session")
 def radicale_url():
@@ -33,6 +37,27 @@ def caldav_client(radicale_url):
         url=radicale_url,
         username=RADICALE_USER,
         password=RADICALE_PASS,
+    )
+    yield client
+    # No explicit close needed; session cleanup handles it.
+
+
+@pytest.fixture(scope="session")
+def radicale2_url():
+    """Base URL of the second Radicale server."""
+    return RADICALE2_URL
+
+
+@pytest.fixture(scope="session")
+def radicale2_client(radicale2_url):
+    """A real DAVClient connected to the second Radicale test server.
+
+    Session-scoped to avoid reconnecting for every test.
+    """
+    client = DAVClient(
+        url=radicale2_url,
+        username=RADICALE2_USER,
+        password=RADICALE2_PASS,
     )
     yield client
     # No explicit close needed; session cleanup handles it.

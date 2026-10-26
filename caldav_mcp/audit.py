@@ -7,9 +7,12 @@ SECURITY: Never log token values, passwords, or full Authorization headers.
 Only log success/failure status and method type.
 """
 
+from __future__ import annotations
+
 import json
 import logging
 import time
+from typing import Any
 
 _audit_log = logging.getLogger("caldav-mcp.audit")
 
@@ -53,6 +56,7 @@ def log_operation(
     duration_ms: float,
     calendar_name: str = "",
     detail: str = "",
+    remotes: dict[str, str] | None = None,
 ) -> None:
     """Log a tool execution.
 
@@ -68,8 +72,12 @@ def log_operation(
         Calendar operated on, if applicable.
     detail : str
         Optional short detail (e.g. event UID).
+    remotes : dict[str, str] | None
+        Optional mapping of ``"config.remote"`` → per-remote status string.
+        When provided the JSON entry gains a ``"remotes"`` object; when absent
+        the key is omitted entirely (byte-identical to the pre-M5 shape).
     """
-    entry = {
+    entry: dict[str, Any] = {
         "event": "tool",
         "tool": tool_name,
         "status": status,
@@ -78,6 +86,8 @@ def log_operation(
         "detail": detail,
         "ts": time.time(),
     }
+    if remotes is not None:
+        entry["remotes"] = remotes
     _audit_log.info(json.dumps(entry))
 
 

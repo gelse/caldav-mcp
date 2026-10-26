@@ -131,3 +131,70 @@ def test_auth_attempt_never_logs_token(mock_log):
         assert "password" not in key.lower()
         assert "secret" not in key.lower()
         assert "authorization" not in key.lower()
+
+
+# ---------------------------------------------------------------------------
+# Requirement 10: remotes serialization
+# ---------------------------------------------------------------------------
+
+
+@mock.patch("caldav_mcp.audit._audit_log")
+def test_log_operation_with_remotes(mock_log):
+    """log_operation(..., remotes=...) → JSON contains 'remotes' key."""
+    log_operation(
+        "caldav_get_events",
+        "ok",
+        100.0,
+        calendar_name="Personal",
+        remotes={"a.r": "ok", "b.r": "error"},
+    )
+    mock_log.info.assert_called_once()
+    payload = json.loads(mock_log.info.call_args[0][0])
+    assert payload["remotes"] == {"a.r": "ok", "b.r": "error"}
+    # Verify byte-identical key presence
+    raw = mock_log.info.call_args[0][0]
+    assert '"remotes"' in raw
+
+
+@mock.patch("caldav_mcp.audit._audit_log")
+def test_log_operation_without_remotes(mock_log):
+    """log_operation(...) without remotes → JSON has no 'remotes' key."""
+    log_operation("caldav_get_events", "ok", 100.0, calendar_name="Personal")
+    mock_log.info.assert_called_once()
+    payload = json.loads(mock_log.info.call_args[0][0])
+    assert "remotes" not in payload
+    # Byte-equality: the raw JSON should not contain 'remotes'
+    raw = mock_log.info.call_args[0][0]
+    assert '"remotes"' not in raw
+
+
+@mock.patch("caldav_mcp.audit._audit_log")
+def test_log_operation_remotes_none_omits_key(mock_log):
+    """log_operation(..., remotes=None) → no 'remotes' key (byte-equal to no-remotes)."""
+    log_operation(
+        "caldav_get_events",
+        "ok",
+        100.0,
+        calendar_name="Personal",
+        remotes=None,
+    )
+    mock_log.info.assert_called_once()
+    payload = json.loads(mock_log.info.call_args[0][0])
+    assert "remotes" not in payload
+
+
+@mock.patch("caldav_mcp.audit._audit_log")
+def test_log_operation_remotes_empty_dict(mock_log):
+    """log_operation(..., remotes={}) → JSON contains empty 'remotes' object."""
+    log_operation(
+        "caldav_get_events",
+        "ok",
+        100.0,
+        calendar_name="Personal",
+        remotes={},
+    )
+    mock_log.info.assert_called_once()
+    payload = json.loads(mock_log.info.call_args[0][0])
+    assert payload["remotes"] == {}
+    raw = mock_log.info.call_args[0][0]
+    assert '"remotes": {}' in raw or '"remotes":{}' in raw

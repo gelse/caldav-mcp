@@ -12,7 +12,7 @@ from caldav_mcp.constants import (
     MAILTO_PREFIX,
 )
 from caldav_mcp.errors import Status, ToolResult
-from caldav_mcp.tools import _empty, _ok, with_caldav_client
+from caldav_mcp.tools import _empty, _ok, mcp_tool_if_writable, with_caldav_client
 
 # Attendee add/remove modify the event but are additive, not destructive.
 _WRITE_ANNOTATIONS = {
@@ -30,8 +30,8 @@ _RO_ANNOTATIONS = {
 }
 
 
-@mcp.tool(annotations=_WRITE_ANNOTATIONS)
-@with_caldav_client()
+@mcp_tool_if_writable(annotations=_WRITE_ANNOTATIONS)
+@with_caldav_client(write=True)
 def caldav_add_attendee(
     client,
     cal,
@@ -66,8 +66,8 @@ def caldav_add_attendee(
     return _ok(message=f"Added attendee {email} to event {uid}", data={"uid": uid, "email": email})
 
 
-@mcp.tool(annotations=_WRITE_ANNOTATIONS)
-@with_caldav_client()
+@mcp_tool_if_writable(annotations=_WRITE_ANNOTATIONS)
+@with_caldav_client(write=True)
 def caldav_remove_attendee(client, cal, uid: str, email: str, calendar_name: str = ""):
     """Remove an attendee from an existing event."""
     event = cal.event_by_uid(uid)
@@ -101,7 +101,7 @@ def caldav_remove_attendee(client, cal, uid: str, email: str, calendar_name: str
 
 
 @mcp.tool(annotations=_RO_ANNOTATIONS)
-@with_caldav_client()
+@with_caldav_client(write=True)
 def caldav_list_attendees(client, cal, uid: str, calendar_name: str = ""):
     """List attendees of an event."""
     event = cal.event_by_uid(uid)

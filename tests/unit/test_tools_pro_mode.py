@@ -1,0 +1,1106 @@
+"""Unit tests for pro-mode tool behaviour (M4.3 — dotted-path addressing).
+
+Patch discipline (following M4.2 / M2.2 idioms):
+
+* ``_authenticate`` patched at ``caldav_mcp.tools._authenticate`` to inject
+  the pro user and skip real endpoint auth.
+* ``_is_pro_mode`` patched at ``caldav_mcp.auth._is_pro_mode`` for the
+  auth-layer pro mode gate.
+* ``configure_app_config`` / ``reset_app_config`` for the db-mode config.
+* ``DAVClient`` patched at ``caldav_mcp.tools.DAVClient`` and the cache
+  cleared per test.
+
+Test numbering follows the plan §Test requirements 7–14.
+"""
+
+from __future__ import annotations
+
+from unittest import mock
+
+import pytest
+from conftest import FakeEvent, make_event
+
+import caldav_mcp.tools as tools_mod
+from caldav_mcp.app_config import (
+    AppConfig,
+    Calendar,
+    Config,
+    Remote,
+    configure_app_config,
+    reset_app_config,
+)
+from caldav_mcp.db_loader import ProUser
+from caldav_mcp.errors import Status, ToolResult
+from caldav_mcp.tools import get_cache
+
+# ---------------------------------------------------------------------------
+# Fabricated db-mode AppConfig
+# ---------------------------------------------------------------------------
+
+_REMOTE_NC = Remote(
+    name="nc",
+    url="https://cal.example/dav",
+    auth_mode="direct",
+    username="alice",
+    password="secret",
+)
+_REMOTE_NC2 = Remote(
+    name="nc2",
+    url="https://cal2.example/dav",
+    auth_mode="direct",
+    username="alice2",
+    password="secret2",
+)
+_REMOTE_PT = Remote(
+    name="passthrough",
+    url="",
+    auth_mode="passthrough",
+)
+
+_CONFIG_WORK = Config(
+    name="work",
+    remotes=(_REMOTE_NC, _REMOTE_NC2),
+    calendars=(
+        ("nc", (Calendar(name="team"), Calendar(name="personal"))),
+        ("nc2", (Calendar(name="shared"),)),
+    ),
+)
+
+_CONFIG_PERSONAL = Config(
+    name="personal",
+    remotes=(_REMOTE_PT,),
+    calendars=(("passthrough", (Calendar(name="mycal"),)),),
+)
+
+_DB_APP = AppConfig(mode="db", config=None, configs=(_CONFIG_WORK, _CONFIG_PERSONAL))
+
+_USER_WORK = ProUser(username="alice", key_hash="h", config_names=("work",))
+_USER_BOTH = ProUser(username="both", key_hash="h2", config_names=("work", "personal"))
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _pro_mode_setup():
+    """Install db-mode config and clean up per test."""
+    configure_app_config(_DB_APP)
+    get_cache().clear()
+    yield
+    reset_app_config()
+    get_cache().clear()
+
+
+def _fake_cal(name="team", url="https://cal.example/team"):
+    """Return a minimal mock calendar."""
+    cal = mock.MagicMock()
+    cal.name = name
+    cal.url = url
+    return cal
+
+
+def _fake_client(cal=None):
+    """Return a mock DAVClient with a principal returning *cal*."""
+    client = mock.MagicMock()
+    principal = mock.MagicMock()
+    calendars = [cal] if cal else []
+    principal.calendars.return_value = calendars
+    client.principal.return_value = principal
+    return client
+
+
+def _auth_return(pro_user):
+    """Return the ``(pro_user, error)`` tuple for ``_authenticate`` patches."""
+    return (pro_user, None)
+
+
+# ===================================================================
+# Auth gate is honored before any client construction
+# ===================================================================
+
+
+class TestAuthGate:
+    """The endpoint auth gate short-circuits before client resolution.
+
+    ``with_caldav_client`` consults ``_authenticate()`` (M4.3 §2); a failure
+    result must be returned as-is with no ``DAVClient`` constructed.
+    """
+
+    def test_auth_failure_before_client_construction(self):
+        failure = ToolResult.failure(Status.AUTH, "unauthorized")
+        with (
+            mock.patch("caldav_mcp.tools._authenticate", return_value=(None, failure)),
+            mock.patch("caldav_mcp.tools.DAVClient") as mock_dav,
+        ):
+            result = tools_mod.caldav_create_event(
+                summary="Test",
+                start="2026-01-15T10:00",
+                calendar_name="work.nc.team",
+            )
+        assert result is failure
+        assert result.status == Status.AUTH
+        mock_dav.assert_not_called()
+
+
+# ===================================================================
+# 7. Write tool, no dots → ERROR, no DAVClient
+# ===================================================================
+
+
+class TestWriteToolNoDots:
+    """Test requirement 7: plain calendar name in pro mode → ERROR."""
+
+    def test_create_event_no_dots_error(self):
+        """caldav_create_event with calendar_name='team' (no dots) → ERROR."""
+        with (
+            mock.patch("caldav_mcp.tools._authenticate", return_value=_auth_return(_USER_WORK)),
+            mock.patch("caldav_mcp.tools.DAVClient") as mock_dav,
+        ):
+            result = tools_mod.caldav_create_event(
+                summary="Test",
+                start="2026-01-15T10:00",
+                calendar_name="team",
+            )
+        assert result.status == Status.ERROR
+        assert "config.remote.calendar" in result.message.lower()
+        mock_dav.assert_not_called()
+
+    def test_update_event_no_dots_error(self):
+        """caldav_update_event with plain name → ERROR."""
+        with (
+            mock.patch("caldav_mcp.tools._authenticate", return_value=_auth_return(_USER_WORK)),
+            mock.patch("caldav_mcp.tools.DAVClient") as mock_dav,
+        ):
+            result = tools_mod.caldav_update_event(uid="x", calendar_name="team")
+        assert result.status == Status.ERROR
+        mock_dav.assert_not_called()
+
+    def test_delete_event_no_dots_error(self):
+        """caldav_delete_event with plain name → ERROR."""
+        with (
+            mock.patch("caldav_mcp.tools._authenticate", return_value=_auth_return(_USER_WORK)),
+            mock.patch("caldav_mcp.tools.DAVClient") as mock_dav,
+        ):
+            result = tools_mod.caldav_delete_event(uid="x", calendar_name="team")
+        assert result.status == Status.ERROR
+        mock_dav.assert_not_called()
+
+    def test_move_event_no_dots_error(self):
+        """caldav_move_event with plain source_calendar → ERROR."""
+        with (
+            mock.patch("caldav_mcp.tools._authenticate", return_value=_auth_return(_USER_WORK)),
+            mock.patch("caldav_mcp.tools.DAVClient") as mock_dav,
+        ):
+            result = tools_mod.caldav_move_event(
+                uid="x",
+                target_calendar="work.nc.team",
+                source_calendar="team",
+            )
+        assert result.status == Status.ERROR
+        mock_dav.assert_not_called()
+
+    def test_add_attendee_no_dots_error(self):
+        """caldav_add_attendee with plain name → ERROR."""
+        with (
+            mock.patch("caldav_mcp.tools._authenticate", return_value=_auth_return(_USER_WORK)),
+            mock.patch("caldav_mcp.tools.DAVClient") as mock_dav,
+        ):
+            result = tools_mod.caldav_add_attendee(
+                uid="x",
+                email="a@b.com",
+                calendar_name="team",
+            )
+        assert result.status == Status.ERROR
+        mock_dav.assert_not_called()
+
+    def test_remove_attendee_no_dots_error(self):
+        """caldav_remove_attendee with plain name → ERROR."""
+        with (
+            mock.patch("caldav_mcp.tools._authenticate", return_value=_auth_return(_USER_WORK)),
+            mock.patch("caldav_mcp.tools.DAVClient") as mock_dav,
+        ):
+            result = tools_mod.caldav_remove_attendee(
+                uid="x",
+                email="a@b.com",
+                calendar_name="team",
+            )
+        assert result.status == Status.ERROR
+        mock_dav.assert_not_called()
+
+    def test_list_attendees_no_dots_error(self):
+        """caldav_list_attendees with plain name → ERROR."""
+        with (
+            mock.patch("caldav_mcp.tools._authenticate", return_value=_auth_return(_USER_WORK)),
+            mock.patch("caldav_mcp.tools.DAVClient") as mock_dav,
+        ):
+            result = tools_mod.caldav_list_attendees(uid="x", calendar_name="team")
+        assert result.status == Status.ERROR
+        mock_dav.assert_not_called()
+
+    def test_empty_calendar_name_no_dots_error(self):
+        """Empty calendar_name in pro mode write tool → ERROR (not a valid dotted path)."""
+        with (
+            mock.patch("caldav_mcp.tools._authenticate", return_value=_auth_return(_USER_WORK)),
+            mock.patch("caldav_mcp.tools.DAVClient") as mock_dav,
+        ):
+            result = tools_mod.caldav_create_event(
+                summary="Test",
+                start="2026-01-15T10:00",
+                calendar_name="",
+            )
+        assert result.status == Status.ERROR
+        mock_dav.assert_not_called()
+
+
+# ===================================================================
+# 8. Valid dotted path → client from stored creds, handler executes
+# ===================================================================
+
+
+class TestWriteToolValidDottedPath:
+    """Test requirement 8: valid dotted path → DAVClient from stored creds."""
+
+    def test_create_event_with_dotted_path(self):
+        fake_cal = _fake_cal(name="team")
+        fake_client = _fake_client(cal=fake_cal)
+        recorder = mock.MagicMock(return_value=fake_client)
+
+        with (
+            mock.patch("caldav_mcp.tools._authenticate", return_value=_auth_return(_USER_WORK)),
+            mock.patch("caldav_mcp.tools.DAVClient", recorder),
+            mock.patch("caldav_mcp.tools._get_calendar", return_value=fake_cal),
+        ):
+            result = tools_mod.caldav_create_event(
+                summary="Sprint Planning",
+                start="2026-01-15T10:00",
+                calendar_name="work.nc.team",
+            )
+        assert result.status == Status.OK
+        assert "Sprint Planning" in result.message
+        # DAVClient was called with the remote's stored credentials
+        recorder.assert_called_once()
+        call_kwargs = recorder.call_args[1]
+        assert call_kwargs["url"] == "https://cal.example/dav"
+        assert call_kwargs["username"] == "alice"
+        assert call_kwargs["password"] == "secret"
+
+    def test_delete_event_with_dotted_path(self):
+        fake_cal = _fake_cal(name="team")
+        fake_event = mock.MagicMock()
+        fake_cal.event_by_uid.return_value = fake_event
+        fake_client = _fake_client(cal=fake_cal)
+
+        with (
+            mock.patch("caldav_mcp.tools._authenticate", return_value=_auth_return(_USER_WORK)),
+            mock.patch("caldav_mcp.tools.DAVClient", return_value=fake_client),
+            mock.patch("caldav_mcp.tools._get_calendar", return_value=fake_cal),
+        ):
+            result = tools_mod.caldav_delete_event(
+                uid="ev-1",
+                calendar_name="work.nc.team",
+            )
+        assert result.status == Status.OK
+        fake_event.delete.assert_called_once()
+
+
+# ===================================================================
+# 9. Non-granted config → generic ERROR, no client
+# ===================================================================
+
+
+class TestWriteToolNonGrantedConfig:
+    """Test requirement 9: dotted path into non-granted config → ERROR."""
+
+    def test_create_event_non_granted_config(self):
+        """User 'work' has access to 'work' only; path into 'personal' → ERROR."""
+        with (
+            mock.patch("caldav_mcp.tools._authenticate", return_value=_auth_return(_USER_WORK)),
+            mock.patch("caldav_mcp.tools.DAVClient") as mock_dav,
+        ):
+            result = tools_mod.caldav_create_event(
+                summary="Test",
+                start="2026-01-15T10:00",
+                calendar_name="personal.passthrough.mycal",
+            )
+        assert result.status == Status.ERROR
+        mock_dav.assert_not_called()
+
+
+# ===================================================================
+# 10. Passthrough remote with/without headers
+# ===================================================================
+
+
+class TestPassthroughRemote:
+    """Test requirement 10: passthrough remote in pro mode."""
+
+    def test_passthrough_with_headers(self):
+        """Passthrough remote with valid headers → DAVClient built from headers."""
+        fake_cal = _fake_cal(name="mycal")
+        fake_client = _fake_client(cal=fake_cal)
+        recorder = mock.MagicMock(return_value=fake_client)
+        headers = {
+            "x-caldav-url": "https://pt.example/dav",
+            "x-caldav-username": "pt-user",
+            "x-caldav-password": "pt-pass",
+        }
+
+        with (
+            mock.patch("caldav_mcp.tools._authenticate", return_value=_auth_return(_USER_BOTH)),
+            mock.patch("caldav_mcp.tools.DAVClient", recorder),
+            mock.patch("caldav_mcp.tools._get_calendar", return_value=fake_cal),
+            mock.patch(
+                "fastmcp.server.dependencies.get_http_headers",
+                return_value=headers,
+            ),
+        ):
+            result = tools_mod.caldav_create_event(
+                summary="PT event",
+                start="2026-01-15T10:00",
+                calendar_name="personal.passthrough.mycal",
+            )
+        assert result.status == Status.OK
+        recorder.assert_called_once()
+        call_kwargs = recorder.call_args[1]
+        assert call_kwargs["url"] == "https://pt.example/dav"
+        assert call_kwargs["username"] == "pt-user"
+        assert call_kwargs["password"] == "pt-pass"
+
+    def test_passthrough_missing_headers(self):
+        """Passthrough remote without required headers → AuthError (caught by _REMOTE_ERRORS)."""
+        empty_headers: dict[str, str] = {}
+
+        with (
+            mock.patch("caldav_mcp.tools._authenticate", return_value=_auth_return(_USER_BOTH)),
+            mock.patch("caldav_mcp.tools.DAVClient") as mock_dav,
+            mock.patch(
+                "fastmcp.server.dependencies.get_http_headers",
+                return_value=empty_headers,
+            ),
+        ):
+            result = tools_mod.caldav_create_event(
+                summary="PT event",
+                start="2026-01-15T10:00",
+                calendar_name="personal.passthrough.mycal",
+            )
+        assert result.status == Status.AUTH
+        assert "X-Caldav" in result.message
+        mock_dav.assert_not_called()
+
+
+# ===================================================================
+# 11. Cache reuse across calls
+# ===================================================================
+
+
+class TestCacheReuse:
+    """Test requirement 11: same calendar → single DAVClient; second remote → second client."""
+
+    def test_same_remote_reuses_cached_client(self):
+        """Two calls to the same remote → only one DAVClient construction."""
+        fake_cal = _fake_cal(name="team")
+        fake_client = _fake_client(cal=fake_cal)
+        recorder = mock.MagicMock(return_value=fake_client)
+
+        with (
+            mock.patch("caldav_mcp.tools._authenticate", return_value=_auth_return(_USER_WORK)),
+            mock.patch("caldav_mcp.tools.DAVClient", recorder),
+            mock.patch("caldav_mcp.tools._get_calendar", return_value=fake_cal),
+        ):
+            tools_mod.caldav_create_event(
+                summary="E1",
+                start="2026-01-15T10:00",
+                calendar_name="work.nc.team",
+            )
+            tools_mod.caldav_create_event(
+                summary="E2",
+                start="2026-01-15T11:00",
+                calendar_name="work.nc.personal",
+            )
+        # Only one DAVClient built (same remote url+username → cache hit)
+        assert recorder.call_count == 1
+
+    def test_different_remote_builds_second_client(self):
+        """Calls to two different remotes → two DAVClient constructions."""
+        cal1 = _fake_cal(name="team")
+        cal2 = _fake_cal(name="shared")
+        client1 = _fake_client(cal=cal1)
+        client2 = _fake_client(cal=cal2)
+        recorder = mock.MagicMock(side_effect=[client1, client2])
+
+        with (
+            mock.patch("caldav_mcp.tools._authenticate", return_value=_auth_return(_USER_WORK)),
+            mock.patch("caldav_mcp.tools.DAVClient", recorder),
+            mock.patch("caldav_mcp.tools._get_calendar", side_effect=[cal1, cal2]),
+        ):
+            tools_mod.caldav_create_event(
+                summary="E1",
+                start="2026-01-15T10:00",
+                calendar_name="work.nc.team",
+            )
+            tools_mod.caldav_create_event(
+                summary="E2",
+                start="2026-01-15T11:00",
+                calendar_name="work.nc2.shared",
+            )
+        assert recorder.call_count == 2
+
+
+# ===================================================================
+# 12. caldav_move_event pro mode
+# ===================================================================
+
+
+class TestMoveEventProMode:
+    """Test requirement 12: move_event with both dotted paths, cross-config target."""
+
+    def test_move_cross_config_target_resolved(self):
+        """Target in another granted config → both clients resolved."""
+        from datetime import datetime
+
+        src_cal = _fake_cal(name="team")
+        dst_cal = _fake_cal(name="mycal")
+        src_client = _fake_client(cal=src_cal)
+        dst_client = _fake_client(cal=dst_cal)
+
+        # Build a proper icalendar event for the move handler
+        from icalendar import Calendar as ICalCalendar
+        from icalendar import Event as ICalEvent
+
+        ical = ICalCalendar()
+        ev = ICalEvent()
+        ev.add("uid", "ev-1")
+        ev.add("summary", "Test")
+        ev.add("dtstart", datetime(2026, 1, 15, 10, 0))
+        ical.add_component(ev)
+
+        fake_event = mock.MagicMock()
+        fake_event.icalendar_component = ev
+        fake_event.data = ical.to_ical().decode("utf-8")
+
+        src_cal.event_by_uid.return_value = fake_event
+
+        def resolve_remote(remote):
+            """Return the appropriate client based on the remote."""
+            if remote.name == "nc":
+                return src_client
+            if remote.name == "passthrough":
+                return dst_client
+            return mock.MagicMock()
+
+        def get_calendar(client, cal_name):
+            """Assert resolved bare names are used, not dotted paths."""
+            assert "." not in cal_name, f"Expected bare calendar name, got dotted path: {cal_name}"
+            if cal_name == "team":
+                return src_cal
+            if cal_name == "mycal":
+                return dst_cal
+            raise AssertionError(f"Unexpected calendar name: {cal_name}")
+
+        with (
+            mock.patch("caldav_mcp.tools._authenticate", return_value=_auth_return(_USER_BOTH)),
+            mock.patch(
+                "caldav_mcp.tools._resolve_pro_remote_client",
+                side_effect=resolve_remote,
+            ),
+            mock.patch("caldav_mcp.tools.mutations._get_calendar", side_effect=get_calendar),
+        ):
+            result = tools_mod.caldav_move_event(
+                uid="ev-1",
+                source_calendar="work.nc.team",
+                target_calendar="personal.passthrough.mycal",
+            )
+        assert result.status == Status.OK, f"Got: {result.status} — {result.message}"
+
+    def test_move_source_resolved_bare_name(self):
+        """Raw dotted source name doesn't match live calendars; resolved bare name does.
+
+        This proves the source dotted path is resolved via the addressing
+        layer before being passed to _get_calendar.
+        """
+        from datetime import datetime
+
+        src_cal = _fake_cal(name="personal")
+        dst_cal = _fake_cal(name="shared")
+        src_client = _fake_client(cal=src_cal)
+        dst_client = _fake_client(cal=dst_cal)
+
+        from icalendar import Calendar as ICalCalendar
+        from icalendar import Event as ICalEvent
+
+        ical = ICalCalendar()
+        ev = ICalEvent()
+        ev.add("uid", "ev-2")
+        ev.add("summary", "Source Resolved")
+        ev.add("dtstart", datetime(2026, 2, 1, 9, 0))
+        ical.add_component(ev)
+
+        fake_event = mock.MagicMock()
+        fake_event.icalendar_component = ev
+        fake_event.data = ical.to_ical().decode("utf-8")
+        src_cal.event_by_uid.return_value = fake_event
+
+        def resolve_remote(remote):
+            if remote.name == "nc":
+                return src_client
+            if remote.name == "nc2":
+                return dst_client
+            return mock.MagicMock()
+
+        def get_calendar(client, cal_name):
+            """Return calendar based on the RESOLVED bare name."""
+            # The raw dotted path "work.nc.personal" would never match;
+            # only the resolved bare name "personal" should be used.
+            if cal_name == "personal":
+                return src_cal
+            if cal_name == "shared":
+                return dst_cal
+            raise AssertionError(
+                f"Unexpected calendar name: {cal_name!r} — source dotted path was not resolved"
+            )
+
+        with (
+            mock.patch("caldav_mcp.tools._authenticate", return_value=_auth_return(_USER_BOTH)),
+            mock.patch(
+                "caldav_mcp.tools._resolve_pro_remote_client",
+                side_effect=resolve_remote,
+            ),
+            mock.patch("caldav_mcp.tools.mutations._get_calendar", side_effect=get_calendar),
+        ):
+            result = tools_mod.caldav_move_event(
+                uid="ev-2",
+                source_calendar="work.nc.personal",
+                target_calendar="work.nc2.shared",
+            )
+        assert result.status == Status.OK, f"Got: {result.status} — {result.message}"
+
+    def test_move_source_non_granted_config_error(self):
+        """Source path into a non-granted config → generic addressing error."""
+        with (
+            mock.patch("caldav_mcp.tools._authenticate", return_value=_auth_return(_USER_WORK)),
+            mock.patch("caldav_mcp.tools.DAVClient") as mock_dav,
+        ):
+            result = tools_mod.caldav_move_event(
+                uid="ev-3",
+                source_calendar="personal.passthrough.mycal",
+                target_calendar="work.nc.team",
+            )
+        # User WORK has access to 'work' only; source is in 'personal' config.
+        # resolve_addressed_calendar raises ValueError → Status.ERROR.
+        assert result.status == Status.ERROR, f"Got: {result.status} — {result.message}"
+        mock_dav.assert_not_called()
+
+    def test_move_target_no_access_error(self):
+        """Target path without access → ERROR."""
+        src_cal = _fake_cal(name="team")
+        src_client = _fake_client(cal=src_cal)
+
+        with (
+            mock.patch("caldav_mcp.tools._authenticate", return_value=_auth_return(_USER_WORK)),
+            mock.patch("caldav_mcp.tools.DAVClient", return_value=src_client),
+            mock.patch("caldav_mcp.tools.mutations._get_calendar", return_value=src_cal),
+        ):
+            result = tools_mod.caldav_move_event(
+                uid="ev-1",
+                source_calendar="work.nc.team",
+                target_calendar="personal.passthrough.mycal",
+            )
+        # User WORK has access to 'work' only; target is in 'personal' config.
+        # resolve_addressed_calendar raises ValueError → Status.ERROR.
+        assert result.status == Status.ERROR, f"Got: {result.status} — {result.message}"
+
+
+# ===================================================================
+# 13. Read tool dotted path resolves (interim), plain name errors
+# ===================================================================
+
+
+class TestReadToolProMode:
+    """Test requirement 13: read tool with dotted path resolves; plain name errors."""
+
+    def test_get_events_dotted_path_resolves(self):
+        """caldav_get_events with dotted path in pro mode → resolves and executes."""
+        fake_cal = _fake_cal(name="team")
+        fake_client = _fake_client(cal=fake_cal)
+
+        with (
+            mock.patch("caldav_mcp.tools._authenticate", return_value=_auth_return(_USER_WORK)),
+            mock.patch("caldav_mcp.tools.DAVClient", return_value=fake_client),
+            mock.patch("caldav_mcp.tools._get_calendar", return_value=fake_cal),
+        ):
+            result = tools_mod.caldav_get_events(calendar_name="work.nc.team")
+        # The handler executes (may return EMPTY if no events, but no error)
+        assert result.status in (Status.OK, Status.EMPTY)
+
+    def test_get_events_plain_name_in_pro_mode(self):
+        """caldav_get_events with plain name in pro mode → generic ValueError."""
+        with (
+            mock.patch("caldav_mcp.tools._authenticate", return_value=_auth_return(_USER_WORK)),
+            mock.patch("caldav_mcp.tools.DAVClient") as mock_dav,
+        ):
+            result = tools_mod.caldav_get_events(calendar_name="team")
+        # Read tools don't have write=True, so no dotted-path validation;
+        # but _resolve_client_and_calendar tries to resolve the path via the
+        # pro branch, which calls resolve_addressed_calendar with the plain
+        # name — this raises ValueError → Status.ERROR via _render_error.
+        assert result.status == Status.ERROR
+        mock_dav.assert_not_called()
+
+
+# ===================================================================
+# 14. Simple-mode guard: write tools with plain names still work
+# ===================================================================
+
+
+class TestSimpleModeWriteTools:
+    """Test requirement 14: simple-mode write tools with plain names still work."""
+
+    def test_simple_mode_create_event_with_plain_name(self):
+        """In simple mode (pro_user=None), plain calendar_name still works."""
+        fake_cal = _fake_cal(name="Work")
+        fake_client = _fake_client(cal=fake_cal)
+        recorder = mock.MagicMock(return_value=fake_client)
+
+        with (
+            mock.patch("caldav_mcp.tools._authenticate", return_value=(None, None)),
+            mock.patch("caldav_mcp.tools._resolve_credentials", return_value=("u", "p", "w")),
+            mock.patch("caldav_mcp.tools.DAVClient", recorder),
+            mock.patch("caldav_mcp.tools._get_calendar", return_value=fake_cal),
+        ):
+            result = tools_mod.caldav_create_event(
+                summary="Meeting",
+                start="2026-01-15T10:00",
+                calendar_name="Work",
+            )
+        assert result.status == Status.OK
+        # Simple mode: no dotted-path validation
+        assert "Meeting" in result.message
+
+    def test_simple_mode_move_event_with_plain_names(self):
+        """In simple mode, move_event with plain target_calendar still works."""
+        src_cal = _fake_cal(name="src")
+        dst_cal = _fake_cal(name="dst")
+        fake_client = _fake_client(cal=src_cal)
+
+        # Build a proper icalendar event
+        from datetime import datetime
+
+        from icalendar import Calendar as ICalCalendar
+        from icalendar import Event as ICalEvent
+
+        ical = ICalCalendar()
+        ev = ICalEvent()
+        ev.add("uid", "ev-1")
+        ev.add("summary", "Test")
+        ev.add("dtstart", datetime(2026, 1, 15, 10, 0))
+        ical.add_component(ev)
+
+        fake_event = mock.MagicMock()
+        fake_event.icalendar_component = ev
+        fake_event.data = ical.to_ical().decode("utf-8")
+
+        src_cal.event_by_uid.return_value = fake_event
+
+        with (
+            mock.patch("caldav_mcp.tools._authenticate", return_value=(None, None)),
+            mock.patch("caldav_mcp.tools._resolve_credentials", return_value=("u", "p", "w")),
+            mock.patch("caldav_mcp.tools.DAVClient", return_value=fake_client),
+            # _get_calendar is imported directly in mutations.py
+            mock.patch("caldav_mcp.tools.mutations._get_calendar", side_effect=[src_cal, dst_cal]),
+        ):
+            result = tools_mod.caldav_move_event(
+                uid="ev-1",
+                target_calendar="dst",
+                source_calendar="src",
+            )
+        assert result.status == Status.OK, f"Got: {result.status} — {result.message}"
+
+
+# ===================================================================
+# 15. Parameterless read tools → clear typed ERROR in pro mode
+# ===================================================================
+
+
+class TestParameterlessReadProMode:
+    """Read tools without a calendar arg fan-out across all accessible remotes.
+
+    M4.4 changed the behaviour: empty ``calendar_name`` in pro mode no longer
+    returns a typed ERROR.  Instead the tool fans out across all accessible
+    calendars of all remotes the user may access.
+    """
+
+    def test_list_calendars_no_calendar_param(self):
+        """caldav_list_calendars (needs_calendar=False) fans out."""
+        fake_cal = _fake_cal(name="team")
+        fake_client = _fake_client(cal=fake_cal)
+        with (
+            mock.patch("caldav_mcp.tools._authenticate", return_value=_auth_return(_USER_BOTH)),
+            mock.patch("caldav_mcp.tools.DAVClient", return_value=fake_client),
+        ):
+            result = tools_mod.caldav_list_calendars()
+        # Fan-out across remotes — at least EMPTY or OK is acceptable.
+        assert result.status in (Status.OK, Status.EMPTY)
+
+    def test_get_events_no_calendar_param(self):
+        """caldav_get_events with default empty calendar_name fans out."""
+        fake_cal = _fake_cal(name="team")
+        fake_client = _fake_client(cal=fake_cal)
+        with (
+            mock.patch("caldav_mcp.tools._authenticate", return_value=_auth_return(_USER_BOTH)),
+            mock.patch("caldav_mcp.tools.DAVClient", return_value=fake_client),
+            mock.patch("caldav_mcp.tools._get_calendar", return_value=fake_cal),
+        ):
+            result = tools_mod.caldav_get_events()
+        assert result.status in (Status.OK, Status.EMPTY)
+
+    def test_get_event_by_uid_no_calendar_param(self):
+        """caldav_get_event_by_uid with default empty calendar_name fans out."""
+        fake_cal = _fake_cal(name="team")
+        fake_client = _fake_client(cal=fake_cal)
+        with (
+            mock.patch("caldav_mcp.tools._authenticate", return_value=_auth_return(_USER_BOTH)),
+            mock.patch("caldav_mcp.tools.DAVClient", return_value=fake_client),
+            mock.patch("caldav_mcp.tools._get_calendar", return_value=fake_cal),
+        ):
+            result = tools_mod.caldav_get_event_by_uid(uid="ev-1")
+        assert result.status in (Status.OK, Status.EMPTY)
+
+    def test_search_events_no_calendar_param(self):
+        """caldav_search_events with default empty calendar_name fans out."""
+        fake_cal = _fake_cal(name="team")
+        fake_client = _fake_client(cal=fake_cal)
+        with (
+            mock.patch("caldav_mcp.tools._authenticate", return_value=_auth_return(_USER_BOTH)),
+            mock.patch("caldav_mcp.tools.DAVClient", return_value=fake_client),
+            mock.patch("caldav_mcp.tools._get_calendar", return_value=fake_cal),
+        ):
+            result = tools_mod.caldav_search_events(query="test")
+        assert result.status in (Status.OK, Status.EMPTY)
+
+    def test_get_events_dotted_path_resolves(self):
+        """caldav_get_events with a valid dotted path still resolves correctly."""
+        fake_cal = _fake_cal(name="team")
+        fake_client = _fake_client(cal=fake_cal)
+
+        with (
+            mock.patch("caldav_mcp.tools._authenticate", return_value=_auth_return(_USER_WORK)),
+            mock.patch("caldav_mcp.tools.DAVClient", return_value=fake_client),
+            mock.patch("caldav_mcp.tools._get_calendar", return_value=fake_cal),
+        ):
+            result = tools_mod.caldav_get_events(calendar_name="work.nc.team")
+        # Handler executes successfully (EMPTY is expected since no real events).
+        assert result.status in (Status.OK, Status.EMPTY)
+
+
+# ===================================================================
+# 16. Passthrough cache password verification
+# ===================================================================
+
+
+class TestPassthroughCachePasswordVerification:
+    """Passthrough cache-hit must verify the password to prevent escalation.
+
+    A second request with the same username but a DIFFERENT password must
+    NOT reuse the cached client (it should be treated as a miss and a
+    rebuild attempted).  A second request with the correct password DOES
+    reuse the cached client.
+    """
+
+    def test_wrong_password_does_not_reuse_cached_client(self):
+        """Wrong password on second request → cache miss, rebuild attempted."""
+        fake_cal = _fake_cal(name="mycal")
+        fake_client = _fake_client(cal=fake_cal)
+        # Two distinct client instances to prove a rebuild happened.
+        fake_client_2 = _fake_client(cal=fake_cal)
+        call_count = 0
+
+        def make_client(**kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return fake_client
+            return fake_client_2
+
+        headers_1 = {
+            "x-caldav-url": "https://pt.example/dav",
+            "x-caldav-username": "alice",
+            "x-caldav-password": "correct-password",
+        }
+        headers_2 = {
+            "x-caldav-url": "https://pt.example/dav",
+            "x-caldav-username": "alice",
+            "x-caldav-password": "WRONG-password",
+        }
+
+        with (
+            mock.patch("caldav_mcp.tools._authenticate", return_value=_auth_return(_USER_BOTH)),
+            mock.patch("caldav_mcp.tools.DAVClient", side_effect=make_client),
+            mock.patch("caldav_mcp.tools._get_calendar", return_value=fake_cal),
+            mock.patch(
+                "fastmcp.server.dependencies.get_http_headers",
+                return_value=headers_1,
+            ),
+        ):
+            result_1 = tools_mod.caldav_create_event(
+                summary="E1",
+                start="2026-01-15T10:00",
+                calendar_name="personal.passthrough.mycal",
+            )
+        assert result_1.status == Status.OK
+
+        # Second call with the WRONG password for the same username.
+        with (
+            mock.patch("caldav_mcp.tools._authenticate", return_value=_auth_return(_USER_BOTH)),
+            mock.patch("caldav_mcp.tools.DAVClient", side_effect=make_client),
+            mock.patch("caldav_mcp.tools._get_calendar", return_value=fake_cal),
+            mock.patch(
+                "fastmcp.server.dependencies.get_http_headers",
+                return_value=headers_2,
+            ),
+        ):
+            tools_mod.caldav_create_event(
+                summary="E2",
+                start="2026-01-15T11:00",
+                calendar_name="personal.passthrough.mycal",
+            )
+        # A new DAVClient was built — proof the cache did NOT return the
+        # wrong-password entry.
+        assert call_count == 2, "Expected two DAVClient constructions (no cache reuse)"
+
+    def test_correct_password_reuses_cached_client(self):
+        """Correct password on second request → cache hit, single client."""
+        fake_cal = _fake_cal(name="mycal")
+        fake_client = _fake_client(cal=fake_cal)
+        recorder = mock.MagicMock(return_value=fake_client)
+        headers = {
+            "x-caldav-url": "https://pt.example/dav",
+            "x-caldav-username": "alice",
+            "x-caldav-password": "correct-password",
+        }
+
+        with (
+            mock.patch("caldav_mcp.tools._authenticate", return_value=_auth_return(_USER_BOTH)),
+            mock.patch("caldav_mcp.tools.DAVClient", recorder),
+            mock.patch("caldav_mcp.tools._get_calendar", return_value=fake_cal),
+            mock.patch(
+                "fastmcp.server.dependencies.get_http_headers",
+                return_value=headers,
+            ),
+        ):
+            tools_mod.caldav_create_event(
+                summary="E1",
+                start="2026-01-15T10:00",
+                calendar_name="personal.passthrough.mycal",
+            )
+            tools_mod.caldav_create_event(
+                summary="E2",
+                start="2026-01-15T11:00",
+                calendar_name="personal.passthrough.mycal",
+            )
+        # Only one DAVClient built — cache reuse with matching password.
+        assert recorder.call_count == 1
+
+
+# ===================================================================
+# M4.4 — Fan-out decorator-level tests (tests 8–12)
+# ===================================================================
+
+
+class TestFanoutDecoratorLevel:
+    """Decorator-level fan-out tests for read tools in pro mode."""
+
+    def test_list_calendars_fanout_two_remotes(self):
+        """Test 8: caldav_list_calendars with 2 accessible remotes → aggregated entries."""
+        fake_cal = _fake_cal(name="team")
+        fake_client = _fake_client(cal=fake_cal)
+        with (
+            mock.patch("caldav_mcp.tools._authenticate", return_value=_auth_return(_USER_BOTH)),
+            mock.patch("caldav_mcp.tools.DAVClient", return_value=fake_client),
+        ):
+            result = tools_mod.caldav_list_calendars()
+        # Should have entries from both remotes in gamma (passthrough)
+        # and work config (nc + nc2).  At minimum, must not error.
+        assert result.status in (Status.OK, Status.EMPTY)
+        if result.status == Status.OK:
+            assert isinstance(result.data, list)
+
+    def test_get_today_events_fanout_once(self):
+        """Test 9: caldav_get_today_events fans out exactly once (no nested fan-out)."""
+        from caldav_mcp import fanout as fanout_mod
+
+        fake_cal = _fake_cal(name="team")
+        fake_client = _fake_client(cal=fake_cal)
+        invocation_count = 0
+        original_fn = fanout_mod.run_fanout
+
+        def counting_fanout(*args, **kwargs):
+            nonlocal invocation_count
+            invocation_count += 1
+            return original_fn(*args, **kwargs)
+
+        with (
+            mock.patch("caldav_mcp.tools._authenticate", return_value=_auth_return(_USER_BOTH)),
+            mock.patch("caldav_mcp.tools.DAVClient", return_value=fake_client),
+            mock.patch("caldav_mcp.tools._get_calendar", return_value=fake_cal),
+            mock.patch("caldav_mcp.tools.run_fanout", side_effect=counting_fanout),
+        ):
+            tools_mod.caldav_get_today_events()
+        # Fan-out must be called exactly once — no nested fan-out.
+        assert invocation_count == 1
+
+    def test_get_events_dotted_vs_empty_calendar_name(self):
+        """Test 10: dotted path → single entry; empty calendar_name → all calendars."""
+        fake_cal = _fake_cal(name="team")
+        fake_client = _fake_client(cal=fake_cal)
+
+        # Dotted path → single scope
+        with (
+            mock.patch("caldav_mcp.tools._authenticate", return_value=_auth_return(_USER_WORK)),
+            mock.patch("caldav_mcp.tools.DAVClient", return_value=fake_client),
+            mock.patch("caldav_mcp.tools._get_calendar", return_value=fake_cal),
+        ):
+            result_dotted = tools_mod.caldav_get_events(calendar_name="work.nc.team")
+        assert result_dotted.status in (Status.OK, Status.EMPTY)
+
+        # Empty calendar_name → fan-out across all accessible calendars
+        with (
+            mock.patch("caldav_mcp.tools._authenticate", return_value=_auth_return(_USER_WORK)),
+            mock.patch("caldav_mcp.tools.DAVClient", return_value=fake_client),
+            mock.patch("caldav_mcp.tools._get_calendar", return_value=fake_cal),
+        ):
+            result_empty = tools_mod.caldav_get_events()
+        assert result_empty.status in (Status.OK, Status.EMPTY)
+
+    def test_write_tools_unaffected_by_fanout(self):
+        """Test 11: write tools still require dotted paths (M4.3 regression guard)."""
+        with mock.patch(
+            "caldav_mcp.tools._authenticate",
+            return_value=_auth_return(_USER_WORK),
+        ):
+            result = tools_mod.caldav_create_event(
+                summary="test",
+                start="2026-01-15T10:00",
+                calendar_name="team",  # plain name → must fail
+            )
+        assert result.status == Status.ERROR
+        assert "config.remote.calendar" in result.message.lower()
+
+    def test_simple_mode_read_tools_byte_identical(self):
+        """Test 12: simple-mode read tools produce the same result as before."""
+        fake_cal = _fake_cal(name="default")
+        fake_client = _fake_client(cal=fake_cal)
+        # Reset db-mode config to restore simple mode for this test.
+        reset_app_config()
+        patchers = [
+            mock.patch("caldav_mcp.tools._resolve_credentials", return_value=("u", "p", "w")),
+            mock.patch("caldav_mcp.tools.DAVClient", return_value=fake_client),
+            mock.patch("caldav_mcp.tools._get_calendar", return_value=fake_cal),
+        ]
+        for p in patchers:
+            p.start()
+        try:
+            result = tools_mod.caldav_list_calendars()
+            assert result.status in (Status.OK, Status.EMPTY)
+            result2 = tools_mod.caldav_get_events(start="2026-01-15T09:00", end="2026-01-15T12:00")
+            assert result2.status in (Status.OK, Status.EMPTY)
+        finally:
+            for p in patchers:
+                p.stop()
+            # Re-install db-mode config so the autouse fixture's teardown
+            # doesn't double-reset.
+            configure_app_config(_DB_APP)
+
+
+# ===================================================================
+# M4.4 verification — fan-out data integrity (per-calendar / per-remote)
+# ===================================================================
+
+
+class _FanoutCalendar:
+    """Calendar whose ``search`` returns this calendar's own events."""
+
+    def __init__(self, name, events):
+        self.name = name
+        self.url = ""
+        self._events = events
+
+    def search(self, **kwargs):
+        return list(self._events)
+
+
+class _FanoutPrincipal:
+    def __init__(self, calendars):
+        self._calendars = calendars
+
+    def calendars(self):
+        return list(self._calendars)
+
+
+class _FanoutClient:
+    def __init__(self, calendars):
+        self._calendars = calendars
+
+    def principal(self):
+        return _FanoutPrincipal(self._calendars)
+
+
+class TestFanoutDataIntegrity:
+    """Fan-out entries must carry the data queried for their own scope."""
+
+    @staticmethod
+    def _two_cal_client():
+        cal_team = _FanoutCalendar("team", [FakeEvent(make_event(uid="ev-team", summary="T"))])
+        cal_personal = _FanoutCalendar(
+            "personal", [FakeEvent(make_event(uid="ev-pers", summary="P"))]
+        )
+        return _FanoutClient([cal_team, cal_personal])
+
+    def test_list_calendars_one_entry_per_remote(self):
+        """caldav_list_calendars yields one entry per remote, not per calendar."""
+        client = self._two_cal_client()
+        with (
+            mock.patch("caldav_mcp.tools._authenticate", return_value=_auth_return(_USER_BOTH)),
+            mock.patch("caldav_mcp.tools.DAVClient", return_value=client),
+        ):
+            result = tools_mod.caldav_list_calendars()
+        assert result.status == Status.OK
+        # work has 2 remotes (nc, nc2); personal has 1 (passthrough → no headers
+        # → that scope errors).  Distinct remote entries are never duplicated
+        # once per calendar.
+        keys = [(e["config_name"], e["remote_name"]) for e in result.data]
+        assert len(keys) == len(set(keys))
+        # Each remote-level payload lists every calendar exactly once.
+        for entry in result.data:
+            if entry.get("error"):
+                continue
+            names = sorted(c["name"] for c in entry["data"])
+            assert names == ["personal", "team"]
+
+    def test_today_events_once_per_remote_carries_own_events(self):
+        """caldav_get_today_events fans out once per remote with real cal data."""
+        client = self._two_cal_client()
+        with (
+            mock.patch("caldav_mcp.tools._authenticate", return_value=_auth_return(_USER_BOTH)),
+            mock.patch("caldav_mcp.tools.DAVClient", return_value=client),
+        ):
+            result = tools_mod.caldav_get_today_events()
+        assert result.status == Status.OK
+        nc_entries = [e for e in result.data if e["remote_name"] == "nc"]
+        assert len(nc_entries) == 1
+        # Representative (first declared) calendar of the remote.
+        assert nc_entries[0]["calendar_name"] == "team"
+        assert [ev["uid"] for ev in nc_entries[0]["data"]] == ["ev-team"]
+
+    def test_dotted_path_narrows_to_single_calendar(self):
+        """A dotted path queries only the addressed calendar of that remote."""
+        client = self._two_cal_client()
+        with (
+            mock.patch("caldav_mcp.tools._authenticate", return_value=_auth_return(_USER_WORK)),
+            mock.patch("caldav_mcp.tools.DAVClient", return_value=client),
+        ):
+            result = tools_mod.caldav_get_events(calendar_name="work.nc.personal")
+        assert result.status == Status.OK
+        observed = [(e["calendar_name"], [ev["uid"] for ev in e["data"]]) for e in result.data]
+        assert observed == [("personal", ["ev-pers"])], observed

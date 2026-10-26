@@ -64,7 +64,7 @@ class CalDAVConfig(BaseModel):
     @classmethod
     def validate_url(cls, v: str) -> str:
         if not v:
-            return v  # empty is OK — may come from headers at runtime
+            return v  # empty is OK — credentials may come from headers at runtime (header mode)
         from urllib.parse import urlparse
 
         parsed = urlparse(v)
@@ -76,7 +76,31 @@ class CalDAVConfig(BaseModel):
 
 
 def load_server_config() -> ServerConfig:
-    """Load and validate server configuration from environment."""
+    """Load and validate server configuration from environment.
+
+    When ``DB_CONFIG_ENABLED`` is true, ``CALDAV_MCP_DB_PATH`` and
+    ``CALDAV_MCP_CONFIG_SECRET`` must be non-empty after stripping.
+    ``CALDAV_URL`` / ``CALDAV_USERNAME`` / ``CALDAV_PASSWORD`` are accepted
+    but ignored in pro mode (a warning is emitted in ``server.py``).
+    """
+    db_enabled = os.environ.get("DB_CONFIG_ENABLED", "false").lower() in (
+        "true",
+        "1",
+        "yes",
+    )
+    if db_enabled:
+        db_path = os.environ.get("CALDAV_MCP_DB_PATH", "").strip()
+        config_secret = os.environ.get("CALDAV_MCP_CONFIG_SECRET", "").strip()
+        missing = []
+        if not db_path:
+            missing.append("CALDAV_MCP_DB_PATH")
+        if not config_secret:
+            missing.append("CALDAV_MCP_CONFIG_SECRET")
+        if missing:
+            raise ValueError(
+                f"DB_CONFIG_ENABLED is true but required variable(s) "
+                f"{', '.join(missing)} are not set or empty"
+            )
     return ServerConfig(
         port=int(os.environ.get("CALDAV_MCP_PORT", "8080")),
         path=os.environ.get("CALDAV_MCP_PATH", "/mcp"),

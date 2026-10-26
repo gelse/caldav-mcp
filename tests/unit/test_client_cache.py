@@ -184,6 +184,38 @@ def test_get_after_clear_returns_none():
     assert cache.get("https://example.com", "a") is None
 
 
+# ---------------------------------------------------------------------------
+# Password verification (passthrough clients)
+# ---------------------------------------------------------------------------
+
+
+def test_get_with_password_matching_password_returns_client():
+    cache = ClientCache(max_size=4, ttl_seconds=60)
+    client = _FakeDAVClient()
+    cache.put("https://caldav.example.com", "alice", client, password="s3cret")
+    result = cache.get_with_password("https://caldav.example.com", "alice", "s3cret")
+    assert result is client
+
+
+def test_get_with_password_wrong_password_evicts_and_closes():
+    cache = ClientCache(max_size=4, ttl_seconds=60)
+    client = _FakeDAVClient()
+    cache.put("https://caldav.example.com", "alice", client, password="s3cret")
+
+    result = cache.get_with_password("https://caldav.example.com", "alice", "wrong")
+    assert result is None
+    assert client.session.closed
+    # Evicted — the correct password no longer finds it either.
+    assert cache.get_with_password("https://caldav.example.com", "alice", "s3cret") is None
+
+
+def test_get_with_password_when_no_password_stored_returns_none():
+    cache = ClientCache(max_size=4, ttl_seconds=60)
+    client = _FakeDAVClient()
+    cache.put("https://caldav.example.com", "alice", client)
+    assert cache.get_with_password("https://caldav.example.com", "alice", "s3cret") is None
+
+
 def test_concurrent_puts():
     cache = ClientCache(max_size=8, ttl_seconds=3600)
     errors = []
