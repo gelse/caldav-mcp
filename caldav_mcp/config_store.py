@@ -394,12 +394,36 @@ class ConfigStore:
             raise StoreNotFoundError(f"user not found: {username!r}")
         conn.execute("COMMIT")
 
+    def set_user_key_hash(self, username: str, key_hash: str) -> None:
+        """Replace a user's stored API-key hash (key rotation).
+
+        Raises ``StoreValidationError`` on an empty username or
+        ``key_hash``, and ``StoreNotFoundError`` if the user does not
+        exist (transactional UPDATE mirroring :meth:`delete_user`).
+        """
+        _validate_username(username)
+        if not key_hash:
+            raise StoreValidationError("key_hash must not be empty")
+        conn = self._get_conn()
+        conn.execute("BEGIN")
+        cur = conn.execute(
+            "UPDATE users SET key_hash = ? WHERE username = ?",
+            (key_hash, username),
+        )
+        if cur.rowcount == 0:
+            conn.execute("ROLLBACK")
+            raise StoreNotFoundError(f"user not found: {username!r}")
+        conn.execute("COMMIT")
+
     def set_user_configs(self, username: str, config_names: list[str]) -> None:
         """Replace the set of configs linked to a user.
 
-        FK references to ``configs`` are enforced by the schema.  Raises
-        ``StoreNotFoundError`` if the user does not exist, or
-        ``StoreConflictError`` if a config does not exist.
+        FK references to ``configs`` are enforced by the schema.  Runs the
+        post-write passthrough constraint check since the new set may reach
+        more than one passthrough remote.  Raises ``StoreNotFoundError``
+        if the user does not exist, ``StoreConflictError`` if a config does
+        not exist, or ``StoreValidationError`` if the replacement would
+        violate the single-passthrough constraint.
         """
         _validate_username(username)
         conn = self._get_conn()
@@ -414,7 +438,11 @@ class ConfigStore:
                     "INSERT INTO user_configs (username, config_name) VALUES (?, ?)",
                     (username, cn),
                 )
+            self._assert_single_passthrough_per_user(conn)
             conn.execute("COMMIT")
+        except StoreValidationError:
+            conn.execute("ROLLBACK")
+            raise
         except sqlite3.IntegrityError as exc:
             conn.execute("ROLLBACK")
             raise StoreConflictError(

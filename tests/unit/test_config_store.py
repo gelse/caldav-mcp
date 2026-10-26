@@ -23,6 +23,7 @@ from caldav_mcp.config_store import (
     StoreValidationError,
     UserRecord,
 )
+from caldav_mcp.key_hash import hash_api_key, verify_api_key
 
 # ---------------------------------------------------------------------------
 # helpers
@@ -146,6 +147,52 @@ def test_user_delete_not_found(tmp_path):
     with ConfigStore(_store_path(tmp_path)) as store:
         with pytest.raises(StoreNotFoundError, match="user not found"):
             store.delete_user("nobody")
+
+
+# ---------------------------------------------------------------------------
+# 3b. set_user_key_hash (key rotation)
+# ---------------------------------------------------------------------------
+
+
+def test_set_user_key_hash_rotation(tmp_path):
+    """Rotation persists: old key stops verifying, new key verifies."""
+    with ConfigStore(_store_path(tmp_path)) as store:
+        store.create_user("alice", hash_api_key("old-key"))
+        store.set_user_key_hash("alice", hash_api_key("new-key"))
+        user = store.get_user("alice")
+        assert verify_api_key("old-key", user.key_hash) is False
+        assert verify_api_key("new-key", user.key_hash) is True
+
+
+def test_set_user_key_hash_preserves_grants(tmp_path):
+    """Rotation touches only key_hash — existing grants stay linked."""
+    with ConfigStore(_store_path(tmp_path)) as store:
+        store.create_config("c1")
+        store.create_user("alice", hash_api_key("old-key"))
+        store.set_user_configs("alice", ["c1"])
+        store.set_user_key_hash("alice", hash_api_key("new-key"))
+        user = store.get_user("alice")
+        assert user.config_names == ("c1",)
+        assert verify_api_key("new-key", user.key_hash) is True
+
+
+def test_set_user_key_hash_unknown_user(tmp_path):
+    with ConfigStore(_store_path(tmp_path)) as store:
+        with pytest.raises(StoreNotFoundError, match="user not found"):
+            store.set_user_key_hash("ghost", "h")
+
+
+def test_set_user_key_hash_empty_key_hash_rejected(tmp_path):
+    with ConfigStore(_store_path(tmp_path)) as store:
+        store.create_user("alice", "h")
+        with pytest.raises(StoreValidationError, match="key_hash must not be empty"):
+            store.set_user_key_hash("alice", "")
+
+
+def test_set_user_key_hash_empty_username_rejected(tmp_path):
+    with ConfigStore(_store_path(tmp_path)) as store:
+        with pytest.raises(StoreValidationError, match="username must not be empty"):
+            store.set_user_key_hash("", "h")
 
 
 # ---------------------------------------------------------------------------
@@ -417,7 +464,7 @@ def test_valid_passthrough_remote_accepted(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# 7. Passthrough constraint — cases a–f
+# 7. Passthrough constraint — cases a–g
 # ---------------------------------------------------------------------------
 
 
@@ -507,7 +554,20 @@ def test_pt_case_e_remove_user_config_link_always_allowed(tmp_path):
         store.create_remote("c1", _pt_remote("c1"))
         store.create_remote("c2", _pt_remote("c2", "rem2"))
         store.create_user("alice", "h")
-        store.set_user_configs("alice", ["c1", "c2"])
+        store.set_user_configs("alice", ["c1"])
+        # Seed the second (poisoned) link with raw SQL: since M1 every
+        # write path — including set_user_configs — enforces the
+        # single-passthrough invariant, so the two-passthrough starting
+        # state this test needs can only be built by bypassing the API.
+        # Use a separate connection with an explicit commit so the seed
+        # does not depend on the store connection's isolation settings.
+        seed_conn = sqlite3.connect(_store_path(tmp_path))
+        seed_conn.execute(
+            "INSERT INTO user_configs (username, config_name) VALUES (?, ?)",
+            ("alice", "c2"),
+        )
+        seed_conn.commit()
+        seed_conn.close()
         # Now remove c2 — should not raise even though there are two
         # passthrough remotes across the configs (constraint is about the
         # user's reachable set; removing a config only loosens it).
@@ -526,6 +586,23 @@ def test_pt_case_f_delete_passthrough_always_allowed(tmp_path):
         store.delete_remote("c1", "rem")
         snap = store.load_config("c1")
         assert snap.remotes == ()
+
+
+def test_pt_case_g_set_user_configs_two_passthrough_rejected(tmp_path):
+    """7g: replace-all via set_user_configs cannot produce a two-passthrough
+    user — rejected inside the transaction and rolled back (state unchanged)."""
+    with ConfigStore(_store_path(tmp_path)) as store:
+        store.create_config("c1")
+        store.create_config("c2")
+        store.create_remote("c1", _pt_remote("c1"))
+        store.create_remote("c2", _pt_remote("c2", "rem2"))
+        store.create_user("alice", "h")
+        store.set_user_configs("alice", ["c1"])
+        with pytest.raises(StoreValidationError, match="at most one passthrough"):
+            store.set_user_configs("alice", ["c1", "c2"])
+        # Rollback: alice still linked to c1 only.
+        user = store.get_user("alice")
+        assert user.config_names == ("c1",)
 
 
 # ---------------------------------------------------------------------------
