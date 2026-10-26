@@ -49,6 +49,8 @@ services:
       DB_CONFIG_ENABLED: "true"
       CALDAV_MCP_DB_PATH: /data/pro-store.db
       CALDAV_MCP_CONFIG_SECRET: "test-integration-pro-secret-do-not-use-in-production"
+      # Admin REST API (M2) — enables the /admin/users read routes
+      CALDAV_MCP_ADMIN_KEY: "admin-test-key"
       # Server settings
       CALDAV_MCP_PORT: "8080"
       CALDAV_MCP_PATH: "/mcp"
