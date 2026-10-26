@@ -7,6 +7,7 @@ get_today_events, get_week_events, move_event.
 All tests use the fake-network pattern from conftest.py.
 """
 
+import re
 from datetime import datetime
 from unittest import mock
 from zoneinfo import ZoneInfo
@@ -20,6 +21,7 @@ from conftest import (
     patch_caldav_move,
 )
 from icalendar import Calendar, Event
+from icalendar.prop import vBroken
 
 import server
 from caldav_mcp.client_cache import get_cache
@@ -331,6 +333,51 @@ def test_update_event_multiple_fields():
         assert str(comp.get("summary")) == "New Summary"
         assert str(comp.get("location")) == "New Location"
         assert str(comp.get("description")) == "New Description"
+    finally:
+        for p in patchers:
+            p.stop()
+
+
+def test_update_event_start_end_serializes_valid_rfc5545():
+    """start/end updates must serialize RFC 5545-valid date-times (issue #19).
+
+    ``caldav_update_event`` assigns a raw Python ``datetime`` via icalendar's
+    ``Component.__setitem__`` (which does not wrap the value in ``vDatetime``),
+    so the payload serializes as ``DTSTART:2026-10-11 14:00:00+02:00``
+    (space-separated, ``HH:MM:SS`` with offset) instead of the RFC 5545
+    §3.3.5 basic format ``DTSTART:20261011T140000`` (optionally with a TZID
+    parameter).  CalDAV servers reject the malformed iCalendar, surfacing as
+    a generic "Internal error" from ``caldav_update_event``.
+    """
+    fake_cal = FakeCalendar(event=_build_event(uid="uid-1"))
+    patchers = patch_caldav(fake_cal)
+    try:
+        with mock.patch("caldav_mcp.datetime_utils.SERVER_TZ", ZoneInfo("Europe/Berlin")):
+            result = server.caldav_update_event(
+                uid="uid-1", start="2026-10-11T14:00", end="2026-10-11T15:00"
+            )
+        assert result.status == Status.OK
+
+        # The payload written back must use RFC 5545 basic date-time format
+        # for DTSTART/DTEND.  Match the whole raw line (a full-line regex):
+        # splitting on ":" would break on values like
+        # DTSTART;TZID="UTC+02:00":... whose TZID contains colons.
+        data = fake_cal._event.data
+        dt_lines = [
+            line for line in data.splitlines() if line.startswith(("DTSTART", "DTEND"))
+        ]
+        assert len(dt_lines) == 2, f"Expected DTSTART and DTEND lines in payload: {dt_lines!r}"
+        valid_rfc5545_dt = re.compile(r"^(?:DTSTART|DTEND)(?:;.*)?:\d{8}T\d{6}")
+        for line in dt_lines:
+            assert valid_rfc5545_dt.match(line), (
+                f"Date-time line is not RFC 5545 basic format: {line!r}"
+            )
+
+        # After the save() round-trip, the component must hold real date-times
+        # rather than vBroken placeholders produced by the malformed payload.
+        comp = fake_cal._event.icalendar_component
+        assert not isinstance(comp.get("dtstart"), vBroken)
+        assert not isinstance(comp.get("dtend"), vBroken)
     finally:
         for p in patchers:
             p.stop()
