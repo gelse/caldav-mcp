@@ -1,9 +1,15 @@
 """Unit tests for caldav_mcp.audit — structured audit logging."""
 
+import inspect
 import json
 from unittest import mock
 
-from caldav_mcp.audit import log_auth_attempt, log_error, log_operation
+from caldav_mcp.audit import (
+    log_admin_operation,
+    log_auth_attempt,
+    log_error,
+    log_operation,
+)
 
 # ---------------------------------------------------------------------------
 # log_auth_attempt
@@ -108,6 +114,75 @@ def test_log_error_records_type(mock_log):
     assert payload["error_type"] == "ValueError"
     assert payload["context"] == "bad input"
     assert "ts" in payload
+
+
+# ---------------------------------------------------------------------------
+# log_admin_operation (issue-16 milestone M2.2)
+# ---------------------------------------------------------------------------
+
+
+@mock.patch("caldav_mcp.audit._audit_log")
+def test_log_admin_operation_emits_documented_shape(mock_log):
+    """log_admin_operation emits {"event": "admin", ...} with the documented fields."""
+    log_admin_operation("create_user", "ok", target_user="alice", client_ip="10.0.0.9")
+    mock_log.info.assert_called_once()
+    payload = json.loads(mock_log.info.call_args[0][0])
+    assert payload["event"] == "admin"
+    assert payload["action"] == "create_user"
+    assert payload["status"] == "ok"
+    assert payload["target_user"] == "alice"
+    assert payload["client_ip"] == "10.0.0.9"
+    assert isinstance(payload["ts"], float)
+    # Exact key set: nothing beyond the documented shape.
+    assert set(payload) == {
+        "event",
+        "action",
+        "status",
+        "target_user",
+        "client_ip",
+        "ts",
+    }
+
+
+@mock.patch("caldav_mcp.audit._audit_log")
+def test_log_admin_operation_defaults(mock_log):
+    """target_user defaults to '' and client_ip to 'unknown'."""
+    log_admin_operation("list_users", "ok")
+    payload = json.loads(mock_log.info.call_args[0][0])
+    assert payload["event"] == "admin"
+    assert payload["target_user"] == ""
+    assert payload["client_ip"] == "unknown"
+
+
+@mock.patch("caldav_mcp.audit._audit_log")
+def test_log_admin_operation_non_ok_status(mock_log):
+    """Non-ok outcomes are emitted (info level) with the status preserved."""
+    log_admin_operation("delete_user", "error", target_user="bob")
+    mock_log.info.assert_called_once()
+    payload = json.loads(mock_log.info.call_args[0][0])
+    assert payload["status"] == "error"
+    assert payload["target_user"] == "bob"
+
+
+def test_log_admin_operation_signature_has_no_key_material():
+    """No-secrets rule: the signature cannot carry key or hash values."""
+    params = list(inspect.signature(log_admin_operation).parameters)
+    assert params == ["action", "status", "target_user", "client_ip"]
+
+
+@mock.patch("caldav_mcp.audit._audit_log")
+def test_log_admin_operation_never_logs_secrets(mock_log):
+    """Admin audit entries must never contain key/hash/token material."""
+    log_admin_operation("rotate_key", "ok", target_user="carol")
+    payload = json.loads(mock_log.info.call_args[0][0])
+    for key in payload:
+        lowered = key.lower()
+        assert "key" not in lowered
+        assert "hash" not in lowered
+        assert "token" not in lowered
+        assert "password" not in lowered
+        assert "secret" not in lowered
+        assert "authorization" not in lowered
 
 
 # ---------------------------------------------------------------------------

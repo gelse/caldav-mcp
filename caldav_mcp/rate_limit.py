@@ -4,6 +4,10 @@ Limits failed auth attempts per source identifier (e.g. client IP)
 to 10 per minute with exponential backoff.  The limiter is in-memory
 and resets on server restart — acceptable for a single-instance MCP
 server.
+
+Two module-level singletons exist — one for MCP-endpoint auth and one
+for the admin API — with independent failure buckets so brute force
+against one secret cannot lock the other surface out (and vice versa).
 """
 
 import threading
@@ -66,8 +70,14 @@ class RateLimiter:
             self._failures.pop(key, None)
 
 
-# Module-level singleton
+# Module-level singletons — independent failure buckets: admin-key brute
+# force must not lock MCP-endpoint IPs out (and vice versa) since the
+# secrets differ.  Both use the same env-configured knobs.
 auth_rate_limiter = RateLimiter(
+    max_failures=RATE_LIMIT_MAX_FAILURES,
+    window_seconds=RATE_LIMIT_WINDOW_SECONDS,
+)
+admin_rate_limiter = RateLimiter(
     max_failures=RATE_LIMIT_MAX_FAILURES,
     window_seconds=RATE_LIMIT_WINDOW_SECONDS,
 )

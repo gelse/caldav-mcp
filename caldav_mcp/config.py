@@ -22,6 +22,7 @@ _server_config: ServerConfig = load_server_config()
 DEFAULT_PORT = _server_config.port
 DEFAULT_PATH = _server_config.path
 API_KEY = _server_config.api_key
+ADMIN_KEY = _server_config.admin_key
 
 # ── HTTP header names (constants, no validation needed) ──────────
 # These match the FastMCP / Starlette convention of lowercasing headers.
