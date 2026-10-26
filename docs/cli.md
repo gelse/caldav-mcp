@@ -6,7 +6,9 @@ single server instance must route requests to different CalDAV accounts.
 
 > **How the CLI and server work together:**
 > The CLI manages the SQLite store; the server reads it at startup in pro
-> mode (`DB_CONFIG_ENABLED=true`). The `CALDAV_MCP_CONFIG_SECRET` must
+> mode (`DB_CONFIG_ENABLED=true`)
+> (user rows are also writable via the admin API, restart-to-apply). The
+> `CALDAV_MCP_CONFIG_SECRET` must
 > **match** between CLI and server — the CLI encrypts passwords with it, and
 > the server decrypts them on startup. Config changes require a server
 > restart (the store is frozen into an immutable `AppConfig` at startup).

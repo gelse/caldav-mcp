@@ -49,7 +49,7 @@ services:
       DB_CONFIG_ENABLED: "true"
       CALDAV_MCP_DB_PATH: /data/pro-store.db
       CALDAV_MCP_CONFIG_SECRET: "test-integration-pro-secret-do-not-use-in-production"
-      # Admin REST API (M2) — enables the /admin/users read routes
+      # Admin REST API (M2/M3) — enables the /admin/users read + write routes
       CALDAV_MCP_ADMIN_KEY: "admin-test-key"
       # Server settings
       CALDAV_MCP_PORT: "8080"
@@ -59,7 +59,8 @@ services:
       CALDAV_MCP_LOG_FORMAT: "text"
       TZ: UTC
     volumes:
-      - ./tests/integration/pro-store:/data:ro
+      # Read-write since M3.1: the admin API writes user rows into this store.
+      - ./tests/integration/pro-store:/data
     healthcheck:
       test: ["CMD", "python3", "-c", "import socket; s=socket.socket(); s.settimeout(3); s.connect(('127.0.0.1',8080)); s.close()"]
       interval: 5s

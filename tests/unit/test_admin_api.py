@@ -1,4 +1,4 @@
-"""Unit tests for the admin REST API (M2.3 — guard + GET routes).
+"""Unit tests for the admin REST API (M2.3 guard + GET routes, M3.1 write routes).
 
 **Test vehicle (pinned by the milestone):** Starlette ``TestClient`` against
 the FastMCP HTTP app (``mcp.http_app()``) — the guard consumes a real
@@ -17,6 +17,9 @@ All tests are Docker-free: the store is a per-test SQLite file in ``tmp_path``.
 
 from __future__ import annotations
 
+import json
+import logging
+import os
 import sqlite3
 from unittest import mock
 
@@ -36,8 +39,8 @@ from caldav_mcp.app_config import (
     configure_app_config,
     reset_app_config,
 )
-from caldav_mcp.config_store import ConfigStore
-from caldav_mcp.key_hash import hash_api_key
+from caldav_mcp.config_store import ConfigStore, RemoteRecord, StoreConflictError
+from caldav_mcp.key_hash import hash_api_key, verify_api_key
 from caldav_mcp.rate_limit import RateLimiter
 
 # ---------------------------------------------------------------------------
@@ -70,6 +73,29 @@ def _error_of(response) -> str:
     return body["error"]
 
 
+def _add_passthrough_configs(db_path: str) -> None:
+    """Add two configs, each carrying a passthrough remote (write cases).
+
+    Granting both to one user would let them reach two passthrough remotes —
+    the single-passthrough constraint the store enforces inside its own
+    transactions (M3.1 write cases: grant → 400, replace → 400).
+    """
+    with ConfigStore(db_path) as store:
+        for name in ("pt-one", "pt-two"):
+            store.create_config(name)
+            store.create_remote(
+                config_name=name,
+                remote=RemoteRecord(
+                    config_name=name,
+                    name="relay",
+                    url="https://cal.example/dav",
+                    auth_mode="passthrough",
+                    username="",
+                    password_enc="",
+                ),
+            )
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -77,7 +103,7 @@ def _error_of(response) -> str:
 
 @pytest.fixture(scope="session", autouse=True)
 def _register_admin_routes() -> None:
-    """Register the M2 admin routes on the shared instance once per session."""
+    """Register the M2 read + M3 write admin routes on the shared instance once."""
     configure_admin_routes(mcp)
 
 
@@ -313,29 +339,50 @@ def test_framework_404_when_routes_never_registered():
 
 
 # ---------------------------------------------------------------------------
-# 5. Write routes unregistered: 405 where the path exists, 404 otherwise
+# 5. Write routes present (M3.1): 401 unauthenticated / 405 wrong method /
+#    404 only for the M4 rotation route (non-goal) and disabled API
 # ---------------------------------------------------------------------------
 
 
-def test_write_on_registered_paths_405(client):
-    """POST /admin/users and DELETE /admin/users/{u} → 405 (GET only)."""
-    resp = client.post("/admin/users", json={"username": "x", "key": "y"})
-    assert resp.status_code == 405
-    assert "GET" in resp.headers["allow"]
-
-    resp = client.delete("/admin/users/alice")
-    assert resp.status_code == 405
-    assert "GET" in resp.headers["allow"]
-
-
-def test_future_write_paths_404(client):
-    """Paths that gain routes only in M3/M4 → framework 404, not 405."""
+def test_write_routes_exist_and_require_auth(client, _admin_setup):
+    """Every M3 write route is registered and guarded: no key → 401."""
+    limiter = _admin_setup
     cases = (
-        ("put", "/admin/users/alice/key"),
+        ("post", "/admin/users", {"username": "x", "key": "y"}),
+        ("delete", "/admin/users/alice", None),
+        ("post", "/admin/users/alice/configs", {"config": "default"}),
+        ("put", "/admin/users/alice/configs", {"configs": ["default"]}),
+        ("delete", "/admin/users/alice/configs/default", None),
+    )
+    for method, path, body in cases:
+        fn = getattr(client, method)
+        resp = fn(path, json=body) if body is not None else fn(path)
+        assert resp.status_code == 401, (method, path, resp.status_code)
+        # Each 401 records a failure; clear it so the fifth request is not
+        # rate-limited before reaching this route's guard.
+        limiter.reset("testclient")
+
+
+def test_wrong_method_on_routed_paths_405(client):
+    """Methods outside table (d) on routed paths → 405, not 404/401."""
+    resp = client.put("/admin/users", json={})
+    assert resp.status_code == 405
+
+    resp = client.put("/admin/users/alice", json={})
+    assert resp.status_code == 405
+
+    # /admin/users/{username}/configs exists with POST+PUT only.
+    resp = client.delete("/admin/users/alice/configs")
+    assert resp.status_code == 405
+
+
+def test_rotation_route_absent_404(client):
+    """``/admin/users/{u}/key`` (M4 rotation) stays unregistered → 404."""
+    cases = (
+        ("get", "/admin/users/alice/key"),
         ("post", "/admin/users/alice/key"),
-        ("post", "/admin/users/alice/configs"),
-        ("put", "/admin/users/alice/configs"),
-        ("delete", "/admin/users/alice/configs/default"),
+        ("put", "/admin/users/alice/key"),
+        ("delete", "/admin/users/alice/key"),
     )
     for method, path in cases:
         resp = getattr(client, method)(path)
@@ -415,3 +462,468 @@ def test_unexpected_error_500_generic_message(client):
     mock_admin_audit.assert_called_once_with(
         action="list_users", status="error", client_ip="testclient"
     )
+
+
+# ---------------------------------------------------------------------------
+# 8. POST /admin/users (M3.1): 201 / 400 / 409 — hashed key, no secrets
+# ---------------------------------------------------------------------------
+
+
+def test_create_user_201_hashes_key_and_audits(client):
+    """201 with the user payload + restart_required; key stored hashed only."""
+    with mock.patch.object(admin, "log_admin_operation") as mock_admin_audit:
+        resp = client.post(
+            "/admin/users",
+            json={"username": "carol", "key": "carol-plain-key"},
+            headers=_BEARER,
+        )
+    assert resp.status_code == 201
+    body = resp.json()
+    # User payload + restart signal; never key material (Design (f)).
+    assert set(body) == {"username", "configs", "restart_required"}
+    assert body["username"] == "carol"
+    assert body["configs"] == []
+    assert body["restart_required"] is True
+    assert "carol-plain-key" not in resp.text
+    assert "key_hash" not in resp.text
+    # Completed CRUD outcome audited; audit arguments carry no secrets.
+    mock_admin_audit.assert_called_once_with(
+        action="create_user", status="ok", target_user="carol", client_ip="testclient"
+    )
+    assert "carol-plain-key" not in repr(mock_admin_audit.call_args)
+    # The store holds the PBKDF2 hash — the plaintext verifies, never equals.
+    with ConfigStore(os.environ["CALDAV_MCP_DB_PATH"]) as store:
+        record = store.get_user("carol")
+    assert record.key_hash != "carol-plain-key"
+    assert verify_api_key("carol-plain-key", record.key_hash)
+    # The new user is immediately visible via the read API (restart only
+    # gates MCP auth, not the admin read surface).
+    resp = client.get("/admin/users/carol", headers=_BEARER)
+    assert resp.status_code == 200
+    assert resp.json() == {"username": "carol", "configs": []}
+
+
+def test_create_user_emits_admin_audit_event_without_secrets(client, caplog):
+    """Real audit line: ``event: admin`` with action/target and no key material."""
+    with caplog.at_level(logging.INFO, logger="caldav-mcp.audit"):
+        resp = client.post(
+            "/admin/users",
+            json={"username": "erin", "key": "erin-plain-key"},
+            headers=_BEARER,
+        )
+    assert resp.status_code == 201
+    audit_records = [r for r in caplog.records if r.name == "caldav-mcp.audit"]
+    entries = [json.loads(r.getMessage()) for r in audit_records]
+    admin_entries = [e for e in entries if e.get("event") == "admin"]
+    assert admin_entries, entries
+    entry = admin_entries[-1]
+    assert entry["action"] == "create_user"
+    assert entry["status"] == "ok"
+    assert entry["target_user"] == "erin"
+    assert entry["client_ip"] == "testclient"
+    # SECURITY: no plaintext key or key hash in any audit line.
+    blob = " ".join(r.getMessage() for r in audit_records)
+    assert "erin-plain-key" not in blob
+    assert "key_hash" not in blob
+
+
+def test_create_user_409_duplicate(client):
+    """Duplicate username → 409 (StoreConflictError from create_user)."""
+    resp = client.post(
+        "/admin/users",
+        json={"username": "alice", "key": "whatever"},
+        headers=_BEARER,
+    )
+    assert resp.status_code == 409
+    assert "already exists" in _error_of(resp)
+
+
+def test_create_user_400_missing_or_invalid_fields(client):
+    """API-owned body validation → 400; nothing gets created."""
+    cases = (
+        ({}, "username"),  # missing username
+        ({"username": 42, "key": "k"}, "username"),  # non-string username
+        ({"username": "u"}, "key"),  # missing key
+        ({"username": "u", "key": ""}, "key"),  # empty key (CLI-mirrored check)
+        ({"username": "u", "key": 5}, "key"),  # non-string key
+    )
+    for payload, field in cases:
+        resp = client.post("/admin/users", json=payload, headers=_BEARER)
+        assert resp.status_code == 400, payload
+        assert field in _error_of(resp), payload
+    assert client.get("/admin/users/u", headers=_BEARER).status_code == 404
+
+
+def test_create_user_400_empty_username_via_store_validation(client):
+    """Empty username is the *store's* rule (Design (e)) → 400 via choke point."""
+    resp = client.post("/admin/users", json={"username": "", "key": "k"}, headers=_BEARER)
+    assert resp.status_code == 400
+    assert "username" in _error_of(resp)
+    assert "must not be empty" in _error_of(resp)
+
+
+def test_create_user_400_malformed_json(client):
+    """Malformed JSON body → 400 (edge-case table)."""
+    resp = client.post(
+        "/admin/users",
+        content="{not-json",
+        headers={**_BEARER, "Content-Type": "application/json"},
+    )
+    assert resp.status_code == 400
+    assert "json" in _error_of(resp).lower()
+
+
+def test_create_user_400_wrong_content_type(client):
+    """Wrong Content-Type → 400 even when the body parses (edge-case table)."""
+    resp = client.post(
+        "/admin/users",
+        content='{"username": "u", "key": "k"}',
+        headers={**_BEARER, "Content-Type": "text/plain"},
+    )
+    assert resp.status_code == 400
+    assert "content-type" in _error_of(resp).lower()
+
+
+def test_create_user_400_non_object_body(client):
+    """A JSON array body → 400 (body shape is API-owned)."""
+    resp = client.post("/admin/users", json=["not", "an", "object"], headers=_BEARER)
+    assert resp.status_code == 400
+    assert "object" in _error_of(resp)
+
+
+def test_guard_runs_before_body_parse_on_writes(client):
+    """Unauthenticated POST with a malformed body → 401, not 400."""
+    resp = client.post(
+        "/admin/users",
+        content="{bad",
+        headers={"Content-Type": "application/json"},
+    )
+    assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# 9. DELETE /admin/users/{username} (M3.1): 200 + body / 404 / 400
+# ---------------------------------------------------------------------------
+
+
+def test_delete_user_200_with_restart_body(client):
+    """Create → DELETE → 200 {deleted, username, restart_required} → 404 on GET."""
+    created = client.post(
+        "/admin/users",
+        json={"username": "dave", "key": "dave-key"},
+        headers=_BEARER,
+    )
+    assert created.status_code == 201
+    with mock.patch.object(admin, "log_admin_operation") as mock_admin_audit:
+        resp = client.delete("/admin/users/dave", headers=_BEARER)
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "deleted": True,
+        "username": "dave",
+        "restart_required": True,
+    }
+    mock_admin_audit.assert_called_once_with(
+        action="delete_user", status="ok", target_user="dave", client_ip="testclient"
+    )
+    assert client.get("/admin/users/dave", headers=_BEARER).status_code == 404
+
+
+def test_delete_user_404_unknown_audits_error(client):
+    """Unknown user → 404 + audit status=error (single choke point)."""
+    with mock.patch.object(admin, "log_admin_operation") as mock_admin_audit:
+        resp = client.delete("/admin/users/ghost", headers=_BEARER)
+    assert resp.status_code == 404
+    assert "ghost" in _error_of(resp)
+    mock_admin_audit.assert_called_once_with(
+        action="delete_user", status="error", target_user="ghost", client_ip="testclient"
+    )
+
+
+def test_delete_user_400_transport_guard(client):
+    """Control characters in the path username → 400 transport guard."""
+    resp = client.delete("/admin/users/a%00b", headers=_BEARER)
+    assert resp.status_code == 400
+    assert "control" in _error_of(resp)
+
+
+# ---------------------------------------------------------------------------
+# 10. POST /admin/users/{username}/configs — grant (200 idempotent)
+# ---------------------------------------------------------------------------
+
+
+def test_grant_config_200_idempotent(client):
+    """Grant → 200 user + restart_required; re-grant is a no-op → 200."""
+    with mock.patch.object(admin, "log_admin_operation") as mock_admin_audit:
+        resp = client.post(
+            "/admin/users/bob/configs",
+            json={"config": "default"},
+            headers=_BEARER,
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert set(body) == {"username", "configs", "restart_required"}
+    assert body["username"] == "bob"
+    assert body["configs"] == ["default"]
+    assert body["restart_required"] is True
+    mock_admin_audit.assert_called_once_with(
+        action="grant_config", status="ok", target_user="bob", client_ip="testclient"
+    )
+    # Idempotent re-grant → 200 with unchanged state.
+    resp = client.post(
+        "/admin/users/bob/configs",
+        json={"config": "default"},
+        headers=_BEARER,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["configs"] == ["default"]
+
+
+def test_grant_config_404_unknown_user_or_config(client):
+    """Unknown user and unknown config both → 404 (table (d))."""
+    resp = client.post(
+        "/admin/users/ghost/configs",
+        json={"config": "default"},
+        headers=_BEARER,
+    )
+    assert resp.status_code == 404
+    assert "ghost" in _error_of(resp)
+
+    resp = client.post(
+        "/admin/users/alice/configs",
+        json={"config": "nope"},
+        headers=_BEARER,
+    )
+    assert resp.status_code == 404
+    assert "nope" in _error_of(resp)
+
+
+def test_grant_config_400_missing_or_non_string_field(client):
+    """Missing/non-string ``config`` field → 400 (body shape is API-owned)."""
+    for payload in ({}, {"config": 5}):
+        resp = client.post("/admin/users/alice/configs", json=payload, headers=_BEARER)
+        assert resp.status_code == 400, payload
+        assert "config" in _error_of(resp), payload
+
+
+def test_grant_config_400_passthrough_violation(client):
+    """Second passthrough-reaching grant → 400 naming the offending user."""
+    _add_passthrough_configs(os.environ["CALDAV_MCP_DB_PATH"])
+    first = client.post(
+        "/admin/users/alice/configs",
+        json={"config": "pt-one"},
+        headers=_BEARER,
+    )
+    assert first.status_code == 200
+    resp = client.post(
+        "/admin/users/alice/configs",
+        json={"config": "pt-two"},
+        headers=_BEARER,
+    )
+    assert resp.status_code == 400
+    err = _error_of(resp)
+    assert "passthrough" in err
+    assert "'alice'" in err
+
+
+# ---------------------------------------------------------------------------
+# 11. DELETE /admin/users/{username}/configs/{config} — revoke (200 + body)
+# ---------------------------------------------------------------------------
+
+
+def test_revoke_config_200_idempotent_with_body(client):
+    """Revoke → 200 {revoked, username, config, restart_required}; repeat → 200."""
+    with mock.patch.object(admin, "log_admin_operation") as mock_admin_audit:
+        resp = client.delete("/admin/users/alice/configs/default", headers=_BEARER)
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "revoked": True,
+        "username": "alice",
+        "config": "default",
+        "restart_required": True,
+    }
+    mock_admin_audit.assert_called_once_with(
+        action="revoke_config",
+        status="ok",
+        target_user="alice",
+        client_ip="testclient",
+    )
+    # Revoking again (now never-granted) stays an idempotent no-op → 200.
+    resp = client.delete("/admin/users/alice/configs/default", headers=_BEARER)
+    assert resp.status_code == 200
+    assert resp.json()["revoked"] is True
+    # Never-granted config for a known user → also 200 (store parity).
+    resp = client.delete("/admin/users/bob/configs/default", headers=_BEARER)
+    assert resp.status_code == 200
+
+
+def test_revoke_config_404_unknown_user_precheck(client):
+    """Unknown user → 404 via the get_user pre-check — before config validation.
+
+    The config name here would fail store charset validation (→ 400) if the
+    handler reached ``revoke_config``; the mandated pre-check wins with 404.
+    """
+    with mock.patch.object(admin, "log_admin_operation") as mock_admin_audit:
+        resp = client.delete("/admin/users/ghost/configs/a.b", headers=_BEARER)
+    assert resp.status_code == 404
+    assert "ghost" in _error_of(resp)
+    mock_admin_audit.assert_called_once_with(
+        action="revoke_config", status="error", target_user="ghost", client_ip="testclient"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 12. PUT /admin/users/{username}/configs — replace-all (200 / 404 / 409)
+# ---------------------------------------------------------------------------
+
+
+def test_replace_configs_200_replace_all(client):
+    """Replace-all → 200 user + restart_required; duplicates deduped; [] clears."""
+    with mock.patch.object(admin, "log_admin_operation") as mock_admin_audit:
+        resp = client.put(
+            "/admin/users/bob/configs",
+            json={"configs": ["default", "default"]},
+            headers=_BEARER,
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert set(body) == {"username", "configs", "restart_required"}
+    assert body["configs"] == ["default"]  # set semantics: deduped
+    assert body["restart_required"] is True
+    mock_admin_audit.assert_called_once_with(
+        action="set_user_configs",
+        status="ok",
+        target_user="bob",
+        client_ip="testclient",
+    )
+    # Replace with the empty set → revoke-all.
+    resp = client.put("/admin/users/bob/configs", json={"configs": []}, headers=_BEARER)
+    assert resp.status_code == 200
+    assert resp.json()["configs"] == []
+
+
+def test_replace_configs_404_names_missing_configs_atomically(client):
+    """Missing configs → 404 naming them; the pre-check blocks any write."""
+    resp = client.put(
+        "/admin/users/bob/configs",
+        json={"configs": ["default", "ghost", "phantom"]},
+        headers=_BEARER,
+    )
+    assert resp.status_code == 404
+    err = _error_of(resp)
+    assert "ghost" in err and "phantom" in err
+    # Pre-check ran before set_user_configs: bob's grants are untouched.
+    assert client.get("/admin/users/bob", headers=_BEARER).json()["configs"] == []
+
+
+def test_replace_configs_404_unknown_user(client):
+    """Unknown user → 404 (StoreNotFoundError from set_user_configs)."""
+    resp = client.put(
+        "/admin/users/ghost/configs",
+        json={"configs": ["default"]},
+        headers=_BEARER,
+    )
+    assert resp.status_code == 404
+    assert "ghost" in _error_of(resp)
+
+
+def test_replace_configs_400_bad_shapes(client):
+    """Missing/non-list/non-string ``configs`` → 400 (API-owned shape)."""
+    payloads = (
+        {},  # missing field
+        {"configs": "default"},  # not a list
+        {"configs": [1]},  # non-string element
+        {"configs": ["default", 5]},  # mixed list
+    )
+    for payload in payloads:
+        resp = client.put("/admin/users/bob/configs", json=payload, headers=_BEARER)
+        assert resp.status_code == 400, payload
+        assert "configs" in _error_of(resp), payload
+
+
+def test_replace_configs_400_passthrough_violation_rolls_back(client):
+    """M1 in-store enforcement → 400; the transaction rollback preserves grants."""
+    _add_passthrough_configs(os.environ["CALDAV_MCP_DB_PATH"])
+    resp = client.put(
+        "/admin/users/alice/configs",
+        json={"configs": ["pt-one", "pt-two"]},
+        headers=_BEARER,
+    )
+    assert resp.status_code == 400
+    assert "passthrough" in _error_of(resp)
+    # alice's original grant survived the rolled-back replace.
+    assert client.get("/admin/users/alice", headers=_BEARER).json()["configs"] == ["default"]
+
+
+def test_replace_configs_409_genuine_fk_race_only(client):
+    """409 surfaces only from an FK race after the pre-check passed."""
+    with mock.patch.object(
+        ConfigStore,
+        "set_user_configs",
+        side_effect=StoreConflictError("config not found or other FK violation for user 'bob'"),
+    ):
+        resp = client.put(
+            "/admin/users/bob/configs",
+            json={"configs": ["default"]},
+            headers=_BEARER,
+        )
+    assert resp.status_code == 409
+    assert "config" in _error_of(resp)
+
+
+# ---------------------------------------------------------------------------
+# 13. Cross-cutting write status codes (table (d) / status-code policy)
+# ---------------------------------------------------------------------------
+
+
+def test_write_429_when_rate_limited(client, _admin_setup):
+    """A limited IP is rejected with 429 + Retry-After before any store work."""
+    limiter = _admin_setup
+    for _ in range(3):
+        limiter.record_failure("testclient")
+    with mock.patch.object(admin, "ConfigStore") as mock_store:
+        resp = client.post(
+            "/admin/users",
+            json={"username": "x", "key": "y"},
+            headers=_BEARER,
+        )
+    assert resp.status_code == 429
+    assert int(resp.headers["retry-after"]) >= 1
+    mock_store.assert_not_called()
+
+
+def test_write_404_fail_closed_when_admin_key_unset(client, _admin_setup, monkeypatch):
+    """ADMIN_KEY empty → write routes 404 before any comparison (fail-closed)."""
+    limiter = _admin_setup
+    monkeypatch.setattr(config, "ADMIN_KEY", "")
+    with mock.patch.object(admin, "_const_eq") as mock_const_eq:
+        resp = client.post(
+            "/admin/users",
+            json={"username": "x", "key": "y"},
+            headers=_BEARER,
+        )
+    assert resp.status_code == 404
+    mock_const_eq.assert_not_called()
+    assert limiter.is_rate_limited("testclient") is False
+
+
+def test_write_404_in_simple_mode(client):
+    """With the singleton in env (simple) mode write routes also 404."""
+    env_app = AppConfig(mode="env", config=_FAKE_CONFIG)
+    configure_app_config(env_app)
+    resp = client.post("/admin/users", json={"username": "x", "key": "y"}, headers=_BEARER)
+    assert resp.status_code == 404
+    assert _error_of(resp) == "not found"
+    resp = client.delete("/admin/users/alice", headers=_BEARER)
+    assert resp.status_code == 404
+
+
+def test_create_user_503_store_unavailable(client, tmp_path, monkeypatch):
+    """Writes hit the same choke point: unreadable store → 503 + retry hint."""
+    monkeypatch.setenv("CALDAV_MCP_DB_PATH", str(tmp_path))
+    resp = client.post(
+        "/admin/users",
+        json={"username": "x", "key": "y"},
+        headers=_BEARER,
+    )
+    assert resp.status_code == 503
+    assert "retry" in _error_of(resp).lower()

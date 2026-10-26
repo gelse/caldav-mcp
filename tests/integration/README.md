@@ -20,10 +20,16 @@
 
 2. Or manually:
    ```bash
+   python3 tests/integration/build_pro_store.py
    docker compose -f docker-compose.test.yaml up -d
    .venv/bin/python -m pytest tests/integration/ -m integration
    docker compose -f docker-compose.test.yaml down -v
    ```
+
+   > **Admin write tests mutate the bind-mounted pro store.** Once
+   > `test_admin_api.py` has run, re-run `build_pro_store.py` (first step
+   > above) before reusing this manual flow so it starts from a clean store.
+   > `make test-integration` rebuilds the store automatically.
 
 ## Test Structure
 
@@ -32,6 +38,7 @@
 - `test_concurrent_access.py` — Concurrent read/write patterns
 - `test_pro_mode.py` — Pro-mode DB auth, fan-out reads, dotted-path writes
 - `test_multi_remote_fanout.py` — Multi-remote fan-out, partial failure, passthrough, header/env edge cases
+- `test_admin_api.py` — Admin REST API: read/write routes, pro/simple mode gating, CLI cross-surface, restart-window proof
 
 ## Configuration
 

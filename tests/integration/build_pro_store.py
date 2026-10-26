@@ -43,6 +43,16 @@ def main() -> int:
     for stale in (Path(db_path), Path(f"{db_path}-wal"), Path(f"{db_path}-shm")):
         stale.unlink(missing_ok=True)
     _build_pro_store(db_path, RADICALE_URL, RADICALE2_URL)
+
+    # Deterministic permissions for the container's Alpine *system* user
+    # ``app`` (Dockerfile ``adduser -S``): relative to host-owned artifacts it
+    # is "other", and without a writable directory (SQLite journal files) and
+    # a writable DB file, admin-API writes fail with sqlite3.OperationalError
+    # → 503 even though the compose mount is read-write (M3.1 round-2
+    # CRITICAL review finding — applied regardless of the host uid/umask).
+    Path(db_path).parent.chmod(0o777)
+    Path(db_path).chmod(0o666)
+
     print(f"Pro store built: {db_path}")
     return 0
 
