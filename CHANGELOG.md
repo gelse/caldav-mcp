@@ -1,32 +1,29 @@
 # Changelog
 
-## M5 — Partial-failure reporting and documentation
+## v0.2.0 (2026-10-26)
 
 ### Features
-- **Partial-failure reporting (M5.1):** Read-tool fan-out now reports per-remote statuses (`ok`, `empty`, `auth`, `error`, `not_found`) and renders bracketed per-remote detail lines in the `message` field. One remote's failure never masks other remotes' results.
-- **Multi-remote integration tests (M5.2):** Two-Radicale-server integration suite covering fan-out, passthrough, header/env precedence, and bad-credentials edge cases.
-- **Read-only mode:** `CALDAV_MCP_READ_ONLY` flag hides write tools at registration time. In read-only mode only 8 read-only tools are visible to MCP clients.
-
-### Features (M1–M4)
-- **M1 header-precedence rule:** CalDAV credential resolution is mode-based — when `CALDAV_URL` is set, `X-Caldav-*` request headers are ignored entirely (no per-field mixing). When `CALDAV_URL` is unset, all three `X-Caldav-*` headers are required per request.
-- **Config singleton:** Read-only `AppConfig` as the single source of CalDAV connection data; env/header/db modes.
-- **Pro mode (M4):** `DB_CONFIG_ENABLED=true` loads config and users from the SQLite store at startup. DB-user auth (`X-Mcp-Username` + Bearer/`X-Api-Key`), fan-out reads across remotes, dotted-path write addressing (`config.remote.calendar`).
-- **Config store and CLI (M3):** SQLite-backed store with `caldav-mcp-config` CLI for managing users, configs, remotes, and calendars. Fernet encryption of CalDAV passwords at rest (`CALDAV_MCP_CONFIG_SECRET`).
-- **Partial-failure reporting (M5.1):** Per-remote status classification, `render_fanout_message` with bracketed detail lines, severity-based aggregation for mixed-outcome remotes.
+- **Read-only mode (#12):** `CALDAV_MCP_READ_ONLY` flag hides write tools at registration; only the 8 read-only tools are exposed to MCP clients.
+- **Pro mode / user database (#17):** `DB_CONFIG_ENABLED=true` loads config and users from a SQLite store. DB-user endpoint auth (`X-Mcp-Username` + Bearer / `X-Api-Key`), multi-remote fan-out reads with per-remote aggregation, dotted-path write addressing (`config.remote.calendar`), partial-failure reporting, multi-remote integration tests (two-Radicale suite).
+- **Config store & CLI (M3):** SQLite-backed `caldav-mcp-config` CLI for managing users, configs, remotes, and calendars; Fernet encryption of CalDAV passwords at rest (`CALDAV_MCP_CONFIG_SECRET`).
 
 ### Changed
-- **Breaking (M1):** CalDAV credential resolution is now mode-based. If `CALDAV_URL` is set, all credentials come from the environment and `X-Caldav-*` request headers are ignored (previously headers took precedence per-field). If `CALDAV_URL` is unset, the three `X-Caldav-*` headers are required per request. No per-field mixing. `X-Caldav-Username`/`X-Caldav-Password` are reserved for a future passthrough mode.
-- **Breaking (M4):** `CALDAV_MCP_API_KEY` is ignored in pro mode (`DB_CONFIG_ENABLED=true`). Only DB-stored user credentials are accepted.
+- **Breaking (M1):** CalDAV credential resolution is now mode-based — when `CALDAV_URL` is set, `X-Caldav-*` headers are ignored entirely (no per-field mixing); when unset, all three `X-Caldav-*` headers are required per request.
+- **Breaking (M4):** `CALDAV_MCP_API_KEY` is ignored in pro mode; only DB-stored user credentials are accepted.
+
+### Fixed
+- DST-seasonal flakiness in `test_now_carries_server_timezone` — the test now freezes the clock to a fixed mid-DST instant, so the UTC-offset assertion is deterministic year-round (#23).
+- Removed personal CalDAV values from `.env.example` (#23).
 
 ### New environment variables
-- `DB_CONFIG_ENABLED` — enable pro mode (default: `false`)
-- `CALDAV_MCP_DB_PATH` — path to the SQLite configuration store (default: `""`)
-- `CALDAV_MCP_CONFIG_SECRET` — master secret for encrypting CalDAV credentials at rest (default: `""`)
+- `DB_CONFIG_ENABLED` (default: `false`)
+- `CALDAV_MCP_DB_PATH` (default: `""`)
+- `CALDAV_MCP_CONFIG_SECRET` (default: `""`)
 
 ### Upgrade notes
-- **M1 header-precedence change:** Clients that previously sent `X-Caldav-*` headers while `CALDAV_URL` was set now get environment credentials instead of header credentials. If you relied on headers overriding env vars, remove `CALDAV_URL` and use header mode.
-- **Pro mode:** `CALDAV_MCP_API_KEY` is ignored when `DB_CONFIG_ENABLED=true`. Use `X-Mcp-Username` + DB-stored key instead.
-- **Restart-to-apply:** Configuration changes (env vars, store modifications) require a server restart. There is no hot reload.
+- **M1:** clients relying on `X-Caldav-*` headers overriding env vars must drop `CALDAV_URL` and use header mode.
+- **M4:** in pro mode use `X-Mcp-Username` + DB-stored key instead of `CALDAV_MCP_API_KEY`.
+- Configuration changes require a server restart (no hot reload).
 
 ## v0.1.1 (2026-09-11)
 
