@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.2.1 (2026-10-26)
+
+### Fixed
+- **`caldav_update_event` start/end updates (#19):** updating an event's `start`/`end` no longer fails with "Internal error" — DTSTART/DTEND are now serialized as valid RFC 5545 date-times (values wrapped in `vDatetime`) and a stale DTEND or DURATION is dropped when the end is updated.
+
 ## v0.2.0 (2026-10-26)
 
 ### Features
