@@ -363,9 +363,7 @@ def test_update_event_start_end_serializes_valid_rfc5545():
         # splitting on ":" would break on values like
         # DTSTART;TZID="UTC+02:00":... whose TZID contains colons.
         data = fake_cal._event.data
-        dt_lines = [
-            line for line in data.splitlines() if line.startswith(("DTSTART", "DTEND"))
-        ]
+        dt_lines = [line for line in data.splitlines() if line.startswith(("DTSTART", "DTEND"))]
         assert len(dt_lines) == 2, f"Expected DTSTART and DTEND lines in payload: {dt_lines!r}"
         valid_rfc5545_dt = re.compile(r"^(?:DTSTART|DTEND)(?:;.*)?:\d{8}T\d{6}")
         for line in dt_lines:
