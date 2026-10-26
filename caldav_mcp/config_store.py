@@ -2,9 +2,11 @@
 
 This module provides the persistent configuration store used in **pro mode**
 (M3+).  It is the *only* writer of the on-disk database; the CLI (M3.3)
-creates users, configs, remotes and calendars through this API.  Reads
-happen at startup only, in the future M4 loader that assembles the
-read-only ``caldav_mcp.app_config`` singleton from the rows stored here.
+creates users, configs, remotes and calendars through this API.  Startup
+reads serve auth and config loading, in the future M4 loader that
+assembles the read-only ``caldav_mcp.app_config`` singleton from the rows
+stored here, while the admin API is the server's per-request
+reader/writer, users only.
 
 Data-shape mapping
 ------------------

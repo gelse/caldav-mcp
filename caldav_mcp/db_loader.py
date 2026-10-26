@@ -6,8 +6,9 @@ plus a tuple of :class:`ProUser` snapshots for downstream auth (M4.2+).
 
 **Design invariants**
 
-* The loader runs exactly once at server startup.  The server never writes
-  to the store; configuration changes require a restart.
+* The loader runs exactly once at server startup.  The loader never writes
+  to the store; configuration changes require a restart.  The admin API is
+  the server's only store writer, users only.
 * No env-var reads inside this module — the master secret is passed
   explicitly via the *secret* parameter so that callers (and tests) control
   the key material.

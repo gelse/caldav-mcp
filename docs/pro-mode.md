@@ -20,7 +20,9 @@ SQLite config store at startup, enabling multi-user, multi-account deployments.
   dotted path (e.g. `main.radicale.work`) to uniquely identify the target
   calendar. Plain calendar names are rejected.
 - **Restart-to-apply**: Config changes require a server restart. The store
-  is read once at startup and frozen into an immutable `AppConfig`.
+  is read once at startup and frozen into an immutable `AppConfig`. User
+  management via the admin API also writes the store; those changes
+  require a restart to apply.
 
 ## Required env vars
 
