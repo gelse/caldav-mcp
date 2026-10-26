@@ -10,8 +10,9 @@ Design decisions
 * **Key**: ``(url, username)`` — the password is **never** used as a cache key
   or stored in the cache metadata.
 * **Password verification**: For passthrough clients where the caller provides
-  credentials per request, :meth:`~get_with_password` stores a keyed hash of
-  the password and verifies it on cache hits to prevent cross-user escalation.
+  credentials per request, :meth:`~get_with_password` stores a
+  PBKDF2-HMAC-SHA256 hash of the password (via :mod:`caldav_mcp.key_hash`)
+  and verifies it on cache hits to prevent cross-user escalation.
   Direct-credential clients use the plain :meth:`~get` which skips verification
   (the password does not change between MCP users in that mode).
 * **Eviction**: LRU with configurable *max_size* and TTL.
@@ -23,12 +24,12 @@ Design decisions
 
 from __future__ import annotations
 
-import hmac
 import logging
 import threading
 import time
 from collections import OrderedDict
 
+from caldav_mcp.key_hash import hash_api_key, verify_api_key
 from caldav_mcp.types import CalDAVClient
 
 log = logging.getLogger(__name__)
@@ -36,15 +37,6 @@ log = logging.getLogger(__name__)
 # Default configuration – intentionally conservative.
 DEFAULT_MAX_SIZE = 8
 DEFAULT_TTL_SECONDS = 3600  # 1 hour
-
-# Server-side secret for password hashing.  Randomised once per process;
-# cache is in-memory only so this is appropriate for cross-user protection.
-_PASSWORD_SECRET = b"caldav-mcp-passthrough-verify-" + __import__("os").urandom(16).hex().encode()
-
-
-def _hash_password(password: str) -> str:
-    """Return a hex HMAC-SHA256 keyed hash of *password*."""
-    return hmac.new(_PASSWORD_SECRET, password.encode("utf-8"), "sha256").hexdigest()
 
 
 class ClientCache:
@@ -142,8 +134,7 @@ class ClientCache:
                 # Legacy entry without a stored hash — treat as a miss.
                 return None
 
-            supplied_hash = _hash_password(password)
-            if not hmac.compare_digest(supplied_hash, stored_hash):
+            if not verify_api_key(password, stored_hash):
                 log.debug("Password mismatch for cache key %s — evicting", key)
                 del self._cache[key]
                 del self._timestamps[key]
@@ -166,8 +157,9 @@ class ClientCache:
         """Insert or replace a ``DAVClient`` in the cache.
 
         If the cache is at capacity the least-recently-used entry is evicted
-        (and its ``close()`` called).  When *password* is provided a keyed
-        hash is stored for later verification by :meth:`get_with_password`.
+        (and its ``close()`` called).  When *password* is provided a
+        PBKDF2-HMAC-SHA256 hash is stored for later verification by
+        :meth:`get_with_password`.
         """
         key = (url, username)
         with self._lock:
@@ -187,7 +179,7 @@ class ClientCache:
             self._cache[key] = client
             self._timestamps[key] = time.monotonic()
             if password is not None:
-                self._pw_hashes[key] = _hash_password(password)
+                self._pw_hashes[key] = hash_api_key(password)
 
     def clear(self) -> None:
         """Close and remove **all** cached clients."""
