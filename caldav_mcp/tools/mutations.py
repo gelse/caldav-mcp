@@ -4,6 +4,7 @@ import uuid
 from datetime import timedelta
 
 from icalendar import vRecur
+from icalendar.prop import vDatetime
 
 from caldav_mcp.calendar import (
     _comp,
@@ -167,9 +168,14 @@ def caldav_update_event(
     if summary:
         comp["SUMMARY"] = summary
     if start:
-        comp["DTSTART"] = _parse_dt(start)
+        comp.pop("DTSTART", None)
+        comp["DTSTART"] = vDatetime(_parse_dt(start))
     if end:
-        comp["DTEND"] = _parse_dt(end)
+        # RFC 5545: DTEND and DURATION are mutually exclusive; pop default
+        # avoids KeyError for DURATION-only events and drops stale params.
+        comp.pop("DTEND", None)
+        comp.pop("DURATION", None)
+        comp["DTEND"] = vDatetime(_parse_dt(end))
     if location:
         comp["LOCATION"] = location
     if description:
