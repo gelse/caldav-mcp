@@ -364,6 +364,38 @@ class TestProStoreWritableWarning:
         )
         assert not any("not writable" in m for m in messages)
 
+    @pytest.mark.skipif(_IS_ROOT, reason="root bypasses filesystem permission checks")
+    def test_warns_when_store_dir_not_writable(
+        self,
+        tmp_path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Writable store file inside a non-writable directory → warning.
+
+        Exercises the *directory* clause of the probe (the realistic
+        bind-mount failure mode: file 0666, containing dir mounted ro or
+        root-owned) — the file-clause test above cannot reach it.
+        """
+        locked = tmp_path / "ro-dir"
+        locked.mkdir()
+        db = locked / "store.db"
+        db.write_text("placeholder")
+        db.chmod(0o666)
+        locked.chmod(0o555)
+        try:
+            messages, run_spy = _run_main_pro_mode(
+                monkeypatch, caplog, admin_key="test-admin-key", db_path=str(db)
+            )
+        finally:
+            locked.chmod(0o755)
+
+        warnings = [m for m in messages if "not writable" in m]
+        assert len(warnings) == 1, f"expected exactly one writability warning: {messages}"
+        assert str(db) in warnings[0]
+        # Never fatal: startup continued to the HTTP launch.
+        run_spy.assert_called_once()
+
     def test_warning_does_not_echo_admin_key(
         self,
         tmp_path,
