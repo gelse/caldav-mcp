@@ -24,6 +24,8 @@ services:
       CALDAV_MCP_RATE_LIMIT_WINDOW_SECONDS: "${CALDAV_MCP_RATE_LIMIT_WINDOW_SECONDS:-60}"
       # Audit log format (text or json)
       CALDAV_MCP_LOG_FORMAT: "${CALDAV_MCP_LOG_FORMAT:-text}"
+      # Serve the built admin SPA at /ui (image ships ui/dist; default off)
+      SHOW_UI: "${SHOW_UI:-false}"
       TZ: Europe/Vienna
     healthcheck:
       test: ["CMD", "python3", "-c", "import socket; s=socket.socket(); s.settimeout(3); s.connect(('127.0.0.1',8080)); s.close()"]

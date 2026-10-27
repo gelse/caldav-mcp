@@ -2,7 +2,7 @@
 
 The admin UI is a single-page app for the pro-mode admin REST API: unlock it with the admin key, then list users, create or delete users, grant or revoke configs, and rotate keys. It talks only to the same `/admin/*` endpoints documented in [`docs/api.md`](api.md) — same origin, no other backend.
 
-This page covers local development. The UI is **not yet served by the Python server**; hosting is added in a follow-up change (see [Hosting](#hosting)).
+This page covers local development and deployment. The server serves the built app at `/ui` when `SHOW_UI=true` — see [Hosting](#hosting).
 
 ## Prerequisites
 
@@ -77,4 +77,15 @@ Evergreen browsers (current Chrome/Edge/Firefox/Safari). The app needs ES2022 mo
 
 ## Hosting
 
-The Python server does not serve this app yet. Local development uses the Vite dev server above; serving the built `ui/dist` from the server under `/ui` (behind `SHOW_UI`) is added in the follow-up milestone, which will also rewrite this section.
+Set `SHOW_UI=true` and the server hosts the built SPA on the same listener at `/ui` (`/ui` redirects to `/ui/`). The flag is independent of pro mode: the static app is served in any mode, but its data calls reach the admin API only when pro mode and `CALDAV_MCP_ADMIN_KEY` are active — otherwise the app shows its **“admin API not available”** screen, which means the API is off, not that your key is wrong.
+
+**Getting a build of `ui/dist`:**
+
+- **Docker** — the image builds the SPA in a Node build stage and ships `ui/dist`; nothing to do beyond setting `SHOW_UI=true` (`.env` for compose; the image and production compose default to `false`).
+- **Local** — run `make ui-build` once (Node ≥ 20.19), then start the server with `SHOW_UI=true`.
+
+**Missing build output fails fast.** `SHOW_UI=true` without `ui/dist/index.html` aborts startup with an actionable error — `SHOW_UI is enabled but the UI build output is missing at <path> — run 'make ui-build' or build the Docker image (which builds ui/ automatically)` — rather than serving a broken page; the container stays unhealthy under compose `--wait` and the healthcheck surfaces it immediately. The same 404 applies at request time if the dist disappears under a running server — restarting after (re)building is the fix.
+
+**Cache and CSP policy.** Every `/ui` response carries `Content-Security-Policy: default-src 'self'`, `X-Content-Type-Options: nosniff`, and `Referrer-Policy: no-referrer` — strict CSP holds because the build gate proves the built `index.html` contains no inline script or `style=` attributes (if a future build legitimately needs inline content, the build gate fails first and the CSP is revisited explicitly). Content-hashed files under `/ui/assets/` are cached for a year (`Cache-Control: public, max-age=31536000, immutable`); `index.html` and other files are `no-cache`, so a redeploy is picked up on the next load. A missing `assets/*` file returns 404 instead of the page, so a stale cached `index.html` fails loudly instead of silently loading an old chunk.
+
+**Plain-HTTP warning.** Served over `http://` on a non-localhost origin, the admin key crosses the network in plaintext in every request header — the app warns about this, and the rule is the same as in the API docs: send it over TLS or localhost only, bind the published port privately, and see [`docs/api.md`](api.md#transport-warning--read-before-sending-the-key).

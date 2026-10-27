@@ -1,3 +1,21 @@
+# ── Stage 0: build the admin SPA (ui/) ────────────────────────────
+# Node never ships in the runtime stage — only ui/dist is copied out.
+# ui/node_modules and ui/dist are .dockerignore'd, so npm ci always builds
+# a clean dependency tree (host-platform binaries can't leak in) and the
+# COPY/package*.json layer ordering below keeps caching deterministic.
+# Pinned to an exact patch + alpine tag (same reproducibility rule as the
+# python base image); Node 22 is the active LTS line that satisfies Vite 7.
+FROM node:22.21.1-alpine3.21 AS ui-builder
+
+WORKDIR /build/ui
+
+COPY ui/package.json ui/package-lock.json ./
+RUN npm ci
+
+COPY ui/ ./
+# Output: /build/ui/dist (postbuild also runs the CSP-construction gate)
+RUN npm run build
+
 # ── Stage 1: build dependencies ──────────────────────────────────
 # Runtime uses 3.13 (newer than requires-python >= 3.11) for latest security patches.
 # Pin to exact patch tag for reproducible builds.
@@ -22,6 +40,9 @@ WORKDIR /app
 
 COPY --chown=app:app server.py .
 COPY --chown=app:app caldav_mcp/ ./caldav_mcp/
+# Built admin SPA (app-owned; default_dist_dir() resolves to /app/ui/dist).
+# Node is never installed in the runtime image — only the dist is copied.
+COPY --chown=app:app --from=ui-builder /build/ui/dist ./ui/dist
 
 EXPOSE 8080
 
@@ -33,6 +54,8 @@ ENV CALDAV_MCP_TLS_CA_BUNDLE=""
 ENV CALDAV_MCP_CALDAV_VERIFY_SSL="true"
 # Audit log format (text or json)
 ENV CALDAV_MCP_LOG_FORMAT="text"
+# Serve the built admin SPA at /ui (image ships ui/dist; default off)
+ENV SHOW_UI="false"
 
 USER app
 

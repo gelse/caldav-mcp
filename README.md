@@ -162,8 +162,11 @@ Most users only need these:
 | `CALDAV_MCP_API_KEY` | API key for endpoint auth (optional) |
 | `TZ` | IANA timezone for today/week boundaries (default: UTC) |
 | `CALDAV_MCP_READ_ONLY` | `true` to hide write tools |
+| `SHOW_UI` | `true` to serve the built admin UI at `/ui` |
 
 **Credential modes:** environment variables (env mode), per-request `X-Caldav-*` headers (header mode), or SQLite store (pro mode). No per-field mixing — all three credentials come from the same source. Full reference: [`docs/configuration.md`](docs/configuration.md).
+
+**Admin UI:** `SHOW_UI=true` serves the built SPA at `/ui` (the Docker image ships the build; local runs need `make ui-build` first). See [`docs/ui.md`](docs/ui.md).
 
 **Pro mode** (`DB_CONFIG_ENABLED=true`): loads users and configs from a SQLite store at startup. Supports per-user keys, fan-out reads across multiple remotes, and dotted-path writes. Requires `CALDAV_MCP_DB_PATH` and `CALDAV_MCP_CONFIG_SECRET`. User management (create, delete, key rotation, grants) is also available over the [admin REST API](docs/api.md#admin-rest-api) — enable it with `CALDAV_MCP_ADMIN_KEY` — and those changes apply live; user changes made through the CLI, and all config changes, require a restart. Details: [`docs/pro-mode.md`](docs/pro-mode.md), [`docs/cli.md`](docs/cli.md).
 
@@ -176,6 +179,7 @@ Most users only need these:
 | [`docs/cli.md`](docs/cli.md) | Config store CLI (`caldav-mcp-config`) |
 | [`docs/configuration.md`](docs/configuration.md) | Full env var reference, TLS, reverse proxy, deployment |
 | [`docs/pro-mode.md`](docs/pro-mode.md) | Pro mode — SQLite store, fan-out, per-user auth |
+| [`docs/ui.md`](docs/ui.md) | Admin UI — development, security, hosting at `/ui` |
 | [`docs/architecture.md`](docs/architecture.md) | Architecture and design decisions |
 | [`docs/contributing.md`](docs/contributing.md) | Development setup, code style, architecture rules |
 
