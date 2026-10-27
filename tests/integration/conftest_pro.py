@@ -18,6 +18,8 @@ Users:
 
 * **alice** → granted ``["main", "mirror", "second", "broken", "passthrough"]``
 * **bob** → granted ``["main", "second"]`` only
+* **admin-snapshot-user** → never granted; admin-API key-rotation fixture
+  only (M4.1)
 
 ``main`` intentionally carries two remotes so that M4.5's dotted-path write
 (``main.radicale.work``) and M5.2's direct-remote case (``main.rad1.personal``)
@@ -54,6 +56,12 @@ USER_SHARED_PASS = "testpass"
 ALICE_KEY = "alice-integration-test-key"
 BOB_KEY = "bob-integration-test-key"
 
+# M4.1 rotation fixture: seeded into the startup snapshot with no grants so
+# the admin API can rotate its key while pre/post-restart auth semantics stay
+# observable.  Admin tests only — never granted, never deleted.
+ADMIN_SNAPSHOT_USER = "admin-snapshot-user"
+ADMIN_SNAPSHOT_KEY = "admin-snapshot-user-test-key"
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -65,7 +73,7 @@ def _build_pro_store(
     radicale_url: str,
     radicale2_url: str = "http://localhost:5233",
 ) -> None:
-    """Populate a ConfigStore with five configs, two users, and their grants.
+    """Populate a ConfigStore with five configs, three users, and their grants.
 
     * **main** → remotes ``radicale`` (M4.5, userA) and ``rad1`` (M5.2, testuser)
     * **mirror** → remote ``radicale-mirror`` (M4.5, userB)
@@ -77,6 +85,7 @@ def _build_pro_store(
 
     * **alice** → granted all five configs
     * **bob** → granted ``["main", "second"]`` only
+    * **admin-snapshot-user** → never granted (M4.1 rotation fixture)
     """
     enc_a = encrypt_secret(USER_A_PASS)
     enc_b = encrypt_secret(USER_B_PASS)
@@ -213,6 +222,9 @@ def _build_pro_store(
         store.create_user(username="bob", key_hash=bob_hash)
         store.grant_config(username="bob", config_name="main")
         store.grant_config(username="bob", config_name="second")
+
+        # M4.1: never-granted snapshot user for the admin key-rotation proof.
+        store.create_user(username=ADMIN_SNAPSHOT_USER, key_hash=hash_api_key(ADMIN_SNAPSHOT_KEY))
 
 
 # ---------------------------------------------------------------------------
