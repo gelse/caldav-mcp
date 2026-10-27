@@ -49,6 +49,7 @@ caldav-mcp/
 │   └── types.py                 # CalDAVClient Protocol definition
 ├── tests/                       # Unit, integration, performance
 ├── docs/                        # Architecture, API, contributing docs
+├── ui/                          # Admin SPA (Vite + Svelte + TypeScript) — built to ui/dist
 ├── Dockerfile                   # Multi-stage Docker build
 ├── docker-compose.yaml          # Production compose (port 8600→8080)
 ├── docker-compose.test.yaml     # Test compose with Radicale
@@ -142,6 +143,9 @@ All config via environment variables, validated at startup with Pydantic:
 
 ## Development
 
+Requires Node.js >= 20.19 (with npm) for the admin-UI gates — same class of
+prerequisite as Docker for `make test-integration`.
+
 ```bash
 # Run tests
 make test
@@ -154,4 +158,7 @@ make lint
 
 # Type check
 make typecheck
+
+# Admin UI (ui/): install + lint + typecheck + tests (part of make check)
+make ui-check
 ```

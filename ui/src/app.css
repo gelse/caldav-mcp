@@ -1,0 +1,152 @@
+/* Global design tokens + base styles for the admin SPA (UI-M2 design (e)).
+   Dark mode via prefers-color-scheme only (no manual toggle — non-goal).
+   All colors go through custom properties: inline styles are banned. */
+
+:root {
+  color-scheme: light dark;
+
+  --bg: #f4f6f9;
+  --surface: #ffffff;
+  --text: #1b2129;
+  --muted: #5a6673;
+  --border: #d4dae1;
+  --accent: #1f5fbf;
+  --accent-contrast: #ffffff;
+  --danger: #b3261e;
+  --danger-bg: #fbeceb;
+  --danger-fg: #7a1a14;
+  --warning-border: #d9b44a;
+  --warning-bg: #fdf4dd;
+  --warning-fg: #5c4708;
+  --chip-bg: #e8edf4;
+  --shadow: 0 1px 3px rgb(0 0 0 / 12%);
+  --radius: 8px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #12161b;
+    --surface: #1b2129;
+    --text: #e7ecf1;
+    --muted: #9aa7b4;
+    --border: #333c47;
+    --accent: #6ea8fe;
+    --accent-contrast: #10141a;
+    --danger: #f2857c;
+    --danger-bg: #3a1d1a;
+    --danger-fg: #f6b4ae;
+    --warning-border: #8a7333;
+    --warning-bg: #37300f;
+    --warning-fg: #ecd791;
+    --chip-bg: #262e38;
+    --shadow: 0 1px 3px rgb(0 0 0 / 55%);
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+  font-family:
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    Roboto,
+    'Helvetica Neue',
+    Arial,
+    sans-serif;
+  line-height: 1.5;
+}
+
+h1,
+h2,
+h3 {
+  line-height: 1.25;
+}
+
+label {
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+input,
+select {
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.45rem 0.6rem;
+  min-width: 0;
+}
+
+input:disabled,
+select:disabled {
+  opacity: 0.6;
+}
+
+button {
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.45rem 0.85rem;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+  font-weight: 600;
+}
+
+button.danger {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: var(--accent-contrast);
+  font-weight: 600;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Native dialogs */
+dialog {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  padding: 1.1rem 1.25rem;
+  max-width: min(30rem, calc(100vw - 2rem));
+  width: 100%;
+  box-shadow: var(--shadow);
+}
+
+dialog::backdrop {
+  background: rgb(0 0 0 / 45%);
+}
+
+dialog.danger {
+  border-color: var(--danger);
+}
+
+/* Responsive padding overrides live in App.svelte's scoped styles —
+   component-scoped selectors would beat these flat selectors anyway. */

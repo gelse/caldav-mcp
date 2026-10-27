@@ -1,0 +1,37 @@
+{
+  "name": "caldav-mcp-admin-ui",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": ">=20.19"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "postbuild": "npm run check:csp",
+    "check:csp": "node scripts/check-csp.mjs",
+    "preview": "vite preview",
+    "test": "vitest",
+    "lint": "eslint .",
+    "typecheck": "svelte-check --tsconfig ./tsconfig.json"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@sveltejs/vite-plugin-svelte": "^6.2.4",
+    "@testing-library/dom": "^10.4.2",
+    "@testing-library/jest-dom": "~6.9.1",
+    "@testing-library/svelte": "^5.4.2",
+    "@types/node": "^20.19.43",
+    "eslint": "^10.13.0",
+    "eslint-plugin-svelte": "^3.23.1",
+    "globals": "^17.13.0",
+    "jsdom": "^29.1.1",
+    "svelte": "^5.57.3",
+    "svelte-check": "^4.7.7",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.72.1",
+    "vite": "^7.3.7",
+    "vitest": "^4.1.12"
+  }
+}
