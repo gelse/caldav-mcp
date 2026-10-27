@@ -6,9 +6,11 @@ single server instance must route requests to different CalDAV accounts.
 
 > **How the CLI and server work together:**
 > The CLI manages the SQLite store; the server reads it at startup in pro
-> mode (`DB_CONFIG_ENABLED=true`)
-> (user rows are also writable via the admin API — those changes apply
-> without a restart). The
+> mode (`DB_CONFIG_ENABLED=true`) — and since the admin REST API shipped,
+> the server *also* writes user rows itself (a deliberate change from the
+> earlier "only the CLI writes" rule): changes made through the
+> [admin REST API](api.md#admin-rest-api) apply without a restart, while
+> CLI-made user changes reach a running server at the next restart. The
 > `CALDAV_MCP_CONFIG_SECRET` must
 > **match** between CLI and server — the CLI encrypts passwords with it, and
 > the server decrypts them on startup. Config changes require a server
@@ -60,6 +62,10 @@ file path. It is required unless set via the env var.
 ### user
 
 Manage users.
+
+The admin REST API (pro mode) exposes the same user operations, plus key
+rotation and bulk grant replacement, over HTTP — see
+[`docs/api.md`](api.md#admin-rest-api).
 
 #### `user add`
 
@@ -424,17 +430,19 @@ rm -f "$STORE"
 
 - **No `remote update`** — to change a remote's URL or credentials,
   delete it and re-add.
-- **No key rotation** — ~~there is no built-in flow to rotate
+- **No `CALDAV_MCP_CONFIG_SECRET` rotation** — ~~there is no built-in flow to rotate
   `CALDAV_MCP_CONFIG_SECRET` or user API keys. Re-add remotes / re-create
   users after a secret change.~~ **Superseded for user API keys (M4):**
   rotate a user's key with the admin API endpoint
-  `PUT /admin/users/{username}/key` — it applies immediately since M5, no
+  [`PUT /admin/users/{username}/key`](api.md#routes) — it applies
+  immediately since M5, no
   restart (the `restart_required` response field from earlier M3/M4
   milestones of this release is gone). **Still true for
   `CALDAV_MCP_CONFIG_SECRET`:** there is no built-in flow to rotate it —
   re-add remotes after a secret change.
-- **No hot reload** — with one exception: since M5, **user** changes made
-  through the admin API (create, delete, key rotation, grant, revoke,
+- **No config hot reload** — with one exception: since M5, **user** changes made
+  through the [admin REST API](api.md#admin-rest-api) (create, delete, key
+  rotation, grant, revoke,
   replace grants) apply on the next request, no restart. Everything else
   in the store — configs, remotes, calendars, and CLI-made changes —
   still requires a server restart (inherited from the singleton design of
