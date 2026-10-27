@@ -1,5 +1,6 @@
 <script lang="ts">
   import { ApiError, rotateKey } from '../api';
+  import { canGenerateKey, generateUserKey } from '../keygen';
   import { rateLimitSeconds, triggerRateLimit } from '../rate';
   import KeyField from './KeyField.svelte';
 
@@ -30,10 +31,11 @@
     if (!dialogEl) return;
     if (open && !dialogEl.open) {
       // Fresh attempt every time the dialog opens — no leftovers from a
-      // cancelled or successful previous attempt.
+      // cancelled or successful previous attempt, and a freshly generated
+      // key so the operator never types one.
       done = false;
       fieldError = '';
-      newKey = '';
+      newKey = canGenerateKey() ? generateUserKey() : '';
       confirmed = false;
       dialogEl.showModal();
     }
@@ -90,7 +92,7 @@
     <div class="success-panel">
       <h2 id="rotate-key-title">Key rotated</h2>
       <p role="status">
-        Key rotated — use the key you just set for future MCP calls. The previous key stopped
+        Key rotated — use the newly generated key for future MCP calls. The previous key stopped
         working immediately.
       </p>
       <p class="hint">This dialog cannot show the key again — the server keeps only its hash.</p>
@@ -102,8 +104,9 @@
     <form onsubmit={submit}>
       <h2 id="rotate-key-title">Rotate key — {username}</h2>
       <p class="hint">
-        Set a new API key for this user. The current key stops working on the next MCP request.
-        Reveal and copy the new key before submitting — after that only its hash exists.
+        A new API key was generated for this user — Regenerate swaps in a different one. The current
+        key stops working on the next MCP request. Reveal and copy the generated key before
+        submitting — after that only its hash exists.
       </p>
       {#if fieldError}
         <p class="error" role="alert">{fieldError}</p>

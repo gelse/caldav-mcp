@@ -21,16 +21,9 @@ if (
   };
 }
 
-// jsdom's window.crypto has getRandomValues but no `subtle`; the app hides
-// the generate-key affordance when `subtle` is absent (secure-origin proxy),
-// so provide a stub to make the affordance testable. Individual tests can
-// still vi.stubGlobal('crypto', …) to simulate an insecure origin.
-if (typeof globalThis.crypto !== 'undefined' && !globalThis.crypto.subtle) {
-  Object.defineProperty(globalThis.crypto, 'subtle', {
-    value: {},
-    configurable: true,
-  });
-}
+// Key generation needs only `crypto.getRandomValues` (present in jsdom and
+// on insecure origins alike), so no crypto stub is required. Individual
+// tests can still vi.stubGlobal('crypto', …) to simulate missing Web Crypto.
 
 afterEach(() => {
   cleanup();

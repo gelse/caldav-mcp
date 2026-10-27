@@ -86,7 +86,7 @@ describe('UsersView', () => {
     expect(onSelect).toHaveBeenCalledWith('alice');
   });
 
-  it('creates a user — generated key is revealed and copied first, POST body carries exactly the visible value', async () => {
+  it('creates a user — key arrives auto-generated and read-only, Regenerate swaps it, POST body carries exactly the visible value', async () => {
     const fetchMock = installFetch(
       usersResponse(),
       jsonResponse({ username: 'dave', configs: [] }, 201),
@@ -105,9 +105,22 @@ describe('UsersView', () => {
     await openCreateDialog();
 
     await setfield('Username', 'dave');
-    await fireEvent.click(screen.getByRole('button', { name: 'Generate' }));
+
+    // The key is generated the moment the dialog opens — never typed.
     const keyInput = screen.getByLabelText('API key') as HTMLInputElement;
-    expect(keyInput.value).not.toBe('');
+    expect(keyInput).toHaveAttribute('readonly');
+    expect(keyInput.value).toMatch(/^[0-9a-f]{48}$/);
+    const firstKey = keyInput.value;
+
+    // A typing attempt never changes the field.
+    await fireEvent.input(keyInput, { target: { value: 'operator-typed' } });
+    expect(keyInput.value).toBe(firstKey);
+
+    // Regenerate replaces it with a fresh key and announces it live.
+    await fireEvent.click(screen.getByRole('button', { name: 'Regenerate' }));
+    expect(keyInput.value).toMatch(/^[0-9a-f]{48}$/);
+    expect(keyInput.value).not.toBe(firstKey);
+    expect(await screen.findByText('New key generated.')).toBeInTheDocument();
     const generatedKey = keyInput.value;
 
     // Reveal exposes the generated value before submit.
@@ -118,6 +131,7 @@ describe('UsersView', () => {
     // Copy hands the value over before submit.
     await fireEvent.click(screen.getByRole('button', { name: 'Copy' }));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(generatedKey));
+    expect(await screen.findByText('Copied to clipboard.')).toBeInTheDocument();
 
     await fireEvent.click(screen.getByRole('button', { name: 'Create user' }));
 
@@ -142,10 +156,8 @@ describe('UsersView', () => {
     render(UsersView, { props: { onSelect: vi.fn() } });
     await openCreateDialog();
 
+    // The key field is read-only and already holds a generated key.
     await setfield('Username', 'x');
-    const keyInput = screen.getByLabelText('API key') as HTMLInputElement;
-    keyInput.value = 'some-key';
-    await fireEvent.input(keyInput);
     await fireEvent.click(screen.getByRole('button', { name: 'Create user' }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
@@ -165,9 +177,6 @@ describe('UsersView', () => {
     await openCreateDialog();
 
     await setfield('Username', 'alice');
-    const keyInput = screen.getByLabelText('API key') as HTMLInputElement;
-    keyInput.value = 'some-key';
-    await fireEvent.input(keyInput);
     await fireEvent.click(screen.getByRole('button', { name: 'Create user' }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
@@ -177,8 +186,8 @@ describe('UsersView', () => {
     expect(screen.getByRole('dialog')).toBeInTheDocument();
   });
 
-  it('hides the Generate button and disables Copy when Web Crypto / clipboard are unavailable (insecure origin)', async () => {
-    // Insecure origins have no crypto.subtle (and often no clipboard API).
+  it('generates keys on insecure origins (getRandomValues without crypto.subtle) while Copy stays disabled without a clipboard', async () => {
+    // Insecure origins expose getRandomValues but not crypto.subtle.
     vi.stubGlobal('crypto', {
       getRandomValues: (array: Uint8Array) => {
         array.fill(1);
@@ -193,11 +202,30 @@ describe('UsersView', () => {
     render(UsersView, { props: { onSelect: vi.fn() } });
     await openCreateDialog();
 
-    expect(screen.queryByRole('button', { name: 'Generate' })).toBeNull();
-    // Copy must be visibly disabled rather than a silent no-op.
+    // Generation no longer depends on crypto.subtle: the field arrives
+    // populated and Regenerate is offered.
+    const keyInput = screen.getByLabelText('API key') as HTMLInputElement;
+    expect(keyInput).toHaveAttribute('readonly');
+    expect(keyInput.value).toBe('01'.repeat(24));
+    expect(screen.getByRole('button', { name: 'Regenerate' })).toBeEnabled();
+    // Copy is visibly disabled rather than a silent no-op.
     expect(screen.getByRole('button', { name: 'Copy' })).toBeDisabled();
-    // Manual entry and reveal still work.
+    // Reveal remains available as the clipboard fallback.
     expect(screen.getByRole('button', { name: 'Reveal' })).toBeInTheDocument();
-    expect(screen.getByLabelText('API key')).toBeInTheDocument();
+  });
+
+  it('keeps the key field read-only and inert when Web Crypto is missing entirely', async () => {
+    vi.stubGlobal('crypto', {});
+    installFetch(usersResponse());
+    render(UsersView, { props: { onSelect: vi.fn() } });
+    await openCreateDialog();
+
+    // No generation possible: the field stays read-only (never typed into),
+    // Regenerate is withheld, and submission is blocked instead of crashing.
+    const keyInput = screen.getByLabelText('API key') as HTMLInputElement;
+    expect(keyInput).toHaveAttribute('readonly');
+    expect(keyInput.value).toBe('');
+    expect(screen.queryByRole('button', { name: 'Regenerate' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Create user' })).toBeDisabled();
   });
 });
