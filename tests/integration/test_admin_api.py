@@ -1,4 +1,5 @@
-"""Admin API integration tests (M2.3 read cases + M3/M4 write cases + M5.1 live apply).
+"""Admin API integration tests (M2.3 read cases + M3/M4 write cases + M5.1 live
+apply + UI-M1 config listing).
 
 Requires the compose test stack from ``docker-compose.test.yaml`` (the
 ``make test-integration`` target builds the pro store and starts it):
@@ -278,6 +279,27 @@ class TestAdminReadProMode:
     def test_list_users_401_without_key(self) -> None:
         """No admin key → 401 with an error body."""
         resp = requests.get(f"{_PRO_URL}/admin/users", timeout=10)
+        assert resp.status_code == 401
+        assert "error" in resp.json()
+
+    def test_list_configs_200_with_admin_key(self) -> None:
+        """Valid admin key → 200; the five seeded configs lead in seed order.
+
+        Prefix assertion (not deep equality): the suite's cleanup of
+        mid-session extra configs is best-effort, so leftovers from a
+        crashed prior run may follow — the prefix still pins both content
+        and insertion order.
+        """
+        resp = requests.get(f"{_PRO_URL}/admin/configs", headers=_ADMIN_HEADERS, timeout=10)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert set(body) == {"configs"}
+        assert isinstance(body["configs"], list)
+        assert body["configs"][:5] == ["main", "mirror", "second", "broken", "passthrough"]
+
+    def test_list_configs_401_without_key(self) -> None:
+        """No admin key → 401 with an error body."""
+        resp = requests.get(f"{_PRO_URL}/admin/configs", timeout=10)
         assert resp.status_code == 401
         assert "error" in resp.json()
 
@@ -945,3 +967,13 @@ class TestAdminAbsentInSimpleMode:
             timeout=10,
         )
         assert resp.status_code == 404
+
+    def test_list_configs_404_simple_mode(self) -> None:
+        """GET /admin/configs on mcp-simple → 404 plain-text (API disabled).
+
+        The framework's plain-text 404 — never a JSON ``{"error"}`` body —
+        is the contract the admin UI's disabled-detection relies on.
+        """
+        resp = requests.get(f"{_SIMPLE_URL}/admin/configs", headers=_ADMIN_HEADERS, timeout=10)
+        assert resp.status_code == 404
+        assert not resp.headers.get("content-type", "").startswith("application/json")

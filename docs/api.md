@@ -111,10 +111,13 @@ ERROR:[server] Fan-out across 2 scopes: 2 error
 The admin REST API manages pro-mode **users** in the SQLite config store:
 rotate a compromised key, create or delete a user, grant or revoke config
 access. It speaks plain HTTP on the same listener as `/mcp`, under
-`/admin/users…`, authenticated with a dedicated admin key. It is not part
-of the MCP tool surface (the 14 tools below are unchanged), and it does
-not manage configs, remotes, or calendars — those stay CLI-managed (see
-[`docs/cli.md`](cli.md)).
+`/admin/users…` and `/admin/configs`, authenticated with a dedicated
+admin key. It is not part of the MCP tool surface (the 14 tools below are
+unchanged), and it does not manage configs, remotes, or calendars — those
+stay CLI-managed (see [`docs/cli.md`](cli.md)). The one config-related
+route, `GET /admin/configs`, is read-only: it lists the store's config
+names so operators can discover which configs a user may be granted
+without reaching for the CLI.
 
 > **Release-notes callout — deliberate behavior change:** the admin API is
 > the first time the *server* writes the SQLite config store (until now
@@ -223,6 +226,7 @@ for unexpected faults) can occur on any route and are described under
 |---|---|---|---|
 | `GET /admin/users` | – | 200 `{"users": [user…]}` (store insertion order) | 401, 429, 503 |
 | `GET /admin/users/{username}` | – | 200 user | 400, 401, 404, 429, 503 |
+| `GET /admin/configs` | – | 200 `{"configs": [name…]}` (store insertion order) | 401, 429, 503 |
 | `POST /admin/users` | `{"username": str, "key": str}` | **201** user | 400, 401, 409, 429, 503 |
 | `DELETE /admin/users/{username}` | – | 200 `{"deleted": true, "username": …}` (grants cascade with the user) | 400, 401, 404, 429, 503 |
 | `PUT /admin/users/{username}/key` | `{"key": str}` | 200 `{"username": …, "rotated": true}` | 400, 401, 404, 429, 503 |

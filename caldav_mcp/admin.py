@@ -1,4 +1,5 @@
-"""Admin REST API for pro-mode user management (M2: read, M3: write, M4: rotation, M5: live reload).
+"""Admin REST API for pro-mode user management (M2: read, M3: write, M4: rotation,
+M5: live reload; UI-M1: config listing).
 
 Plain REST routes on the existing FastMCP/Starlette app — never MCP tools
 (fixed constraint, Design (a)).  ``server.py`` registers them in the pro
@@ -25,6 +26,13 @@ request (Design (c); no long-lived connection, no ``check_same_thread``
 exposure) and funnel store errors through the single choke point
 :func:`_map_store_error` (Design (d)).  User payloads are always
 ``{"username", "configs"}`` — never ``key_hash``, never ``key``.
+
+Route inventory: the two M2 user reads (``GET /admin/users``,
+``GET /admin/users/{username}``), the UI-M1 config listing
+(``GET /admin/configs`` — store config names only, insertion order;
+read-only discovery of grantable config names for grant/replace
+workflows, config *management* stays CLI-only), the five M3 write routes,
+and the M4 key-rotation route.
 
 M3 write routes follow the milestone flow: guard → parse/validate body →
 fresh store (with the ``get_user``/``list_configs`` pre-checks mandated by
@@ -292,7 +300,7 @@ def _topology_restart_required(config_names: tuple[str, ...]) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# GET handlers (M2 — read-only)
+# GET handlers (M2 — user reads; UI-M1 — config-name listing)
 # ---------------------------------------------------------------------------
 
 
@@ -332,6 +340,28 @@ async def _handle_get_user(request: Request) -> JSONResponse:
         return _map_store_error(exc)
     log_admin_operation(action="get_user", status="ok", target_user=username, client_ip=client_ip)
     return JSONResponse(_user_payload(record))
+
+
+async def _handle_list_configs(request: Request) -> JSONResponse:
+    """``GET /admin/configs`` — store config names in insertion order (UI-M1).
+
+    Names only: config definitions (remotes, encrypted credentials) never
+    leave the store through this endpoint.  Read-only discovery of
+    grantable config names for grant/replace workflows; no pagination
+    (pro-mode stores are small, CLI-managed).
+    """
+    denied = _require_admin(request)
+    if denied is not None:
+        return denied
+    client_ip = _client_ip(request)
+    try:
+        with ConfigStore(_db_path()) as store:
+            names = store.list_configs()
+    except Exception as exc:
+        log_admin_operation(action="list_configs", status="error", client_ip=client_ip)
+        return _map_store_error(exc)
+    log_admin_operation(action="list_configs", status="ok", client_ip=client_ip)
+    return JSONResponse({"configs": list(names)})
 
 
 # ---------------------------------------------------------------------------
@@ -614,14 +644,16 @@ async def _handle_rotate_key(request: Request) -> JSONResponse:
 def configure_admin_routes(mcp: FastMCP) -> None:
     """Register the admin REST routes on *mcp* (called from ``server.py``).
 
-    Registers the two M2 read routes, the five M3 write routes, and the M4
+    Registers the two M2 user read routes, the UI-M1 config-listing route
+    (``GET /admin/configs``), the five M3 write routes, and the M4
     key-rotation route.  Must be called before ``run_http_async`` — fastmcp
     merges additional routes into the streamable-http app with lowest
     precedence (M2.1 spike).
     """
-    # Read (M2).
+    # Read (M2 user reads + UI-M1 config listing).
     mcp.custom_route("/admin/users", methods=["GET"])(_handle_list_users)
     mcp.custom_route("/admin/users/{username}", methods=["GET"])(_handle_get_user)
+    mcp.custom_route("/admin/configs", methods=["GET"])(_handle_list_configs)
     # Write (M3.1 routes) — applied live since M5 (via _signal_reload).
     mcp.custom_route("/admin/users", methods=["POST"])(_handle_create_user)
     mcp.custom_route("/admin/users/{username}", methods=["DELETE"])(_handle_delete_user)
