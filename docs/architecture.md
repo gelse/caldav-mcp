@@ -137,6 +137,35 @@ Pro mode (`DB_CONFIG_ENABLED=true`) loads configuration and users from the SQLit
 - `CALDAV_MCP_API_KEY` is ignored — only DB-stored user credentials are accepted.
 - Rate limiting applies per client IP as in simple mode.
 
+### Admin API
+
+The admin REST API ([`caldav_mcp/admin.py`](../caldav_mcp/admin.py),
+documented in [`docs/api.md`](api.md#admin-rest-api)) manages pro-mode
+users over plain HTTP at `/admin/users…` — never as MCP tools.
+
+- **Same-listener placement** — routes are registered on the existing
+  FastMCP/Starlette app via `custom_route` in the pro-mode branch of
+  `server.py` (only when `DB_CONFIG_ENABLED=true` **and**
+  `CALDAV_MCP_ADMIN_KEY` is non-empty), before `run_http_async`. One port,
+  one TLS config, one firewall rule; disabled deployments simply never
+  register the routes (requests get the framework's 404).
+- **Guard, rate limit, audit** — a handler-level guard checks pro mode,
+  fails closed on an empty admin key (404 before any comparison), then
+  applies a dedicated `admin_rate_limiter` instance (independent failure
+  buckets from MCP-endpoint auth, same env knobs, 429 + `Retry-After`),
+  then compares the key constant-time (401). Auth outcomes are audited via
+  `log_auth_attempt(method="admin-api")` and completed CRUD outcomes via
+  `log_admin_operation` (`event: "admin"`); key material never appears in
+  either.
+- **Fresh connection per request** — every handler opens its own
+  `ConfigStore` (context-managed) and closes it, exactly like the CLI's
+  per-invocation usage: no long-lived shared connection, no cross-thread
+  `check_same_thread` exposure. Store contention with external CLI writers
+  is absorbed by SQLite's busy timeout (locked/unreadable → 503). After
+  each successful mutation the handler also refreshes the in-process
+  pro-user snapshot so the change applies live (see
+  [`docs/pro-mode.md`](pro-mode.md)).
+
 ### Fan-out execution model
 
 Parameterless read tools (e.g. `caldav_list_calendars`, `caldav_get_events`) fan out across all accessible remotes via [`caldav_mcp/fanout.py`](../caldav_mcp/fanout.py).
@@ -167,6 +196,8 @@ One remote's failure **never** masks other remotes' results. The rendered messag
 ### Audit logging
 
 The [`caldav_mcp/audit.py`](../caldav_mcp/audit.py) module logs authentication attempts and tool operations. The `log_operation` function accepts an optional `remotes` parameter — a `dict[str, str]` mapping `"config.remote"` to per-remote status strings — which is included as a `"remotes"` object in the JSON log entry when present. For non-fan-out calls the field is omitted (byte-identical to the pre-M5 shape).
+
+Admin API operations are audited by `log_admin_operation` (`event: "admin"` entries) and admin auth attempts by `log_auth_attempt(method="admin-api")`; both are emitted at **INFO** level (failed auth attempts at WARNING), so they are visible whenever the log level is INFO. Neither ever contains key or key-hash material.
 
 ### Dotted-path addressing
 

@@ -106,6 +106,7 @@ All config via environment variables, validated at startup with Pydantic:
 | Variable | Description |
 |----------|-------------|
 | `CALDAV_MCP_API_KEY` | API key for simple-mode endpoint auth (optional; ignored in pro mode) |
+| `CALDAV_MCP_ADMIN_KEY` | Admin key for the pro-mode admin REST API (`/admin/users…`); routes are registered only when this is non-empty and `DB_CONFIG_ENABLED=true` (ignored outside pro mode; unset = admin API disabled) |
 | `CALDAV_URL` | CalDAV server URL. When set, all credentials come from env and `X-Caldav-*` headers are ignored (environment mode). When unset, `X-Caldav-*` headers are required (header mode). |
 | `CALDAV_USERNAME` | CalDAV username (environment mode). Ignored in header mode. |
 | `CALDAV_PASSWORD` | CalDAV password (environment mode). Ignored in header mode. |

@@ -12,11 +12,18 @@ Pydantic.
 | `CALDAV_MCP_PORT` | `8080` | Listen port (inside container) |
 | `CALDAV_MCP_PATH` | `/mcp` | Streamable HTTP endpoint path |
 | `CALDAV_MCP_API_KEY` | `""` (disabled) | Shared secret for MCP endpoint auth |
+| `CALDAV_MCP_ADMIN_KEY` | `""` (disabled) | Admin key for the admin REST API (`/admin/users…`). The routes are registered only when this is non-empty **and** pro mode is on (`DB_CONFIG_ENABLED=true`); ignored outside pro mode (startup warning). See [`docs/api.md`](api.md#admin-rest-api) |
 | `CALDAV_MCP_READ_ONLY` | `false` | Hide write tools; only query tools are exposed when `true` |
 | `CALDAV_MCP_CONFIG_SECRET` | `""` | Master secret for encrypting CalDAV passwords at rest in the SQLite store. Required by the CLI (encrypt) and server (decrypt). Changing it invalidates stored ciphertexts. |
 | `CALDAV_MCP_DB_PATH` | `""` | Path to the SQLite configuration store. Required by the CLI and by the server in pro mode; `--db` CLI flag takes precedence. |
 | `DB_CONFIG_ENABLED` | `false` | Enable pro mode: load config and users from the SQLite store; requires `CALDAV_MCP_DB_PATH` and `CALDAV_MCP_CONFIG_SECRET`; `CALDAV_MCP_API_KEY` is ignored. |
 | `TZ` | `""` (UTC) | IANA timezone (e.g. `Europe/Vienna`) for today/week boundaries |
+
+> **Pro mode and store writability:** admin API calls write user rows
+> directly to the SQLite store, so the store file must be writable by the
+> server. Deployments that mount the store read-only (e.g. `:ro`) should
+> leave `CALDAV_MCP_ADMIN_KEY` unset so the admin API stays disabled —
+> otherwise admin write requests fail with 503.
 
 ### CalDAV
 

@@ -106,6 +106,279 @@ ERROR:[server] Fan-out across 2 scopes: 2 error
 - [error] work.radicale: connection refused
 ```
 
+## Admin REST API
+
+The admin REST API manages pro-mode **users** in the SQLite config store:
+rotate a compromised key, create or delete a user, grant or revoke config
+access. It speaks plain HTTP on the same listener as `/mcp`, under
+`/admin/users…`, authenticated with a dedicated admin key. It is not part
+of the MCP tool surface (the 14 tools below are unchanged), and it does
+not manage configs, remotes, or calendars — those stay CLI-managed (see
+[`docs/cli.md`](cli.md)).
+
+> **Release-notes callout — deliberate behavior change:** the admin API is
+> the first time the *server* writes the SQLite config store (until now
+> only the CLI wrote it; all writes still go through the store module),
+> and `PUT /admin/users/{username}/key` is the first
+> built-in flow for rotating a *user* API key. Earlier statements such as
+> "the server never writes the store" or "no key rotation" are superseded:
+> the struck-through "no built-in flow to rotate … user API keys" sentence
+> is kept in [`docs/cli.md`](cli.md#limitations--non-goals), and the
+> "only the CLI writes" rule is marked as replaced in that file's
+> opening note.
+
+### Enabling the API
+
+Both conditions must hold, or the routes do not exist:
+
+1. Pro mode: `DB_CONFIG_ENABLED=true`.
+2. `CALDAV_MCP_ADMIN_KEY` is set to a non-empty value.
+
+Otherwise requests receive the framework's 404. In pro mode the startup
+log then says `Admin API disabled: CALDAV_MCP_ADMIN_KEY is not set`; a key
+set outside pro mode logs a warning that it is ignored. The guard in
+each handler independently refuses with 404 as well, so a registration bug
+still could not expose the routes.
+
+Admin API mutations write directly into the store, so the store file must
+be writable by the server.
+Deployments that mount the store read-only should leave
+`CALDAV_MCP_ADMIN_KEY` unset (admin API disabled) — see
+[`docs/configuration.md`](configuration.md).
+
+### Transport warning — read before sending the key
+
+Send the admin key over **TLS or localhost only**. It travels in a request
+header on every call; without TLS it crosses the network in plaintext.
+Keep the listener private: bind the published port to localhost (e.g.
+`127.0.0.1:8600:8080` in compose), restrict it at the firewall/VPN layer,
+or enable TLS via `CALDAV_MCP_TLS_CERT` / `CALDAV_MCP_TLS_KEY`.
+
+**`X-Forwarded-For`:** the admin rate limiter buckets failures by the
+first hop of `X-Forwarded-For` when that header is present, otherwise by
+the socket peer address. Only trust the header behind a reverse proxy that
+*sanitizes* it — i.e. overwrites any client-supplied value, e.g.
+`proxy_set_header X-Forwarded-For $remote_addr;`. If clients can reach the
+server directly, or the proxy merely appends to a client-supplied chain,
+callers choose their own first hop and the per-IP rate limit becomes
+advisory (a determined attacker rotates through fake IPs).
+
+### Admin key authentication
+
+Present the key on every admin request, in either header:
+
+| Header | Example |
+|--------|---------|
+| `Authorization: Bearer <key>` | `Authorization: Bearer <admin-key>` |
+| `X-Api-Key: <key>` | `X-Api-Key: <admin-key>` |
+
+The comparison is constant-time. A missing or wrong key returns 401
+(`{"error": "unauthorized - missing or invalid credentials"}`) and counts
+as a failed attempt against the rate limit. The admin key is independent
+of `CALDAV_MCP_API_KEY` (simple-mode endpoint key) and of per-user DB keys
+(pro-mode MCP auth).
+
+Key hygiene is strict: plaintext keys are accepted **only in JSON request
+bodies** — never in a query string, which proxy logs would capture — and
+are never stored, logged, echoed, or returned. Responses carry neither
+keys nor key hashes; a user object is always
+`{"username": …, "configs": […]}`.
+
+### Restart and reload: the one rule
+
+**User changes made through this API apply live; topology changes still
+require a restart.** After every successful mutation the server re-reads
+the user rows and swaps its in-process user snapshot, so the change takes
+effect on the next MCP request. Create, delete, key rotation, grant,
+revoke, and replace all behave this way — none of their responses carry a
+`restart_required` field.
+
+Two exceptions, both signaled in the response body:
+
+- **Failed live reload** — if the snapshot refresh fails, the write has
+  already succeeded: the response carries `"reload": "failed"` and a
+  server restart applies the change as the fallback.
+- **Configs created after startup** — the config/remote/calendar topology
+  is frozen when the server starts. Granting or replacing grants for a
+  config the running server does not know yet responds with
+  `"config_topology_restart_required": true`: the grant is stored and the
+  user's access updates live, but reaching that config needs a restart.
+  Revoke never carries the flag — revoking never needs topology.
+
+CLI-made changes (configs, remotes, calendars — and users) reach a running
+server at its next restart; for users that is the dependable path, though a
+later successful admin-API mutation also re-reads the whole user table and
+may pick such changes up sooner. See [`docs/cli.md`](cli.md) and
+[`docs/pro-mode.md`](pro-mode.md). Everything below references this rule
+instead of repeating it.
+
+### Routes
+
+Request bodies are JSON with `Content-Type: application/json`. The
+`Errors` column lists the route-specific statuses; 401, 429, 503 (and 500
+for unexpected faults) can occur on any route and are described under
+[Status codes and error bodies](#status-codes-and-error-bodies).
+
+| Method & path | Body | Success | Errors |
+|---|---|---|---|
+| `GET /admin/users` | – | 200 `{"users": [user…]}` (store insertion order) | 401, 429, 503 |
+| `GET /admin/users/{username}` | – | 200 user | 400, 401, 404, 429, 503 |
+| `POST /admin/users` | `{"username": str, "key": str}` | **201** user | 400, 401, 409, 429, 503 |
+| `DELETE /admin/users/{username}` | – | 200 `{"deleted": true, "username": …}` (grants cascade with the user) | 400, 401, 404, 429, 503 |
+| `PUT /admin/users/{username}/key` | `{"key": str}` | 200 `{"username": …, "rotated": true}` | 400, 401, 404, 429, 503 |
+| `POST /admin/users/{username}/configs` | `{"config": str}` | 200 user (idempotent — re-granting is a no-op) | 400, 401, 404, 429, 503 |
+| `PUT /admin/users/{username}/configs` | `{"configs": [str, …]}` | 200 user (replace-all; duplicate names are deduplicated) | 400, 401, 404, 409, 429, 503 |
+| `DELETE /admin/users/{username}/configs/{config}` | – | 200 `{"revoked": true, …}` (revoking a never-granted config is a no-op) | 400, 401, 404, 429, 503 |
+
+Grant and replace responses may additionally carry
+`config_topology_restart_required: true`, and any mutation may carry
+`"reload": "failed"` — both per [Restart and reload: the one
+rule](#restart-and-reload-the-one-rule). `404` on a grant means the user
+**or** the config is unknown; on revoke it means the user is unknown
+(the pre-check), and on `PUT …/configs` it names either the missing
+configs or the unknown user.
+
+### Examples
+
+Placeholder secrets (`<admin-key>`, `<user-key>`, `<new-user-key>`) stand
+in for real keys — substitute your own. With the bundled compose file the
+listener is `http://localhost:8600`.
+
+**Rotate a compromised key** — the new key authenticates on the next MCP
+request and the old one stops (per [the one rule](#restart-and-reload-the-one-rule)):
+
+```bash
+curl -s -X PUT http://localhost:8600/admin/users/alice/key \
+  -H "Authorization: Bearer <admin-key>" \
+  -H "Content-Type: application/json" \
+  -d '{"key": "<new-user-key>"}'
+# {"username": "alice", "rotated": true}
+```
+
+**Create a user:**
+
+```bash
+curl -s -X POST http://localhost:8600/admin/users \
+  -H "X-Api-Key: <admin-key>" \
+  -H "Content-Type: application/json" \
+  -d '{"username": "alice", "key": "<user-key>"}'
+# 201  {"username": "alice", "configs": []}
+```
+
+**List and read users** (no request body):
+
+```bash
+curl -s http://localhost:8600/admin/users \
+  -H "Authorization: Bearer <admin-key>"
+# {"users": [{"username": "alice", "configs": ["work"]}]}
+
+curl -s http://localhost:8600/admin/users/alice \
+  -H "Authorization: Bearer <admin-key>"
+# {"username": "alice", "configs": ["work"]}
+```
+
+**Grant, replace, and revoke config access:**
+
+```bash
+# Grant one config (idempotent)
+curl -s -X POST http://localhost:8600/admin/users/alice/configs \
+  -H "Authorization: Bearer <admin-key>" \
+  -H "Content-Type: application/json" \
+  -d '{"config": "work"}'
+# {"username": "alice", "configs": ["work"]}
+
+# Replace the full grant set
+curl -s -X PUT http://localhost:8600/admin/users/alice/configs \
+  -H "Authorization: Bearer <admin-key>" \
+  -H "Content-Type: application/json" \
+  -d '{"configs": ["work", "personal"]}'
+# {"username": "alice", "configs": ["work", "personal"]}
+
+# Revoke one config (no-op if never granted)
+curl -s -X DELETE http://localhost:8600/admin/users/alice/configs/work \
+  -H "Authorization: Bearer <admin-key>"
+# {"revoked": true, "username": "alice", "config": "work"}
+```
+
+**Delete a user** (their grants are removed with them):
+
+```bash
+curl -s -X DELETE http://localhost:8600/admin/users/alice \
+  -H "Authorization: Bearer <admin-key>"
+# {"deleted": true, "username": "alice"}
+```
+
+**Errors** are always a JSON object with an `error` string:
+
+```bash
+curl -s http://localhost:8600/admin/users/ghost \
+  -H "Authorization: Bearer <admin-key>"
+# {"error": "user not found: 'ghost'"}
+```
+
+### Status codes and error bodies
+
+Responses generated by the API are JSON. Errors are always
+`{"error": "<message>"}` — the HTTP equivalent of the CLI's
+`error: <message>` output. Successes are never empty: there is no 204
+anywhere — every mutation answers with a JSON body that carries the
+reload signals described in [Restart and reload: the one
+rule](#restart-and-reload-the-one-rule) whenever they apply.
+
+| Status | Meaning |
+|--------|---------|
+| `200` | Success — reads and all mutations except user creation |
+| `201` | User created (`POST /admin/users`) |
+| `400` | Invalid input: malformed or non-object JSON body, wrong `Content-Type`, missing or non-string field, empty field (`username`, `key`, `config`), a rotation key that is not valid UTF-8, or a path username failing the transport guard |
+| `401` | Missing or invalid admin key |
+| `403` | Reserved — unused (the API has no roles) |
+| `404` | Unknown user or config; when the API is disabled the route was never registered and the framework serves its own 404 |
+| `405` | Wrong HTTP method for a routed path (framework) |
+| `409` | Conflict: duplicate user on `POST /admin/users`, or a foreign-key race on `PUT …/configs` |
+| `429` | Rate limited — `Retry-After` header set (see below) |
+| `500` | Unexpected server error — generic message; the detail is logged server-side only |
+| `503` | Store unavailable: locked or unreadable (message carries a retry hint) or schema newer than the running code |
+
+Store errors funnel through one mapping: validation → 400, not found →
+404, conflict → 409, store/schema/lock failures → 503. The store owns all
+domain validation — non-empty username, config names without dots, at most
+one passthrough remote per user — so a grant or replace that would give a
+user reach to two passthrough remotes fails with 400 and a message naming
+the offending user(s).
+
+**Path-username transport guard:** store usernames are free-form, but in a
+URL path a username longer than 128 characters or containing control
+characters (NUL included) is rejected with 400, and one containing `/`
+cannot be addressed at all (no route matches → 404). Such names can slip
+in from either side — the CLI accepts them, and `POST /admin/users` does
+not apply the path guard to body usernames — but every user remains
+visible in `GET /admin/users` and manageable through
+[`caldav-mcp-config user …`](cli.md#user); the API just cannot address
+those names by path.
+
+### Rate limiting
+
+The admin API has its **own** limiter, separate from MCP-endpoint auth:
+failed admin-key guesses cannot lock MCP clients out, and vice versa
+(different secrets, independent failure buckets). It uses the same knobs —
+`CALDAV_MCP_RATE_LIMIT_MAX_FAILURES` (default `10`) failures per
+`CALDAV_MCP_RATE_LIMIT_WINDOW_SECONDS` (default `60`) seconds — keyed per
+client IP as described in the transport warning. A successful
+authentication clears that IP's failure history.
+
+Once limited, every route answers 429:
+
+```json
+{"error": "rate limited - too many failed attempts, retry in 5s"}
+```
+
+with a `Retry-After: <seconds>` header. In practice the value is 5
+seconds: a request rejected while limited is not recorded as a new
+failure, so the count stays at the threshold (the backoff formula —
+doubling per extra recorded failure, capped at 5 minutes — would need a
+higher count to grow). The block lifts once failures age out of the
+sliding window; the limiter is in-memory and resets on server restart.
+
 ## MCP Tools
 
 All tools are accessible via the Streamable HTTP endpoint at `/mcp`.

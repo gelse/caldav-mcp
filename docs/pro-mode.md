@@ -22,7 +22,8 @@ SQLite config store at startup, enabling multi-user, multi-account deployments.
 - **Users apply live, configs still need a restart**: The store is read
   once at startup and frozen into an immutable `AppConfig`, so config,
   remote, and calendar changes require a server restart. User changes made
-  through the admin API (create, delete, key rotation, grant, revoke,
+  through the [admin REST API](api.md#admin-rest-api) (create, delete, key
+  rotation, grant, revoke,
   replace grants) take effect on the next request instead — their
   responses no longer carry `restart_required` (removed with M5 users-only
   hot reload); a failed live reload is reported as `"reload": "failed"`.
@@ -87,4 +88,7 @@ it becomes reachable.
 
 - [`docs/cli.md`](cli.md) — full CLI reference for managing the store
 - [`docs/api.md`](api.md) — addressing model and aggregated result format
+- [`docs/api.md`](api.md#admin-rest-api) — Admin REST API: routes, status
+  codes, examples, and restart/reload semantics for managing users
+  (create/delete, key rotation, grants) over HTTP
 - [`docs/architecture.md`](architecture.md) — fan-out execution model and config singleton design
