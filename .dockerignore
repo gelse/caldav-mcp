@@ -11,6 +11,10 @@ __pycache__
 .env.*
 plans
 tests
+# Host UI build artifacts: keep the node stage deterministic (host binaries
+# must not overwrite the container-built dependency tree / output)
+ui/node_modules
+ui/dist
 Makefile
 README.md
 docker-compose.yaml

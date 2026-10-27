@@ -91,4 +91,7 @@ it becomes reachable.
 - [`docs/api.md`](api.md#admin-rest-api) — Admin REST API: routes, status
   codes, examples, and restart/reload semantics for managing users
   (create/delete, key rotation, grants) over HTTP
+- [`docs/ui.md`](ui.md) — admin UI: manages users through the Admin REST
+  API and is served at `/ui` when `SHOW_UI=true` (independent of pro mode;
+  without the admin API it shows its “admin API not available” screen)
 - [`docs/architecture.md`](architecture.md) — fan-out execution model and config singleton design

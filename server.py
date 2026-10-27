@@ -249,7 +249,7 @@ def main() -> None:
     load_server_config()  # raises on invalid port/tz/path
 
     # --- Pro-mode branch (DB_CONFIG_ENABLED) ---
-    from caldav_mcp.config import ADMIN_KEY, DB_CONFIG_ENABLED  # noqa: E402
+    from caldav_mcp.config import ADMIN_KEY, DB_CONFIG_ENABLED, SHOW_UI  # noqa: E402
 
     if DB_CONFIG_ENABLED:
         from caldav_mcp.auth import configure_pro_users
@@ -293,6 +293,15 @@ def main() -> None:
                 "CALDAV_URL is set but CALDAV_USERNAME/CALDAV_PASSWORD are missing — "
                 "direct-mode requests will fail until all three env vars are provided"
             )
+
+    # Admin SPA static hosting (UI-M3): independent of pro mode — works in
+    # simple/pro/env/header modes alike; default SHOW_UI=false never
+    # registers the routes (requests get the framework's 404, zero overhead).
+    if SHOW_UI:
+        from caldav_mcp.ui_static import configure_ui_routes
+
+        configure_ui_routes(mcp)
+        log.info("UI enabled at /ui (SHOW_UI=true)")
 
     ssl_cfg = _build_ssl_config()
     run_kwargs: dict[str, Any] = {

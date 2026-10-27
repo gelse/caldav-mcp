@@ -125,6 +125,7 @@ All config via environment variables, validated at startup with Pydantic:
 | `DB_CONFIG_ENABLED` | Enable pro mode: load config and users from SQLite store; requires `CALDAV_MCP_DB_PATH` and `CALDAV_MCP_CONFIG_SECRET` |
 | `CALDAV_MCP_DB_PATH` | Path to the SQLite configuration store (pro mode) |
 | `CALDAV_MCP_CONFIG_SECRET` | Master secret for encrypting CalDAV credentials at rest (pro mode) |
+| `SHOW_UI` | Serve the built admin SPA at `/ui` when `true` (default `false`; independent of pro mode). Requires the Docker image's built `ui/dist` or a local `make ui-build` — missing build output fails fast at startup |
 
 ## Deployment
 

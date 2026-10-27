@@ -149,6 +149,10 @@ Deployments that mount the store read-only should leave
 `CALDAV_MCP_ADMIN_KEY` unset (admin API disabled) — see
 [`docs/configuration.md`](configuration.md).
 
+The built-in admin UI is served at `/ui` when `SHOW_UI=true` and consumes
+exactly these endpoints from the same origin; with the API disabled it
+renders its “admin API not available” screen (see [`docs/ui.md`](ui.md#hosting)).
+
 ### Transport warning — read before sending the key
 
 Send the admin key over **TLS or localhost only**. It travels in a request

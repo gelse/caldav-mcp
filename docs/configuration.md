@@ -17,6 +17,7 @@ Pydantic.
 | `CALDAV_MCP_CONFIG_SECRET` | `""` | Master secret for encrypting CalDAV passwords at rest in the SQLite store. Required by the CLI (encrypt) and server (decrypt). Changing it invalidates stored ciphertexts. |
 | `CALDAV_MCP_DB_PATH` | `""` | Path to the SQLite configuration store. Required by the CLI and by the server in pro mode; `--db` CLI flag takes precedence. |
 | `DB_CONFIG_ENABLED` | `false` | Enable pro mode: load config and users from the SQLite store; requires `CALDAV_MCP_DB_PATH` and `CALDAV_MCP_CONFIG_SECRET`; `CALDAV_MCP_API_KEY` is ignored. |
+| `SHOW_UI` | `false` | Serve the built admin SPA at `/ui` when `true` — independent of pro mode. Requires a build of `ui/dist`: the Docker image ships one; a local run needs `make ui-build` first, or the server fails fast at startup. See [`docs/ui.md`](ui.md#hosting). |
 | `TZ` | `""` (UTC) | IANA timezone (e.g. `Europe/Vienna`) for today/week boundaries |
 
 > **Pro mode and store writability:** admin API calls write user rows

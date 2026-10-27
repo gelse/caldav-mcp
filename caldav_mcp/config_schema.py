@@ -23,6 +23,7 @@ class ServerConfig(BaseModel):
     api_key: str = ""
     admin_key: str = ""
     tz: str = ""
+    show_ui: bool = False
 
     @field_validator("port")
     @classmethod
@@ -85,6 +86,9 @@ def load_server_config() -> ServerConfig:
     but ignored in pro mode (a warning is emitted in ``server.py``).
     ``CALDAV_MCP_ADMIN_KEY`` is optional (defaults to empty); it is only
     meaningful in pro mode (a warning is emitted in ``server.py`` otherwise).
+    ``SHOW_UI`` is a boolean (case-insensitive ``"true"``/``"1"``/``"yes"``,
+    default false); when true the built admin SPA is served at ``/ui`` —
+    independent of pro mode.
     """
     db_enabled = os.environ.get("DB_CONFIG_ENABLED", "false").lower() in (
         "true",
@@ -104,12 +108,19 @@ def load_server_config() -> ServerConfig:
                 f"DB_CONFIG_ENABLED is true but required variable(s) "
                 f"{', '.join(missing)} are not set or empty"
             )
+    # SHOW_UI: serve the built admin SPA at /ui (independent of pro mode).
+    show_ui = os.environ.get("SHOW_UI", "false").lower() in (
+        "true",
+        "1",
+        "yes",
+    )
     return ServerConfig(
         port=int(os.environ.get("CALDAV_MCP_PORT", "8080")),
         path=os.environ.get("CALDAV_MCP_PATH", "/mcp"),
         api_key=os.environ.get("CALDAV_MCP_API_KEY", ""),
         admin_key=os.environ.get("CALDAV_MCP_ADMIN_KEY", ""),
         tz=os.environ.get("TZ", ""),
+        show_ui=show_ui,
     )
 
 

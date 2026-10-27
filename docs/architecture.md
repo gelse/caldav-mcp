@@ -126,6 +126,16 @@ Store records map 1:1 onto the `Config` / `Remote` / `Calendar` dataclasses so t
 
 In env/header mode, [`server.py`](../server.py) calls `configure_app_config(load_app_config())`. In pro mode, it additionally calls `load_pro_state()` with the DB path and secret, then installs both the config singleton and the pro-user snapshot for auth.
 
+### Static UI hosting (`SHOW_UI`)
+
+When `SHOW_UI=true`, [`caldav_mcp/ui_static.py`](../caldav_mcp/ui_static.py) registers two routes for the admin SPA on the existing FastMCP/Starlette listener — in `main()` after the pro/simple branch and **before** `run_http_async`, the same registration contract as the admin API. fastmcp's `custom_route` hard-codes `starlette.routing.Route`, so serving is handler-based (no `StaticFiles` mount); custom routes merge with lowest precedence, so `/ui` can never shadow `/mcp` or `/admin/*`. When `SHOW_UI` is false (the default), no routes exist: requests get the framework's 404 and there is no runtime overhead.
+
+- **Routing** — `GET /ui` is an explicit `307` to the literal `/ui/` (no query carry-over; the SPA never routes on URLs). Under `/ui/`, an existing file is served as-is; a missing file under `assets/` returns `404` (a stale cached `index.html` must not HTML-mask a missing content-hashed chunk); any other unmatched path falls back to `index.html` with `200` for deep links. Path traversal (`.`, `..`, empty or absolute segments, backslashes, NUL) is rejected with `404`, belt-and-braces with a `Path.resolve()` containment check.
+- **Fail-fast** — `SHOW_UI=true` with a missing `ui/dist/index.html` aborts startup with an actionable error instead of serving a broken page (eager-validation precedent, see the comment at the top of `server.py`'s `main()`); a dist deleted under a running server is a documented edge that returns `404`.
+- **Headers** — every `/ui` response carries `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, and CSP `default-src 'self'` (safe because the UI-M2 build gate proves the built `index.html` has no inline script or style). Content-hashed `assets/` files get `Cache-Control: public, max-age=31536000, immutable`; everything else gets `no-cache`.
+- **Dist path** — derived from the package layout (`<repo>/ui/dist` locally, `/app/ui/dist` in Docker): no dedicated env var, one deployment parameter (`SHOW_UI`).
+- **Docker build flow** — a first `ui-builder` stage (`node:22.21.1-alpine3.21`) runs `npm ci && npm run build`; the runtime stage copies only `ui/dist` (`--chown=app:app`), so Node never ships in the image and the runtime stays offline. `.dockerignore` excludes `ui/node_modules` and `ui/dist` so host artifacts cannot leak into the build context. The image defaults to `SHOW_UI="false"`; production compose interpolates `"${SHOW_UI:-false}"`.
+
 ### Pro mode
 
 Pro mode (`DB_CONFIG_ENABLED=true`) loads configuration and users from the SQLite store at startup via [`caldav_mcp/db_loader.py`](../caldav_mcp/db_loader.py).

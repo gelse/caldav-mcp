@@ -51,6 +51,9 @@ services:
       CALDAV_MCP_CONFIG_SECRET: "test-integration-pro-secret-do-not-use-in-production"
       # Admin REST API (M2/M3) — enables the /admin/users read + write routes
       CALDAV_MCP_ADMIN_KEY: "admin-test-key"
+      # UI-M3: serve the Docker-built admin SPA at /ui (mcp-simple/mcp-env
+      # keep the default false to pin the hosting-off 404 contract)
+      SHOW_UI: "true"
       # Server settings
       CALDAV_MCP_PORT: "8080"
       CALDAV_MCP_PATH: "/mcp"
