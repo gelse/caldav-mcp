@@ -19,10 +19,16 @@ SQLite config store at startup, enabling multi-user, multi-account deployments.
 - **Dotted-path writes**: Write tools require a `config.remote.calendar`
   dotted path (e.g. `main.radicale.work`) to uniquely identify the target
   calendar. Plain calendar names are rejected.
-- **Restart-to-apply**: Config changes require a server restart. The store
-  is read once at startup and frozen into an immutable `AppConfig`. User
-  management via the admin API also writes the store; those changes
-  require a restart to apply.
+- **Users apply live, configs still need a restart**: The store is read
+  once at startup and frozen into an immutable `AppConfig`, so config,
+  remote, and calendar changes require a server restart. User changes made
+  through the admin API (create, delete, key rotation, grant, revoke,
+  replace grants) take effect on the next request instead — their
+  responses no longer carry `restart_required` (removed with M5 users-only
+  hot reload); a failed live reload is reported as `"reload": "failed"`.
+  One caveat: granting a config that was added after startup responds with
+  `config_topology_restart_required: true` — the grant applies, but
+  reaching that config still needs a restart.
 
 ## Required env vars
 
@@ -71,8 +77,11 @@ caldav-mcp-config --db store.db config add --name work
 caldav-mcp-config --db store.db user add --username alice --key mykey
 ```
 
-After modifying the store (adding/removing configs, users, or remotes),
-**restart the server** to pick up changes.
+After modifying the store via the CLI (adding/removing configs, users, or
+remotes), **restart the server** to pick up changes. User changes made
+through the admin API apply on the next request instead — with one
+exception: a config added after startup needs a restart before a grant for
+it becomes reachable.
 
 ## References
 

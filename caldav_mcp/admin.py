@@ -1,4 +1,4 @@
-"""Admin REST API for pro-mode user management (M2: read, M3: write, M4: key rotation).
+"""Admin REST API for pro-mode user management (M2: read, M3: write, M4: rotation, M5: live reload).
 
 Plain REST routes on the existing FastMCP/Starlette app — never MCP tools
 (fixed constraint, Design (a)).  ``server.py`` registers them in the pro
@@ -28,13 +28,25 @@ exposure) and funnel store errors through the single choke point
 
 M3 write routes follow the milestone flow: guard → parse/validate body →
 fresh store (with the ``get_user``/``list_configs`` pre-checks mandated by
-table (d)) → store call → ``log_admin_operation`` → JSON response carrying
-``"restart_required": true`` (restart-to-apply, Design (c) phase 1).  Every
-mutation body carries that flag; there is no hot reload yet (M5).  The M4
+table (d)) → store call → ``log_admin_operation`` → JSON response.  The M4
 rotation route ``PUT /admin/users/{username}/key`` follows Design (f):
 guard → reject empty key 400 → :func:`hash_api_key` → fresh store →
 ``set_user_key_hash`` → ``log_admin_operation`` → 200
-``{username, rotated, restart_required}`` with zero key material.
+``{username, rotated}`` with zero key material.
+
+Since M5 (users-only hot reload, Design (c) phase 2) every successful
+mutation additionally runs :func:`_refresh_pro_users` — the in-process
+pro-user snapshot is swapped so the change takes effect on the next MCP
+request **without a restart**, at the right layer: create/delete/rotate
+change what authenticates, grant/revoke change what resolves (grants never
+gate ``_require_auth_db_user``).  Accordingly the M3 ``restart_required``
+field is gone from user mutations; only a failed post-write refresh adds
+``"reload": "failed"`` (the write itself stands — a restart remains the
+operator fallback).  Grant/replace additionally attach
+``"config_topology_restart_required": true`` when a referenced config is
+absent from the frozen topology (CLI-added after startup); revoke never
+does.
+
 Plaintext keys are accepted only in request bodies, hashed with
 :func:`hash_api_key`, and never stored, logged, echoed, or returned; key
 hashes never leave the store through the API either (Design (f) hygiene
@@ -51,8 +63,16 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from caldav_mcp import config
+from caldav_mcp.app_config import get_app_config
 from caldav_mcp.audit import log_admin_operation, log_auth_attempt
-from caldav_mcp.auth import _FAILURE_MSG, _const_eq, _extract_key, _hdrs, _is_pro_mode
+from caldav_mcp.auth import (
+    _FAILURE_MSG,
+    _const_eq,
+    _extract_key,
+    _hdrs,
+    _is_pro_mode,
+    configure_pro_users,
+)
 from caldav_mcp.config_store import (
     ConfigStore,
     StoreConflictError,
@@ -62,6 +82,7 @@ from caldav_mcp.config_store import (
     StoreValidationError,
     UserRecord,
 )
+from caldav_mcp.db_loader import ProUser
 from caldav_mcp.errors import log
 from caldav_mcp.key_hash import hash_api_key
 from caldav_mcp.rate_limit import admin_rate_limiter
@@ -204,6 +225,73 @@ async def _read_json_body(request: Request) -> dict[str, object] | JSONResponse:
 
 
 # ---------------------------------------------------------------------------
+# M5.1 — users-only hot reload (Design (c) phase 2)
+# ---------------------------------------------------------------------------
+
+
+def _refresh_pro_users() -> bool:
+    """Swap the in-process pro-user snapshot so it matches the store (M5.1).
+
+    Fresh :class:`ConfigStore` (Design (c) connection model) →
+    ``list_users()`` → :class:`~caldav_mcp.db_loader.ProUser` tuple →
+    :func:`caldav_mcp.auth.configure_pro_users` — one atomic global
+    assignment, so in-flight requests already holding the previous tuple
+    are unaffected.  Called after every successful user mutation; the
+    frozen ``AppConfig`` topology is never touched (non-goal).
+
+    Returns ``False`` after logging when the refresh could not run: the
+    completed write stands, the caller reports ``"reload": "failed"``, and
+    a restart remains the operator fallback (edge-case table).
+    """
+    try:
+        with ConfigStore(_db_path()) as store:
+            records = store.list_users()
+        configure_pro_users(
+            tuple(
+                ProUser(
+                    username=record.username,
+                    key_hash=record.key_hash,
+                    config_names=record.config_names,
+                )
+                for record in records
+            )
+        )
+    except Exception as exc:
+        log.error(
+            "admin API: user snapshot refresh failed: %s: %s",
+            type(exc).__name__,
+            exc,
+            exc_info=True,
+        )
+        return False
+    return True
+
+
+def _signal_reload(body: dict[str, object]) -> dict[str, object]:
+    """Run the post-write refresh (M5.1) and attach its signal to *body*.
+
+    On success *body* is returned unchanged — user mutations apply live, so
+    M5 drops ``restart_required`` entirely.  A failed refresh adds
+    ``"reload": "failed"`` (write stands; error logged inside the refresh).
+    """
+    if not _refresh_pro_users():
+        body["reload"] = "failed"
+    return body
+
+
+def _topology_restart_required(config_names: tuple[str, ...]) -> bool:
+    """True when any *config_name* is absent from the frozen topology (M5).
+
+    Grant/replace of a config added via CLI **after** startup succeeds at
+    the store and applies to auth live, but access still needs a restart —
+    the frozen ``AppConfig`` does not know the config (edge-case table).
+    Revoke never calls this: revocation never requires topology.
+    """
+    frozen = {cfg.name for cfg in get_app_config().configs}
+    return any(name not in frozen for name in config_names)
+
+
+# ---------------------------------------------------------------------------
 # GET handlers (M2 — read-only)
 # ---------------------------------------------------------------------------
 
@@ -247,12 +335,17 @@ async def _handle_get_user(request: Request) -> JSONResponse:
 
 
 # ---------------------------------------------------------------------------
-# Write handlers (M3 — restart-to-apply, Design (c) phase 1; M4 rotation)
+# Write handlers (M3 routes + M4 rotation; M5 applies mutations live)
 #
-# Flow per the M3.1 block: guard → parse/validate body → fresh store (with
-# the table-(d) pre-checks) → store call → log_admin_operation → JSON
-# response with "restart_required": true.  Every store error funnels through
-# _map_store_error; the M4 rotation route follows Design (f) below.
+# Flow per the M3.1 block, updated by M5.1: guard → parse/validate body →
+# fresh store (with the table-(d) pre-checks) → store call →
+# log_admin_operation → _signal_reload (post-write snapshot refresh; a
+# failed refresh attaches "reload": "failed" — the write stands) → JSON
+# response.  "restart_required" is gone: user mutations take effect on the
+# next MCP request.  Grant/replace additionally attach
+# "config_topology_restart_required": true when a referenced config is
+# missing from the frozen topology; revoke never does.  Every store error
+# funnels through _map_store_error; the M4 rotation route follows Design (f).
 # ---------------------------------------------------------------------------
 
 
@@ -261,7 +354,8 @@ async def _handle_create_user(request: Request) -> JSONResponse:
 
     The plaintext key is hashed here and never stored, logged, echoed, or
     returned (Design (f)); username emptiness and duplicate conflicts are
-    the store's to reject (Design (e)) → 400 / 409.
+    the store's to reject (Design (e)) → 400 / 409.  M5: the new user
+    authenticates on the next MCP request — no restart.
     """
     denied = _require_admin(request)
     if denied is not None:
@@ -290,7 +384,7 @@ async def _handle_create_user(request: Request) -> JSONResponse:
         action="create_user", status="ok", target_user=username, client_ip=client_ip
     )
     return JSONResponse(
-        {"username": username, "configs": [], "restart_required": True},
+        _signal_reload({"username": username, "configs": []}),
         status_code=201,
     )
 
@@ -298,7 +392,9 @@ async def _handle_create_user(request: Request) -> JSONResponse:
 async def _handle_delete_user(request: Request) -> JSONResponse:
     """``DELETE /admin/users/{username}`` — 200 + body (Risks: not 204).
 
-    Grants cascade via the schema FK (``user_configs`` ON DELETE CASCADE).
+    Grants cascade via the schema FK (``user_configs`` ON DELETE CASCADE);
+    M5: the deleted user's authentication fails on the next MCP request —
+    no restart.
     """
     denied = _require_admin(request)
     if denied is not None:
@@ -319,7 +415,7 @@ async def _handle_delete_user(request: Request) -> JSONResponse:
     log_admin_operation(
         action="delete_user", status="ok", target_user=username, client_ip=client_ip
     )
-    return JSONResponse({"deleted": True, "username": username, "restart_required": True})
+    return JSONResponse(_signal_reload({"deleted": True, "username": username}))
 
 
 async def _handle_grant_config(request: Request) -> JSONResponse:
@@ -327,6 +423,10 @@ async def _handle_grant_config(request: Request) -> JSONResponse:
 
     The store's ``grant_config`` owns existence/charset checks and the
     single-passthrough constraint (→ 404 / 400); re-granting is a no-op.
+    M5: the grant applies to addressing live — but when the config is
+    missing from the frozen topology (CLI-added after startup) the response
+    carries ``config_topology_restart_required: true`` and access still
+    needs a restart (edge-case table).
     """
     denied = _require_admin(request)
     if denied is not None:
@@ -354,7 +454,10 @@ async def _handle_grant_config(request: Request) -> JSONResponse:
     log_admin_operation(
         action="grant_config", status="ok", target_user=username, client_ip=client_ip
     )
-    return JSONResponse({**_user_payload(record), "restart_required": True})
+    body = _user_payload(record)
+    if _topology_restart_required((config_name,)):
+        body["config_topology_restart_required"] = True
+    return JSONResponse(_signal_reload(body))
 
 
 async def _handle_revoke_config(request: Request) -> JSONResponse:
@@ -362,7 +465,10 @@ async def _handle_revoke_config(request: Request) -> JSONResponse:
 
     Pre-checks ``store.get_user`` → 404 for an unknown user (the store's
     ``revoke_config`` never raises ``StoreNotFoundError`` itself); revoking a
-    never-granted config is an idempotent no-op (store parity).
+    never-granted config is an idempotent no-op (store parity).  M5: the
+    revocation applies live — the config's dotted paths stop resolving on
+    the next request — and the response never carries the topology flag
+    (revocation never requires topology).
     """
     denied = _require_admin(request)
     if denied is not None:
@@ -385,14 +491,12 @@ async def _handle_revoke_config(request: Request) -> JSONResponse:
     log_admin_operation(
         action="revoke_config", status="ok", target_user=username, client_ip=client_ip
     )
-    return JSONResponse(
-        {
-            "revoked": True,
-            "username": username,
-            "config": config_name,
-            "restart_required": True,
-        }
-    )
+    body: dict[str, object] = {
+        "revoked": True,
+        "username": username,
+        "config": config_name,
+    }
+    return JSONResponse(_signal_reload(body))
 
 
 async def _handle_replace_configs(request: Request) -> JSONResponse:
@@ -403,6 +507,11 @@ async def _handle_replace_configs(request: Request) -> JSONResponse:
     therefore reserved for a genuine FK race (a config deleted between the
     pre-check and the write).  Single-passthrough violations surface as 400
     via M1's in-store enforcement inside ``set_user_configs``'s transaction.
+    M5: the replacement applies live; when any referenced config is absent
+    from the frozen topology the response carries
+    ``config_topology_restart_required: true`` (grant semantics).  An empty
+    replacement references no config, so — like revoke — it never carries
+    the flag.
     """
     denied = _require_admin(request)
     if denied is not None:
@@ -444,7 +553,10 @@ async def _handle_replace_configs(request: Request) -> JSONResponse:
     log_admin_operation(
         action="set_user_configs", status="ok", target_user=username, client_ip=client_ip
     )
-    return JSONResponse({**_user_payload(record), "restart_required": True})
+    body = _user_payload(record)
+    if _topology_restart_required(tuple(unique_configs)):
+        body["config_topology_restart_required"] = True
+    return JSONResponse(_signal_reload(body))
 
 
 async def _handle_rotate_key(request: Request) -> JSONResponse:
@@ -453,10 +565,12 @@ async def _handle_rotate_key(request: Request) -> JSONResponse:
     Design (f) flow: guard → username transport guard → parse body →
     reject empty key 400 → :func:`hash_api_key` → fresh store →
     ``set_user_key_hash`` → ``log_admin_operation`` → 200
-    ``{username, rotated, restart_required}``.  The plaintext key appears
+    ``{username, rotated}``.  The plaintext key appears
     only in the request body — never in a query string, log, audit entry,
     error message, or response — and the new hash never leaves the store
-    either.  Unknown user → 404 via the single choke point.
+    either.  Unknown user → 404 via the single choke point.  M5: the new
+    key authenticates (and the old one stops) on the next MCP request —
+    no restart.
     """
     denied = _require_admin(request)
     if denied is not None:
@@ -489,7 +603,7 @@ async def _handle_rotate_key(request: Request) -> JSONResponse:
         )
         return _map_store_error(exc)
     log_admin_operation(action="rotate_key", status="ok", target_user=username, client_ip=client_ip)
-    return JSONResponse({"username": username, "rotated": True, "restart_required": True})
+    return JSONResponse(_signal_reload({"username": username, "rotated": True}))
 
 
 # ---------------------------------------------------------------------------
@@ -508,7 +622,7 @@ def configure_admin_routes(mcp: FastMCP) -> None:
     # Read (M2).
     mcp.custom_route("/admin/users", methods=["GET"])(_handle_list_users)
     mcp.custom_route("/admin/users/{username}", methods=["GET"])(_handle_get_user)
-    # Write (M3.1) — restart-to-apply.
+    # Write (M3.1 routes) — applied live since M5 (via _signal_reload).
     mcp.custom_route("/admin/users", methods=["POST"])(_handle_create_user)
     mcp.custom_route("/admin/users/{username}", methods=["DELETE"])(_handle_delete_user)
     mcp.custom_route("/admin/users/{username}/configs", methods=["POST"])(_handle_grant_config)

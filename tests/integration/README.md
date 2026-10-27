@@ -38,7 +38,7 @@
 - `test_concurrent_access.py` — Concurrent read/write patterns
 - `test_pro_mode.py` — Pro-mode DB auth, fan-out reads, dotted-path writes
 - `test_multi_remote_fanout.py` — Multi-remote fan-out, partial failure, passthrough, header/env edge cases
-- `test_admin_api.py` — Admin REST API: read/write routes, pro/simple mode gating, CLI cross-surface, restart-window proof
+- `test_admin_api.py` — Admin REST API: read/write routes, pro/simple mode gating, CLI cross-surface, M5.1 live round-trips (create/delete/rotate apply on the next request; grant/revoke move addressing; CLI-added config still needs a restart)
 
 ## Configuration
 
