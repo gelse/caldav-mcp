@@ -5,6 +5,10 @@ __pycache__/
 venv/
 plans/
 
+# Frontend (admin UI)
+node_modules/
+ui/dist/
+
 # Documentation build
 docs/_build/
 

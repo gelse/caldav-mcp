@@ -16,15 +16,20 @@
    pip install -e ".[dev]"
    ```
 
-3. Copy `.env.example` to `.env` and configure your CalDAV credentials.
+3. Install Node.js >= 20.19 (with npm) — required for the admin-UI checks
+   (`make ui-check`, part of `make check`). See [`docs/ui.md`](ui.md).
+
+4. Copy `.env.example` to `.env` and configure your CalDAV credentials.
 
 ## Running Checks
 
 ```bash
-make check       # lint + typecheck + deps-check + tests
+make check       # lint + typecheck + deps-check + tests + UI checks (ui-check)
 make lint        # ruff check + format check
 make typecheck   # mypy
 make test        # pytest
+make ui-check    # admin UI: eslint + svelte-check + vitest + build (CSP check)
+                 # (needs Node >= 20.19)
 ```
 
 ## Code Style
