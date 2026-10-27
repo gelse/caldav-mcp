@@ -6,9 +6,11 @@ plus a tuple of :class:`ProUser` snapshots for downstream auth (M4.2+).
 
 **Design invariants**
 
-* The loader runs exactly once at server startup.  The loader never writes
-  to the store; configuration changes require a restart.  The admin API is
-  the server's only store writer, users only.
+* The loader runs exactly once at server startup.  Beyond creating an
+  empty store (schema only) when the file is missing but its parent
+  directory exists and is writable, the loader never writes to the store;
+  configuration changes require a restart.  The admin API is the server's
+  store writer, users only.
 * No env-var reads inside this module — the master secret is passed
   explicitly via the *secret* parameter so that callers (and tests) control
   the key material.
@@ -20,6 +22,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import logging
 import os
 import stat
 from dataclasses import dataclass
@@ -34,6 +37,8 @@ from caldav_mcp.config_store import (
     RemoteRecord,
     StoreError,
 )
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Dataclasses
@@ -142,8 +147,8 @@ class ProConfigError(Exception):
     """
 
 
-def _check_store_path(db_path: str) -> None:
-    """Validate that *db_path* points at an accessible regular file.
+def _check_store_path(db_path: str) -> bool:
+    """Validate that *db_path* is an accessible regular file — or creatable.
 
     An explicit ``os.stat`` probe replaces a blind existence check so that
     permission failures (e.g. a bind-mounted store directory the container
@@ -151,21 +156,61 @@ def _check_store_path(db_path: str) -> None:
     mapping — each with a distinct, actionable message carrying the path,
     the running uid/gid and concrete remedies, never secrets:
 
-    * ``FileNotFoundError``  → "store not found" (original ENOENT contract),
+    * ``""`` / ``":memory:"`` → "not a persistent file" (SQLite's in-memory
+      and unnamed targets would silently recreate an empty database on
+      every open — never acceptable for the shared store),
+    * ``FileNotFoundError`` + missing parent directory → "store not found"
+      (parent directories are never created),
+    * ``FileNotFoundError`` + unwritable parent directory →
+      "permission denied: cannot create",
+    * ``FileNotFoundError`` + writable parent directory → returns ``True``
+      (caller creates an empty store),
     * ``PermissionError``    → "permission denied" (inaccessible parent dir),
     * directory at the path  → "is a directory, not a SQLite database file",
     * file not readable      → "permission denied" (file mode),
     * any other ``OSError``  → message including the errno.
+
+    Returns
+    -------
+    bool
+        ``True`` when the store file is absent but its parent directory
+        exists and is writable (auto-create case); ``False`` when the file
+        exists and passed every check.
 
     Raises
     ------
     ProConfigError
         On any of the failure classes above.
     """
+    if not db_path or db_path == ":memory:":
+        raise ProConfigError(
+            f"Pro-mode config store path {db_path!r} is not a persistent file: "
+            f"pro mode requires a real store file — an in-memory or unnamed "
+            f"database is recreated empty on every open and would silently "
+            f"discard users and configs. Fix: point CALDAV_MCP_DB_PATH at a "
+            f"file path whose parent directory exists and is writable."
+        )
     try:
         st = os.stat(db_path)
     except FileNotFoundError as exc:
-        raise ProConfigError(f"Pro-mode config store not found: {db_path!r}") from exc
+        parent = os.path.dirname(os.path.abspath(db_path))
+        if not os.path.isdir(parent):
+            raise ProConfigError(
+                f"Pro-mode config store not found: {db_path!r} — parent directory "
+                f"{parent!r} does not exist (uid={os.getuid()} gid={os.getgid()}). "
+                f"Fix: create the directory or correct CALDAV_MCP_DB_PATH — the store "
+                f"is only auto-created when its parent directory already exists."
+            ) from exc
+        if not os.access(parent, os.W_OK | os.X_OK):
+            raise ProConfigError(
+                f"Pro-mode config store permission denied: cannot create {db_path!r} "
+                f"as uid={os.getuid()} gid={os.getgid()}: parent directory {parent!r} "
+                f"is not writable. "
+                f"Fix: run the container as the store owner via compose "
+                f'`user: "<uid>:<gid>"`, or `chown -R 100:101 <dir>` so the store '
+                f"matches the image's app user (uid=100 gid=101)."
+            ) from exc
+        return True
     except PermissionError as exc:
         raise ProConfigError(
             f"Pro-mode config store permission denied: cannot access {db_path!r} as "
@@ -197,10 +242,16 @@ def _check_store_path(db_path: str) -> None:
             f'`user: "<uid>:<gid>"`, or `chown -R 100:101 <dir>` so the store '
             f"matches the image's app user (uid=100 gid=101)."
         )
+    return False
 
 
 def load_pro_state(db_path: str, secret: str) -> ProState:
     """Read the SQLite store and assemble an ``AppConfig`` + user snapshot.
+
+    When *db_path* does not exist but its parent directory exists and is
+    writable, an empty store (schema only, no users/configs) is created
+    and a WARNING explains how to populate it; every other missing or
+    unusable path shape stays a typed :class:`ProConfigError`.
 
     Parameters
     ----------
@@ -213,13 +264,16 @@ def load_pro_state(db_path: str, secret: str) -> ProState:
     Raises
     ------
     ProConfigError
-        When the store file is missing, unreadable (permission denied on
-        the file or a parent directory), not a regular file, or its schema
-        version is newer than the code supports.
+        When the store's parent directory is missing or not writable (the
+        store is only auto-created when the file is absent and its parent
+        directory already exists and is writable), or the file exists but
+        is unreadable (permission denied on the file or a parent
+        directory), is not a regular file, or its schema version is newer
+        than the code supports.
     ConfigSecretError
         When decryption of any stored password fails (wrong secret).
     """
-    _check_store_path(db_path)
+    store_missing = _check_store_path(db_path)
 
     try:
         with ConfigStore(db_path) as store:
@@ -240,6 +294,20 @@ def load_pro_state(db_path: str, secret: str) -> ProState:
         raise ProConfigError(
             f"Unexpected error loading pro-mode config from {db_path!r}: {exc}"
         ) from exc
+
+    if store_missing:
+        # Fresh deployment: an empty store (schema only) was just created.
+        # Startup continues with zero users/configs — MCP auth rejects
+        # everyone until users exist; the admin API (or CLI) creates them.
+        logger.warning(
+            "Pro-mode config store %r did not exist — created an empty store with "
+            "no users and no configs. Populate configs, remotes and calendars with "
+            "the `caldav-mcp-config` CLI (changes apply after a restart); add users "
+            "via the admin REST API (requires CALDAV_MCP_ADMIN_KEY set at startup; "
+            "user changes apply live) or the CLI (user changes apply after a "
+            "restart).",
+            db_path,
+        )
 
     users = tuple(
         ProUser(

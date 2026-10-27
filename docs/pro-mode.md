@@ -58,7 +58,16 @@ services:
 
 volumes:
   caldav-config:
+    # Pin the volume name so tooling (e.g. the chown command below) targets
+    # this exact volume instead of a project-prefixed <project>_caldav-config.
+    name: caldav-config
 ```
+
+A fresh named volume creates `/data` owned by root, which the container
+cannot write until you hand it over once:
+`docker run --rm -v caldav-config:/data --user root alpine chown 100:101 /data`
+(or `<uid>:<gid>` if you run with `user:`) — see
+[Store permissions and UID mapping](#store-permissions-and-uid-mapping).
 
 ```bash
 # Bind-mount example
@@ -70,7 +79,25 @@ docker run -d \
   ghcr.io/gelse/caldav-mcp:latest
 ```
 
-Initialize the store before first start:
+Binding a single *file* requires the host file to exist beforehand —
+Docker creates a missing bind source as a directory, which the server
+rejects (`store path is a directory`). Create it first
+(`touch /host/path/store.db`), or bind the directory instead
+(`-v /host/path:/data` with `CALDAV_MCP_DB_PATH=/data/store.db`), which
+also enables first-start auto-create.
+
+On first start the store file does not need to exist yet: when
+`CALDAV_MCP_DB_PATH` names a missing file whose parent directory exists
+and is writable, the server creates an empty store (schema only — no
+users, no configs) and logs a warning saying exactly that. The server
+never creates missing parent directories: a missing or unwritable parent
+fails startup with an actionable error naming the path, the running
+uid/gid, and the fix. The created file is owned by the uid the server
+runs as — see [Store permissions and UID mapping](#store-permissions-and-uid-mapping)
+if a host-side CLI must access it.
+
+An empty store authenticates no one. Populate configs, remotes and
+calendars with the CLI, and users with the admin REST API or the CLI:
 
 ```bash
 export CALDAV_MCP_CONFIG_SECRET=your-secret
@@ -116,8 +143,8 @@ docker compose up -d
 
 The image runs unchanged as any uid — no path in it depends on a specific
 user — so `./data` (store file, SQLite journal files, CLI access) stays owned
-by your host user. Initialize `./data/store.db` with the CLI before the first
-start, as your own user.
+by your host user. The first start creates `./data/store.db` as that same
+uid, so the CLI works before or after the first start, as your own user.
 
 ### Option B — chown the store to the image's user
 
@@ -143,6 +170,20 @@ access. Leave `CALDAV_MCP_ADMIN_KEY` unset for deliberately read-only
 stores.
 
 ### Troubleshooting
+
+**Symptom** startup fails with `Pro-mode config store not found: … parent
+directory … does not exist`: `CALDAV_MCP_DB_PATH` points beneath a
+directory that was never created or mounted (the auto-create covers the
+*file*, never a directory — an empty volume still provides the parent
+directory). **Fix** create the directory (e.g. `mkdir -p ./data`) or
+correct the path.
+
+**Symptom** startup fails with `Pro-mode config store permission denied:
+cannot create …`: the parent directory exists but the running uid cannot
+write to it — a fresh named volume's root-owned `/data` is the typical
+case. **Fix** initialize the volume once (named-volume chown command in
+[Deploying the SQLite store](#deploying-the-sqlite-store) above) or pick
+option A or option B above.
 
 **Symptom** startup fails although the store file exists: older images
 misreport EACCES as `Pro-mode config store not found: '/data/store.db'` (or a
