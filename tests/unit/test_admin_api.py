@@ -396,6 +396,11 @@ def test_wrong_method_on_routed_paths_405(client):
         resp = getattr(client, method)("/admin/users/alice/key")
         assert resp.status_code == 405, (method, resp.status_code)
 
+    # /admin/configs exists with GET only (UI-M1 — read-only listing).
+    for method in ("post", "put", "delete"):
+        resp = getattr(client, method)("/admin/configs")
+        assert resp.status_code == 405, (method, resp.status_code)
+
 
 def test_rotation_route_registered_put_requires_auth(client):
     """``PUT /admin/users/{u}/key`` (M4.1) is registered and guarded → 401."""
@@ -1421,8 +1426,12 @@ def test_list_configs_404_guard_disabled(client):
 
 
 def test_list_configs_503_store_unavailable(client, tmp_path, monkeypatch):
-    """Unreadable store (path is a directory) → 503 via the choke point."""
+    """Unreadable store (path is a directory) → 503 + audit status=error."""
     monkeypatch.setenv("CALDAV_MCP_DB_PATH", str(tmp_path))
-    resp = client.get("/admin/configs", headers=_BEARER)
+    with mock.patch.object(admin, "log_admin_operation") as mock_admin_audit:
+        resp = client.get("/admin/configs", headers=_BEARER)
     assert resp.status_code == 503
     assert "retry" in _error_of(resp).lower()
+    mock_admin_audit.assert_called_once_with(
+        action="list_configs", status="error", client_ip="testclient"
+    )
