@@ -423,9 +423,13 @@ rm -f "$STORE"
 
 - **No `remote update`** — to change a remote's URL or credentials,
   delete it and re-add.
-- **No key rotation** — there is no built-in flow to rotate
+- **No key rotation** — ~~there is no built-in flow to rotate
   `CALDAV_MCP_CONFIG_SECRET` or user API keys. Re-add remotes / re-create
-  users after a secret change.
+  users after a secret change.~~ **Superseded for user API keys (M4):**
+  rotate a user's key with the admin API endpoint
+  `PUT /admin/users/{username}/key` (restart-to-apply). **Still true for
+  `CALDAV_MCP_CONFIG_SECRET`:** there is no built-in flow to rotate it —
+  re-add remotes after a secret change.
 - **No hot reload** — the server reads configuration at startup. Changes
   to the store require a server restart (inherited from the singleton
   design of [`caldav_mcp/app_config.py`](../caldav_mcp/app_config.py)).

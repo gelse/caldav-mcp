@@ -1,4 +1,4 @@
-"""Admin REST API for pro-mode user management (M2: read, M3: write).
+"""Admin REST API for pro-mode user management (M2: read, M3: write, M4: key rotation).
 
 Plain REST routes on the existing FastMCP/Starlette app — never MCP tools
 (fixed constraint, Design (a)).  ``server.py`` registers them in the pro
@@ -30,10 +30,15 @@ M3 write routes follow the milestone flow: guard → parse/validate body →
 fresh store (with the ``get_user``/``list_configs`` pre-checks mandated by
 table (d)) → store call → ``log_admin_operation`` → JSON response carrying
 ``"restart_required": true`` (restart-to-apply, Design (c) phase 1).  Every
-mutation body carries that flag; there is deliberately no key-rotation
-route (M4) and no hot reload (M5).  Plaintext keys are accepted only in
-request bodies, hashed with :func:`hash_api_key`, and never stored, logged,
-echoed, or returned (Design (f) hygiene rules).
+mutation body carries that flag; there is no hot reload yet (M5).  The M4
+rotation route ``PUT /admin/users/{username}/key`` follows Design (f):
+guard → reject empty key 400 → :func:`hash_api_key` → fresh store →
+``set_user_key_hash`` → ``log_admin_operation`` → 200
+``{username, rotated, restart_required}`` with zero key material.
+Plaintext keys are accepted only in request bodies, hashed with
+:func:`hash_api_key`, and never stored, logged, echoed, or returned; key
+hashes never leave the store through the API either (Design (f) hygiene
+rules).
 """
 
 from __future__ import annotations
@@ -242,12 +247,12 @@ async def _handle_get_user(request: Request) -> JSONResponse:
 
 
 # ---------------------------------------------------------------------------
-# Write handlers (M3 — restart-to-apply, Design (c) phase 1)
+# Write handlers (M3 — restart-to-apply, Design (c) phase 1; M4 rotation)
 #
 # Flow per the M3.1 block: guard → parse/validate body → fresh store (with
 # the table-(d) pre-checks) → store call → log_admin_operation → JSON
 # response with "restart_required": true.  Every store error funnels through
-# _map_store_error; no rotation route here (M4).
+# _map_store_error; the M4 rotation route follows Design (f) below.
 # ---------------------------------------------------------------------------
 
 
@@ -442,6 +447,51 @@ async def _handle_replace_configs(request: Request) -> JSONResponse:
     return JSONResponse({**_user_payload(record), "restart_required": True})
 
 
+async def _handle_rotate_key(request: Request) -> JSONResponse:
+    """``PUT /admin/users/{username}/key`` — rotate a user's API key (200).
+
+    Design (f) flow: guard → username transport guard → parse body →
+    reject empty key 400 → :func:`hash_api_key` → fresh store →
+    ``set_user_key_hash`` → ``log_admin_operation`` → 200
+    ``{username, rotated, restart_required}``.  The plaintext key appears
+    only in the request body — never in a query string, log, audit entry,
+    error message, or response — and the new hash never leaves the store
+    either.  Unknown user → 404 via the single choke point.
+    """
+    denied = _require_admin(request)
+    if denied is not None:
+        return denied
+    username = request.path_params.get("username", "")
+    transport_error = _username_transport_error(username)
+    if transport_error is not None:
+        return JSONResponse({"error": transport_error}, status_code=400)
+    parsed = await _read_json_body(request)
+    if isinstance(parsed, JSONResponse):
+        return parsed
+    key = parsed.get("key")
+    if not isinstance(key, str) or not key:
+        # API-owned non-empty key check, mirroring config_cli._handle_user_add.
+        return JSONResponse({"error": "key must be a non-empty string"}, status_code=400)
+    try:
+        # API-owned shape check: a lone-surrogate key (valid JSON, invalid
+        # UTF-8) would make hashing raise and surface as a bare 500.
+        key.encode("utf-8")
+    except UnicodeEncodeError:
+        return JSONResponse({"error": "key must be valid UTF-8"}, status_code=400)
+    client_ip = _client_ip(request)
+    key_hash = hash_api_key(key)
+    try:
+        with ConfigStore(_db_path()) as store:
+            store.set_user_key_hash(username, key_hash)
+    except Exception as exc:
+        log_admin_operation(
+            action="rotate_key", status="error", target_user=username, client_ip=client_ip
+        )
+        return _map_store_error(exc)
+    log_admin_operation(action="rotate_key", status="ok", target_user=username, client_ip=client_ip)
+    return JSONResponse({"username": username, "rotated": True, "restart_required": True})
+
+
 # ---------------------------------------------------------------------------
 # Registration
 # ---------------------------------------------------------------------------
@@ -450,16 +500,15 @@ async def _handle_replace_configs(request: Request) -> JSONResponse:
 def configure_admin_routes(mcp: FastMCP) -> None:
     """Register the admin REST routes on *mcp* (called from ``server.py``).
 
-    Registers the two M2 read routes and the five M3 write routes.  The M4
-    key-rotation route (``PUT /admin/users/{username}/key``) is deliberately
-    absent — requests to it yield framework 404.  Must be called before
-    ``run_http_async`` — fastmcp merges additional routes into the
-    streamable-http app with lowest precedence (M2.1 spike).
+    Registers the two M2 read routes, the five M3 write routes, and the M4
+    key-rotation route.  Must be called before ``run_http_async`` — fastmcp
+    merges additional routes into the streamable-http app with lowest
+    precedence (M2.1 spike).
     """
     # Read (M2).
     mcp.custom_route("/admin/users", methods=["GET"])(_handle_list_users)
     mcp.custom_route("/admin/users/{username}", methods=["GET"])(_handle_get_user)
-    # Write (M3.1) — restart-to-apply; no rotation route (M4).
+    # Write (M3.1) — restart-to-apply.
     mcp.custom_route("/admin/users", methods=["POST"])(_handle_create_user)
     mcp.custom_route("/admin/users/{username}", methods=["DELETE"])(_handle_delete_user)
     mcp.custom_route("/admin/users/{username}/configs", methods=["POST"])(_handle_grant_config)
@@ -467,3 +516,5 @@ def configure_admin_routes(mcp: FastMCP) -> None:
     mcp.custom_route("/admin/users/{username}/configs/{config}", methods=["DELETE"])(
         _handle_revoke_config
     )
+    # Key rotation (M4.1, Design (f)).
+    mcp.custom_route("/admin/users/{username}/key", methods=["PUT"])(_handle_rotate_key)

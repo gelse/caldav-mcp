@@ -1,4 +1,4 @@
-"""Unit tests for the admin REST API (M2.3 guard + GET routes, M3.1 write routes).
+"""Unit tests for the admin REST API (M2.3 guard + GET, M3.1 writes, M4.1 key rotation).
 
 **Test vehicle (pinned by the milestone):** Starlette ``TestClient`` against
 the FastMCP HTTP app (``mcp.http_app()``) — the guard consumes a real
@@ -339,13 +339,13 @@ def test_framework_404_when_routes_never_registered():
 
 
 # ---------------------------------------------------------------------------
-# 5. Write routes present (M3.1): 401 unauthenticated / 405 wrong method /
-#    404 only for the M4 rotation route (non-goal) and disabled API
+# 5. Write routes present (M3.1 + M4.1): 401 unauthenticated / 405 wrong
+#    method / 404 only for the disabled API
 # ---------------------------------------------------------------------------
 
 
 def test_write_routes_exist_and_require_auth(client, _admin_setup):
-    """Every M3 write route is registered and guarded: no key → 401."""
+    """Every write route (incl. M4.1 rotation) is registered and guarded: 401."""
     limiter = _admin_setup
     cases = (
         ("post", "/admin/users", {"username": "x", "key": "y"}),
@@ -353,12 +353,13 @@ def test_write_routes_exist_and_require_auth(client, _admin_setup):
         ("post", "/admin/users/alice/configs", {"config": "default"}),
         ("put", "/admin/users/alice/configs", {"configs": ["default"]}),
         ("delete", "/admin/users/alice/configs/default", None),
+        ("put", "/admin/users/alice/key", {"key": "y"}),
     )
     for method, path, body in cases:
         fn = getattr(client, method)
         resp = fn(path, json=body) if body is not None else fn(path)
         assert resp.status_code == 401, (method, path, resp.status_code)
-        # Each 401 records a failure; clear it so the fifth request is not
+        # Each 401 records a failure; clear it so the next request is not
         # rate-limited before reaching this route's guard.
         limiter.reset("testclient")
 
@@ -375,18 +376,16 @@ def test_wrong_method_on_routed_paths_405(client):
     resp = client.delete("/admin/users/alice/configs")
     assert resp.status_code == 405
 
+    # /admin/users/{username}/key exists with PUT only (M4.1).
+    for method in ("get", "post", "delete"):
+        resp = getattr(client, method)("/admin/users/alice/key")
+        assert resp.status_code == 405, (method, resp.status_code)
 
-def test_rotation_route_absent_404(client):
-    """``/admin/users/{u}/key`` (M4 rotation) stays unregistered → 404."""
-    cases = (
-        ("get", "/admin/users/alice/key"),
-        ("post", "/admin/users/alice/key"),
-        ("put", "/admin/users/alice/key"),
-        ("delete", "/admin/users/alice/key"),
-    )
-    for method, path in cases:
-        resp = getattr(client, method)(path)
-        assert resp.status_code == 404, (method, path, resp.status_code)
+
+def test_rotation_route_registered_put_requires_auth(client):
+    """``PUT /admin/users/{u}/key`` (M4.1) is registered and guarded → 401."""
+    resp = client.put("/admin/users/alice/key", json={"key": "k"})
+    assert resp.status_code == 401
 
 
 # ---------------------------------------------------------------------------
@@ -904,6 +903,11 @@ def test_write_404_fail_closed_when_admin_key_unset(client, _admin_setup, monkey
     assert resp.status_code == 404
     mock_const_eq.assert_not_called()
     assert limiter.is_rate_limited("testclient") is False
+    # The M4.1 rotation route fail-closes the same way.
+    with mock.patch.object(admin, "_const_eq") as mock_const_eq:
+        resp = client.put("/admin/users/alice/key", json={"key": "y"}, headers=_BEARER)
+    assert resp.status_code == 404
+    mock_const_eq.assert_not_called()
 
 
 def test_write_404_in_simple_mode(client):
@@ -914,6 +918,8 @@ def test_write_404_in_simple_mode(client):
     assert resp.status_code == 404
     assert _error_of(resp) == "not found"
     resp = client.delete("/admin/users/alice", headers=_BEARER)
+    assert resp.status_code == 404
+    resp = client.put("/admin/users/alice/key", json={"key": "y"}, headers=_BEARER)
     assert resp.status_code == 404
 
 
@@ -927,3 +933,176 @@ def test_create_user_503_store_unavailable(client, tmp_path, monkeypatch):
     )
     assert resp.status_code == 503
     assert "retry" in _error_of(resp).lower()
+
+
+# ---------------------------------------------------------------------------
+# 14. PUT /admin/users/{username}/key (M4.1): rotation + hygiene
+# ---------------------------------------------------------------------------
+
+
+def test_rotate_key_200_rotates_hash_and_audits(client):
+    """Rotate → 200 {username, rotated, restart_required}; store hash swapped."""
+    with mock.patch.object(admin, "log_admin_operation") as mock_admin_audit:
+        resp = client.put(
+            "/admin/users/alice/key",
+            json={"key": "alice-unit-key-v2"},
+            headers=_BEARER,
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert set(body) == {"username", "rotated", "restart_required"}
+    assert body["username"] == "alice"
+    assert body["rotated"] is True
+    assert body["restart_required"] is True
+    # Completed CRUD outcome audited; audit arguments carry no key material.
+    mock_admin_audit.assert_called_once_with(
+        action="rotate_key", status="ok", target_user="alice", client_ip="testclient"
+    )
+    assert "alice-unit-key-v2" not in repr(mock_admin_audit.call_args)
+    # The store verifies only the new key now (Design (f) flow, M1 method).
+    with ConfigStore(os.environ["CALDAV_MCP_DB_PATH"]) as store:
+        record = store.get_user("alice")
+    assert record.key_hash != "alice-unit-key-v2"
+    assert verify_api_key("alice-unit-key-v2", record.key_hash)
+    assert not verify_api_key("alice-unit-key", record.key_hash)
+    # Neither plaintext nor hash is readable back through any endpoint.
+    got = client.get("/admin/users/alice", headers=_BEARER)
+    assert got.status_code == 200
+    assert "alice-unit-key-v2" not in got.text
+    assert record.key_hash not in got.text
+
+
+def test_rotate_key_hygiene_no_plaintext_or_hash_in_observables(client, caplog):
+    """SECURITY: rotation leaks neither plaintext nor hash to any observable.
+
+    Observables: the response body, the real ``caldav-mcp.audit`` records
+    (``log_admin_operation`` output), and every other log record captured
+    during the request.  The stored hash is read from the store afterwards
+    and checked explicitly — even that value must never surface.
+    """
+    plaintext = "hygiene-rotate-plain-key"
+    with caplog.at_level(logging.DEBUG):
+        resp = client.put(
+            "/admin/users/bob/key",
+            json={"key": plaintext},
+            headers=_BEARER,
+        )
+    assert resp.status_code == 200
+    with ConfigStore(os.environ["CALDAV_MCP_DB_PATH"]) as store:
+        stored_hash = store.get_user("bob").key_hash
+
+    # The rotation is audited for real (no mock): action/status/target only.
+    audit_records = [r for r in caplog.records if r.name == "caldav-mcp.audit"]
+    entries = [json.loads(r.getMessage()) for r in audit_records]
+    rotate_entries = [e for e in entries if e.get("action") == "rotate_key"]
+    assert rotate_entries, entries
+    assert rotate_entries[-1]["status"] == "ok"
+    assert rotate_entries[-1]["target_user"] == "bob"
+
+    # SECURITY: no plaintext key or key hash in the response or any log line.
+    observables = [resp.text, *(r.getMessage() for r in caplog.records)]
+    for blob in observables:
+        assert plaintext not in blob
+        assert stored_hash not in blob
+    assert "key_hash" not in resp.text and '"key"' not in resp.text
+
+
+def test_rotate_key_400_empty_or_missing_key(client):
+    """Empty/missing/non-string key → 400; the stored hash stays untouched."""
+    for payload in ({"key": ""}, {}, {"key": 5}):
+        resp = client.put("/admin/users/alice/key", json=payload, headers=_BEARER)
+        assert resp.status_code == 400, payload
+        assert "key" in _error_of(resp), payload
+    with ConfigStore(os.environ["CALDAV_MCP_DB_PATH"]) as store:
+        record = store.get_user("alice")
+    assert verify_api_key("alice-unit-key", record.key_hash)
+
+
+def test_rotate_key_400_malformed_or_wrong_content_type(client):
+    """Malformed JSON / wrong Content-Type → 400 (plaintext stays in-body only)."""
+    resp = client.put(
+        "/admin/users/alice/key",
+        content="{bad",
+        headers={**_BEARER, "Content-Type": "application/json"},
+    )
+    assert resp.status_code == 400
+    resp = client.put(
+        "/admin/users/alice/key",
+        content='{"key": "k"}',
+        headers={**_BEARER, "Content-Type": "text/plain"},
+    )
+    assert resp.status_code == 400
+    assert "content-type" in _error_of(resp).lower()
+
+
+def test_rotate_key_404_unknown_user(client):
+    """Rotation for an unknown user → 404 + audit status=error, no key material."""
+    with mock.patch.object(admin, "log_admin_operation") as mock_admin_audit:
+        resp = client.put(
+            "/admin/users/ghost/key",
+            json={"key": "ghost-rotate-key"},
+            headers=_BEARER,
+        )
+    assert resp.status_code == 404
+    assert "ghost" in _error_of(resp)
+    mock_admin_audit.assert_called_once_with(
+        action="rotate_key", status="error", target_user="ghost", client_ip="testclient"
+    )
+    assert "ghost-rotate-key" not in repr(mock_admin_audit.call_args)
+
+
+def test_rotate_key_400_transport_guard(client):
+    """Control characters in the path username → 400 transport guard."""
+    resp = client.put("/admin/users/a%00b/key", json={"key": "k"}, headers=_BEARER)
+    assert resp.status_code == 400
+    assert "control" in _error_of(resp)
+
+
+def test_rotate_key_query_string_key_rejected(client):
+    """Plaintext is accepted **only** in the request body (Design (f)).
+
+    A query-string key (proxy-log leakage vector) is ignored two ways: a
+    query-only key yields 400 with the stored hash untouched, and a valid
+    body key wins over a conflicting ``?key=`` value — the body key is the
+    one hashed and stored, never the query one.
+    """
+    resp = client.put(
+        "/admin/users/alice/key",
+        params={"key": "sneaky-query-string-key"},
+        headers=_BEARER,
+    )
+    assert resp.status_code == 400
+    with ConfigStore(os.environ["CALDAV_MCP_DB_PATH"]) as store:
+        record = store.get_user("alice")
+    assert verify_api_key("alice-unit-key", record.key_hash)
+
+    resp = client.put(
+        "/admin/users/alice/key",
+        params={"key": "sneaky-query-string-key"},
+        json={"key": "alice-unit-key-v2"},
+        headers=_BEARER,
+    )
+    assert resp.status_code == 200
+    with ConfigStore(os.environ["CALDAV_MCP_DB_PATH"]) as store:
+        record = store.get_user("alice")
+    assert verify_api_key("alice-unit-key-v2", record.key_hash)
+    assert not verify_api_key("sneaky-query-string-key", record.key_hash)
+
+
+def test_rotate_key_400_invalid_utf8_key(client):
+    """A lone-surrogate key (valid JSON, unencodable UTF-8) → 400, not 500.
+
+    Sent as a raw ASCII body with a ``\\ud800`` escape — the wire bytes are
+    valid UTF-8, but the decoded JSON string is unencodable, exactly the
+    input path that would otherwise raise inside hashing.
+    """
+    resp = client.put(
+        "/admin/users/alice/key",
+        content='{"key": "\\ud800"}',
+        headers={**_BEARER, "Content-Type": "application/json"},
+    )
+    assert resp.status_code == 400
+    assert "utf-8" in _error_of(resp).lower()
+    with ConfigStore(os.environ["CALDAV_MCP_DB_PATH"]) as store:
+        record = store.get_user("alice")
+    assert verify_api_key("alice-unit-key", record.key_hash)

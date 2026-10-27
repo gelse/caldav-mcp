@@ -1,4 +1,4 @@
-"""Admin API integration tests (M2.3 read cases + M3.1 write cases).
+"""Admin API integration tests (M2.3 read cases + M3.1 write cases + M4.1 rotation).
 
 Requires the compose test stack from ``docker-compose.test.yaml`` (the
 ``make test-integration`` target builds the pro store and starts it):
@@ -13,7 +13,10 @@ Requires the compose test stack from ``docker-compose.test.yaml`` (the
 
 Write cases use **disposable ``admin-e2e-*`` users only**: created via the
 API, deleted again in ``finally`` — ``alice``/``bob`` are never mutated
-(milestone edge-case table, ``conftest_pro.py:206-215``).
+(milestone edge-case table, ``conftest_pro.py:206-215``).  The one
+exception is the dedicated, never-granted ``admin-snapshot-user`` (seeded
+by ``conftest_pro._build_pro_store``): M4.1 rotates its key and restores it
+in ``finally`` — it is never deleted.
 
 Because these tests mutate the bind-mounted store, manual runs of the
 README flow must re-run ``build_pro_store.py`` first; ``make test-integration``
@@ -22,7 +25,8 @@ rebuilds the store automatically.
 The restart-window proof issues an explicit ``docker compose restart
 mcp-pro`` plus a container-health poll (no fixed sleeps) so it fits the
 60 s per-test timeout (``Makefile:44``); it restarts once more first for a
-clean baseline (see ``TestAdminRestartWindow`` for why).
+clean baseline (see ``TestAdminRestartWindow`` for why).  The M4.1
+rotation proof (``TestAdminKeyRotation``) reuses the exact same pattern.
 """
 
 from __future__ import annotations
@@ -36,6 +40,8 @@ from pathlib import Path
 
 import pytest
 import requests
+
+from tests.integration.conftest_pro import ADMIN_SNAPSHOT_KEY, ADMIN_SNAPSHOT_USER
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
@@ -548,6 +554,93 @@ class TestAdminRestartWindow:
 
 
 # ---------------------------------------------------------------------------
+# Key-rotation round-trip (M4.1) — ONE dedicated test + efficient health poll
+# ---------------------------------------------------------------------------
+
+
+class TestAdminKeyRotation:
+    """Restart-to-apply semantics for a key rotated via ``PUT …/key`` (M4.1)."""
+
+    def test_rotated_key_inverts_auth_across_restart(self) -> None:
+        """Rotate → OLD accepted / NEW rejected → restart → NEW / OLD inverted.
+
+        Pre-restart the MCP endpoint authenticates from the startup snapshot
+        (``auth.py:257-327``), so the seeded OLD key of
+        ``admin-snapshot-user`` is accepted and the NEW key is rejected; after
+        the explicit ``docker compose restart mcp-pro`` + health-wait step the
+        snapshot holds the rotated hash and the inversion holds (NEW accepted,
+        OLD rejected) — the exact per-phase semantics of the M4.1 block (M5
+        then removes the restart step).
+
+        Rejection is the typed AUTH failure probed by ``_mcp_auth_probe``
+        (``/mcp`` has no HTTP-401 mapping).  Bracketed by a baseline restart
+        first for the same two reasons as ``TestAdminRestartWindow``: a warm
+        container may still carry a previous run's snapshot while the rebuilt
+        store holds the seeded key, and stale auth rate-limiter failures would
+        otherwise produce a rate-limit rejection that is ``"auth"`` but vacuous
+        as snapshot evidence.
+
+        Both keys are clearly-fake disposable test values and never printed.
+        """
+        old_key = ADMIN_SNAPSHOT_KEY
+        new_key = "admin-snapshot-user-rotated-test-key"
+        try:
+            # Baseline restart: pristine startup snapshot of the freshly built
+            # store + in-memory auth rate limiter (see docstring).
+            _restart_pro_and_wait_healthy()
+
+            # Pre-restart (startup snapshot): OLD accepted, NEW rejected.
+            status, message = _mcp_auth_probe_retry(ADMIN_SNAPSHOT_USER, old_key)
+            assert status in ("ok", "empty"), (status, message)
+            assert "unauthorized" not in message.lower(), message
+            status, message = _mcp_auth_probe_retry(ADMIN_SNAPSHOT_USER, new_key)
+            assert status == "auth", (status, message)
+            assert "unauthorized" in message.lower(), message
+
+            # Rotate via the admin API — response must carry zero key material.
+            rotated = requests.put(
+                f"{_PRO_URL}/admin/users/{ADMIN_SNAPSHOT_USER}/key",
+                json={"key": new_key},
+                headers=_ADMIN_HEADERS,
+                timeout=10,
+            )
+            assert rotated.status_code == 200, rotated.text
+            assert rotated.json() == {
+                "username": ADMIN_SNAPSHOT_USER,
+                "rotated": True,
+                "restart_required": True,
+            }
+            assert old_key not in rotated.text
+            assert new_key not in rotated.text
+            assert "key_hash" not in rotated.text
+
+            # Explicit restart + efficient health wait (no fixed sleep).
+            _restart_pro_and_wait_healthy()
+
+            # Post-restart: inversion — NEW accepted, OLD rejected.
+            status, message = _mcp_auth_probe_retry(ADMIN_SNAPSHOT_USER, new_key)
+            assert status in ("ok", "empty"), (status, message)
+            assert "unauthorized" not in message.lower(), message
+            status, message = _mcp_auth_probe_retry(ADMIN_SNAPSHOT_USER, old_key)
+            assert status == "auth", (status, message)
+            assert "unauthorized" in message.lower(), message
+        finally:
+            # Never delete admin-snapshot-user; restore the seeded key so the
+            # next run's baseline restart reloads the original snapshot key
+            # even without a store rebuild.  Best-effort: cleanup must never
+            # mask the primary failure (mirrors _delete_user_best_effort).
+            try:
+                requests.put(
+                    f"{_PRO_URL}/admin/users/{ADMIN_SNAPSHOT_USER}/key",
+                    json={"key": old_key},
+                    headers=_ADMIN_HEADERS,
+                    timeout=10,
+                )
+            except requests.RequestException:
+                pass
+
+
+# ---------------------------------------------------------------------------
 # Simple mode: admin API does not exist → 404
 # ---------------------------------------------------------------------------
 
@@ -570,6 +663,16 @@ class TestAdminAbsentInSimpleMode:
         resp = requests.post(
             f"{_SIMPLE_URL}/admin/users",
             json={"username": "x", "key": "y"},
+            headers=_ADMIN_HEADERS,
+            timeout=10,
+        )
+        assert resp.status_code == 404
+
+    def test_rotate_key_404_simple_mode(self) -> None:
+        """PUT /admin/users/{u}/key on mcp-simple → 404 (M4.1 route absent)."""
+        resp = requests.put(
+            f"{_SIMPLE_URL}/admin/users/alice/key",
+            json={"key": "y"},
             headers=_ADMIN_HEADERS,
             timeout=10,
         )
