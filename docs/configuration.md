@@ -24,7 +24,9 @@ Pydantic.
 > directly to the SQLite store, so the store file must be writable by the
 > server. Deployments that mount the store read-only (e.g. `:ro`) should
 > leave `CALDAV_MCP_ADMIN_KEY` unset so the admin API stays disabled —
-> otherwise admin write requests fail with 503.
+> otherwise admin write requests fail with 503. For UID mapping options
+> (compose `user:` vs `chown`) see
+> [Store permissions and UID mapping](pro-mode.md#store-permissions-and-uid-mapping).
 
 ### CalDAV
 

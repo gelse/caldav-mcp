@@ -84,6 +84,74 @@ through the admin API apply on the next request instead — with one
 exception: a config added after startup needs a restart before a grant for
 it becomes reachable.
 
+## Store permissions and UID mapping
+
+The server writes to the store as the uid it runs as, so the store directory
+must be writable by that uid — and by whatever runs `caldav-mcp-config` on
+the host. Pick one of these two mappings and use it for both.
+
+### Option A — run the container as your uid (recommended)
+
+```yaml
+services:
+  caldav-mcp:
+    image: ghcr.io/gelse/caldav-mcp:latest
+    user: "${PUID:-1000}:${PGID:-1000}"
+    ports:
+      - "8600:8080"
+    environment:
+      DB_CONFIG_ENABLED: "true"
+      CALDAV_MCP_DB_PATH: /data/store.db
+      CALDAV_MCP_CONFIG_SECRET: ${CALDAV_MCP_CONFIG_SECRET}
+      CALDAV_MCP_ADMIN_KEY: ${CALDAV_MCP_ADMIN_KEY}
+    volumes:
+      - ./data:/data
+```
+
+```bash
+mkdir -p data
+export PUID="$(id -u)" PGID="$(id -g)"
+docker compose up -d
+```
+
+The image runs unchanged as any uid — no path in it depends on a specific
+user — so `./data` (store file, SQLite journal files, CLI access) stays owned
+by your host user. Initialize `./data/store.db` with the CLI before the first
+start, as your own user.
+
+### Option B — chown the store to the image's user
+
+Without a `user:` override the container runs as the image's `app` user
+(`uid=100`, `gid=101`). Make the store match it:
+
+```bash
+mkdir -p data
+chown -R 100:101 data
+```
+
+Tradeoff: your host user no longer owns the store, so running
+`caldav-mcp-config` on the host needs access to uid 100 (e.g. `sudo`) — the
+store must stay accessible to **both** the container and the CLI.
+
+### Why writes matter
+
+Setting `CALDAV_MCP_ADMIN_KEY` makes the server a store writer: every admin
+mutation writes user rows as the server's uid. A store that is readable but
+not writable still starts and still serves reads — but admin mutations
+return 503 and startup logs a warning naming the uid/gid that lacks write
+access. Leave `CALDAV_MCP_ADMIN_KEY` unset for deliberately read-only
+stores.
+
+### Troubleshooting
+
+**Symptom** startup fails although the store file exists: older images
+misreport EACCES as `Pro-mode config store not found: '/data/store.db'` (or a
+raw `PermissionError` traceback); current images print
+`Pro-mode config store permission denied: … as uid=… gid=…` and name both
+remedies inline. **Cause** a host dir owned by your uid (e.g. `1000:1000`)
+mounted at `/data` while the container runs as a different uid. **Fix**
+option A or option B above.
+
 ## References
 
 - [`docs/cli.md`](cli.md) — full CLI reference for managing the store
