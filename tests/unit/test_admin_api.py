@@ -1,4 +1,5 @@
-"""Unit tests for the admin REST API (M2.3 reads, M3.1 writes, M4.1 rotation, M5.1 reload).
+"""Unit tests for the admin REST API (M2.3 reads, M3.1 writes, M4.1 rotation,
+M5.1 reload, UI-M1 config listing).
 
 **Test vehicle (pinned by the milestone):** Starlette ``TestClient`` against
 the FastMCP HTTP app (``mcp.http_app()``) — the guard consumes a real
@@ -349,6 +350,7 @@ def test_framework_404_when_routes_never_registered():
     with TestClient(bare.http_app()) as bare_client:
         assert bare_client.get("/admin/users").status_code == 404
         assert bare_client.get("/admin/users/alice").status_code == 404
+        assert bare_client.get("/admin/configs").status_code == 404
 
 
 # ---------------------------------------------------------------------------
@@ -392,6 +394,11 @@ def test_wrong_method_on_routed_paths_405(client):
     # /admin/users/{username}/key exists with PUT only (M4.1).
     for method in ("get", "post", "delete"):
         resp = getattr(client, method)("/admin/users/alice/key")
+        assert resp.status_code == 405, (method, resp.status_code)
+
+    # /admin/configs exists with GET only (UI-M1 — read-only listing).
+    for method in ("post", "put", "delete"):
+        resp = getattr(client, method)("/admin/configs")
         assert resp.status_code == 405, (method, resp.status_code)
 
 
@@ -1341,3 +1348,90 @@ def test_reload_topology_flag_never_on_revoke(client):
     resp = client.delete("/admin/users/bob/configs/late", headers=_BEARER)
     assert resp.status_code == 200
     assert resp.json() == {"revoked": True, "username": "bob", "config": "late"}
+
+
+# ---------------------------------------------------------------------------
+# 17. GET /admin/configs (UI-M1): config names only, insertion order
+# ---------------------------------------------------------------------------
+
+
+def test_list_configs_200_exact_names_in_insertion_order(client, tmp_path, monkeypatch):
+    """GET /admin/configs → 200 with body keys exactly {"configs"}, order pinned.
+
+    The autouse fixture seeds ``default`` on the shared harness store, so
+    exact-list assertions re-point ``CALDAV_MCP_DB_PATH`` at a fresh store
+    file for the duration of the test (the pattern of the 503 store-error
+    tests).
+    """
+    fresh_path = str(tmp_path / "configs-store.db")
+    monkeypatch.setenv("CALDAV_MCP_DB_PATH", fresh_path)
+    with ConfigStore(fresh_path) as store:
+        store.create_config("a")
+        store.create_config("b")
+    with mock.patch.object(admin, "log_admin_operation") as mock_admin_audit:
+        resp = client.get("/admin/configs", headers=_BEARER)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert set(body) == {"configs"}
+    assert body["configs"] == ["a", "b"]
+    mock_admin_audit.assert_called_once_with(
+        action="list_configs", status="ok", client_ip="testclient"
+    )
+
+
+def test_list_configs_200_empty_fresh_store(client, tmp_path, monkeypatch):
+    """Fresh store with no configs → 200 {"configs": []} (edge-case table)."""
+    monkeypatch.setenv("CALDAV_MCP_DB_PATH", str(tmp_path / "empty-store.db"))
+    resp = client.get("/admin/configs", headers=_BEARER)
+    assert resp.status_code == 200
+    assert resp.json() == {"configs": []}
+
+
+def test_list_configs_insertion_order_prefix_on_harness_store(client):
+    """Shared harness store: fixture-seeded 'default' is the order prefix.
+
+    A prefix assertion (not deep equality) stays robust to seeding
+    evolution of the autouse fixture.
+    """
+    resp = client.get("/admin/configs", headers=_BEARER)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert set(body) == {"configs"}
+    assert isinstance(body["configs"], list)
+    assert body["configs"][:1] == ["default"]
+
+
+def test_list_configs_401_without_or_with_wrong_key(client, _admin_setup):
+    """No key and wrong key → 401 {"error": …}; each failure hits the limiter."""
+    limiter = _admin_setup
+    missing = client.get("/admin/configs")
+    assert missing.status_code == 401
+    _error_of(missing)
+    wrong = client.get("/admin/configs", headers={"Authorization": "Bearer wrong-key"})
+    assert wrong.status_code == 401
+    _error_of(wrong)
+    # The two 401s recorded two failures; one more tops up to the threshold
+    # of 3 — only passes if both were recorded on the isolated limiter.
+    limiter.record_failure("testclient")
+    assert limiter.is_rate_limited("testclient") is True
+
+
+def test_list_configs_404_guard_disabled(client):
+    """Pro-mode snapshot absent (env/simple mode) → the guard itself 404s."""
+    env_app = AppConfig(mode="env", config=_FAKE_CONFIG)
+    configure_app_config(env_app)
+    resp = client.get("/admin/configs", headers=_BEARER)
+    assert resp.status_code == 404
+    assert _error_of(resp) == "not found"
+
+
+def test_list_configs_503_store_unavailable(client, tmp_path, monkeypatch):
+    """Unreadable store (path is a directory) → 503 + audit status=error."""
+    monkeypatch.setenv("CALDAV_MCP_DB_PATH", str(tmp_path))
+    with mock.patch.object(admin, "log_admin_operation") as mock_admin_audit:
+        resp = client.get("/admin/configs", headers=_BEARER)
+    assert resp.status_code == 503
+    assert "retry" in _error_of(resp).lower()
+    mock_admin_audit.assert_called_once_with(
+        action="list_configs", status="error", client_ip="testclient"
+    )
