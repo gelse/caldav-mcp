@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import errno
+import logging
 import os
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -18,7 +20,7 @@ from caldav_mcp.app_config import (
     implicit_remote,
 )
 from caldav_mcp.config_crypto import ConfigSecretError, encrypt_secret
-from caldav_mcp.config_store import ConfigStore, RemoteRecord
+from caldav_mcp.config_store import SCHEMA_VERSION, ConfigStore, RemoteRecord
 from caldav_mcp.db_loader import ProConfigError, ProState, ProUser, load_pro_state
 
 SECRET = "test-master-secret-for-loading-1234"
@@ -183,7 +185,7 @@ class TestWrongSecret:
 
 
 # ---------------------------------------------------------------------------
-# Case 4: Missing store file → ProConfigError
+# Case 4: Unusable store path (missing parent / bad content) → ProConfigError
 # ---------------------------------------------------------------------------
 
 
@@ -197,7 +199,6 @@ class TestMissingStore:
         # Create a valid store first, then tamper the schema version.
         with ConfigStore(db) as store:
             store.create_config("test")
-        import sqlite3
 
         conn = sqlite3.connect(db)
         conn.execute("UPDATE schema_version SET version = 999")
@@ -216,16 +217,18 @@ class TestMissingStore:
         with pytest.raises(ProConfigError):
             load_pro_state(db, SECRET)
 
-    def test_nonexistent_path_raises_pro_config_error_and_does_not_create_file(
-        self, tmp_path: Path
-    ) -> None:
-        """Non-existent store path → ProConfigError; no file is created."""
-        db = str(tmp_path / "does_not_exist.db")
+    def test_nonexistent_path_raises_pro_config_error(self, tmp_path: Path) -> None:
+        """Missing store whose parent directory does not exist → ProConfigError;
+        neither the store file nor the missing parent directory is created."""
+        db = str(tmp_path / "missing_dir" / "does_not_exist.db")
 
         with pytest.raises(ProConfigError, match="Pro-mode config store not found"):
             load_pro_state(db, SECRET)
 
         assert not Path(db).exists(), "load_pro_state must not create the store file"
+        assert not (tmp_path / "missing_dir").exists(), (
+            "load_pro_state must not create missing parent directories"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -383,17 +386,20 @@ class TestStorePathAccess:
 
         _assert_permission_denied_message(str(excinfo.value), db)
 
-    def test_missing_store_still_reports_not_found(self, tmp_path: Path) -> None:
-        """True ENOENT keeps the original "store not found" contract."""
-        db = str(tmp_path / "does_not_exist.db")
+    def test_missing_parent_dir_still_reports_not_found(self, tmp_path: Path) -> None:
+        """ENOENT with a missing parent keeps the "store not found" contract
+        (the store is only auto-created when the parent directory exists)."""
+        db = str(tmp_path / "gone" / "store.db")
 
         with pytest.raises(ProConfigError) as excinfo:
             load_pro_state(db, SECRET)
 
         msg = str(excinfo.value)
-        assert "not found" in msg, f"true ENOENT must keep the not-found message: {msg!r}"
+        assert "not found" in msg, f"missing parent must keep the not-found message: {msg!r}"
         assert "permission denied" not in msg.lower()
         assert db in msg
+        assert f"uid={os.getuid()}" in msg, f"message must include the running uid: {msg!r}"
+        assert f"gid={os.getgid()}" in msg, f"message must include the running gid: {msg!r}"
 
     def test_store_path_directory_raises_distinct_message(self, tmp_path: Path) -> None:
         """A directory at the store path gets a directory message (not not-found)."""
@@ -485,3 +491,136 @@ class TestStorePathAccess:
             Path(db).chmod(0o644)
 
         assert state.app_config.configs[0].name == "work"
+
+
+# ---------------------------------------------------------------------------
+# Case 8: First-start auto-create — missing file + existing writable parent
+# ---------------------------------------------------------------------------
+
+
+class TestAutoCreateEmptyStore:
+    """Pro mode creates an empty store on first start.
+
+    Contract: missing store file + parent directory exists and is writable →
+    an empty store (schema only) is created, startup continues, and a WARNING
+    on the loader's module logger says the store was created (with its path),
+    that it holds no users/configs, and how to populate it.  Missing or
+    unwritable parents are never created — they keep typed, actionable
+    :class:`ProConfigError` failures.
+    """
+
+    def test_missing_file_with_writable_parent_creates_empty_store_and_warns(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Fresh path (no extension — mirrors the reported Docker scenario
+        ``CALDAV_MCP_DB_PATH=/data/store``) → created, empty, warned."""
+        db = str(tmp_path / "store")
+
+        with caplog.at_level(logging.WARNING, logger="caldav_mcp.db_loader"):
+            state = load_pro_state(db, SECRET)
+
+        assert Path(db).is_file(), "load_pro_state must create the missing store file"
+
+        # Empty ProState: no configs, no users.
+        assert state.app_config.mode == "db"
+        assert state.app_config.configs == ()
+        assert state.users == ()
+
+        # Schema present: expected version row, user/config tables, zero rows.
+        conn = sqlite3.connect(db)
+        try:
+            version = conn.execute("SELECT version FROM schema_version").fetchone()
+            tables = {
+                row[0]
+                for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+            }
+            user_count = conn.execute("SELECT COUNT(*) FROM users").fetchone()
+        finally:
+            conn.close()
+        assert version == (SCHEMA_VERSION,)
+        assert {"schema_version", "users", "configs"} <= tables
+        assert user_count == (0,)
+
+        # Warning contract: created store + path + no-users + population guidance.
+        loader_warnings = [
+            r.getMessage()
+            for r in caplog.records
+            if r.name == "caldav_mcp.db_loader" and r.levelno == logging.WARNING
+        ]
+        assert loader_warnings, "expected a WARNING about the created store"
+        text = "\n".join(loader_warnings)
+        assert "created an empty store" in text, f"warning must say the store was created: {text!r}"
+        assert db in text, f"warning must include the store path: {text!r}"
+        assert "no users" in text, f"warning must state the store has no users: {text!r}"
+        # How to populate: CLI for configs/remotes/calendars; admin API or CLI for users.
+        assert "caldav-mcp-config" in text, f"warning must name the CLI: {text!r}"
+        assert "admin REST API" in text, f"warning must mention the admin API: {text!r}"
+        # Never log secret material.
+        assert SECRET not in caplog.text, "warning must never contain the config secret"
+
+    def test_existing_store_loads_without_creation_warning(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """An existing valid store loads unchanged — no auto-create warning."""
+        db = str(tmp_path / "store.db")
+        monkeypatch.setenv("CALDAV_MCP_CONFIG_SECRET", SECRET)
+        _seed_store(db)
+
+        with caplog.at_level(logging.WARNING, logger="caldav_mcp.db_loader"):
+            state = load_pro_state(db, SECRET)
+
+        assert len(state.users) == 2
+        assert state.app_config.configs[0].name == "work"
+        created_warnings = [r for r in caplog.records if "created an empty store" in r.getMessage()]
+        assert not created_warnings, "existing store must not emit the auto-create warning"
+
+    def test_memory_store_path_raises_pro_config_error(self) -> None:
+        """SQLite's ':memory:' (and the unnamed temporary target) would open a
+        fresh empty database on every connection — users/configs written then
+        silently lost.  Both are rejected before the auto-create probe."""
+        with pytest.raises(ProConfigError, match="persistent"):
+            load_pro_state(":memory:", SECRET)
+        with pytest.raises(ProConfigError, match="persistent"):
+            load_pro_state("", SECRET)
+
+    def test_missing_parent_dir_raises_and_creates_nothing(self, tmp_path: Path) -> None:
+        """Missing parent directory → actionable ProConfigError; the loader
+        never creates parent directories (or the file beneath one)."""
+        db = str(tmp_path / "no_such_dir" / "store")
+
+        with pytest.raises(ProConfigError, match="not found") as excinfo:
+            load_pro_state(db, SECRET)
+
+        msg = str(excinfo.value)
+        assert db in msg
+        assert "auto-created" in msg, f"message must explain the auto-create rule: {msg!r}"
+        assert not (tmp_path / "no_such_dir").exists(), "loader must not create the parent dir"
+        assert not Path(db).exists()
+
+    def test_unwritable_parent_raises_permission_denied_and_creates_nothing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Root-safe variant: os.access denying W_OK on the parent → the same
+        actionable permission-denied contract as #39, nothing created."""
+        parent = tmp_path / "store-dir"
+        parent.mkdir()
+        db = str(parent / "store")
+
+        real_access = os.access
+
+        def deny_write(path, mode, *args, **kwargs):  # type: ignore[no-untyped-def]
+            if os.fspath(path) == str(parent) and mode & os.W_OK:
+                return False
+            return real_access(path, mode, *args, **kwargs)
+
+        monkeypatch.setattr(os, "access", deny_write)
+
+        with pytest.raises(ProConfigError) as excinfo:
+            load_pro_state(db, SECRET)
+
+        _assert_permission_denied_message(str(excinfo.value), db)
+        assert "cannot create" in str(excinfo.value)
+        assert not Path(db).exists(), "loader must not create the store file"
