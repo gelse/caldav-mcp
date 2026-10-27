@@ -60,14 +60,14 @@ There is deliberately **no client-side router**: three views, no shareable URLs 
 
 - **The admin key lives in `sessionStorage` only** (`caldav-mcp-admin-key`), never in `localStorage`, a URL, or browser history. Closing the tab clears it; **Log out** wipes it explicitly.
 - A **mid-session 401** (key rotated or invalidated elsewhere) wipes the key and returns to the gate with “key no longer valid” — no retry loops.
-- **Keys are never displayed from server responses** — the API returns none. New keys are shown **only at create/rotate time**, with reveal and copy affordances, because the server stores only the hash and the value cannot be recovered later; copy it before closing the dialog.
+- **Keys are never displayed from server responses** — the API returns none, and the operator never types one either: new keys are **generated in the browser** (Web Crypto `getRandomValues`) the moment the create/rotate dialog opens and shown **only in that dialog**, with reveal, copy, and **Regenerate** affordances. The server stores only the hash, so the value cannot be recovered later — copy it before closing the dialog.
 - **Nothing is logged**: request and response bodies can carry key material, so the app contains no `console` output (eslint-enforced).
 - **Plain-HTTP warning**: on a non-localhost `http://` origin the app warns that the admin key crosses the network in plaintext — send it over TLS or localhost only (same rule as [`docs/api.md`](api.md#transport-warning--read-before-sending-the-key)).
 - **No inline styles anywhere** (eslint ban + post-build grep): component styling compiles through classes and CSS custom properties, keeping the built `index.html` compatible with a strict CSP.
 
 ## Browser support
 
-Evergreen browsers (current Chrome/Edge/Firefox/Safari). The app needs ES2022 modules, `sessionStorage`, native `<dialog>`, and Web Crypto; the **Generate** button is hidden on insecure origins where `crypto.subtle` is unavailable (type or paste a key there instead). Dark mode follows `prefers-color-scheme`; there is no manual toggle.
+Evergreen browsers (current Chrome/Edge/Firefox/Safari). The app needs ES2022 modules, `sessionStorage`, native `<dialog>`, and Web Crypto's `crypto.getRandomValues` — a call that works on secure **and** insecure origins, so key generation and the **Regenerate** button are available wherever the app runs; only a browser without Web Crypto entirely would go without them. Clipboard **Copy** can still be disabled on insecure origins, where **Reveal** is the fallback. Dark mode follows `prefers-color-scheme`; there is no manual toggle.
 
 ## Known limitations
 

@@ -236,7 +236,7 @@ describe('UserDetailView — grant/revoke/replace', () => {
 });
 
 describe('UserDetailView — rotate and delete', () => {
-  it('rotate key: confirm required, PUT body carries the admin-supplied key, success references "the key you just set" without material', async () => {
+  it('rotate key: confirm required, key is auto-generated read-only, PUT body carries exactly the visible value, success shows no key material', async () => {
     const fetchMock = installFetch(...initialQueue([
       jsonResponse({ username: 'alice', rotated: true }),
     ]));
@@ -245,10 +245,25 @@ describe('UserDetailView — rotate and delete', () => {
 
     await openRotateDialog();
     const submit = screen.getByRole('button', { name: 'Rotate key' });
+    const keyInput = screen.getByLabelText('New API key') as HTMLInputElement;
+
+    // The key is generated the moment the dialog opens — never typed.
+    expect(keyInput).toHaveAttribute('readonly');
+    expect(keyInput.value).toMatch(/^[0-9a-f]{48}$/);
+    // Confirmation alone gates submit even though a key is present.
     expect(submit).toBeDisabled();
 
-    await setField('New API key', 'brand-new-secret-42');
-    expect(submit).toBeDisabled(); // confirmation still missing
+    // A typing attempt never changes the field.
+    const firstKey = keyInput.value;
+    await fireEvent.input(keyInput, { target: { value: 'brand-new-secret-42' } });
+    expect(keyInput.value).toBe(firstKey);
+
+    // Regenerate replaces it with a fresh key and announces it live.
+    await fireEvent.click(screen.getByRole('button', { name: 'Regenerate' }));
+    expect(keyInput.value).toMatch(/^[0-9a-f]{48}$/);
+    expect(keyInput.value).not.toBe(firstKey);
+    expect(await screen.findByText('New key generated.')).toBeInTheDocument();
+    const generatedKey = keyInput.value;
 
     await fireEvent.click(
       screen.getByRole('checkbox', { name: /I understand the current key stops working/ }),
@@ -260,12 +275,14 @@ describe('UserDetailView — rotate and delete', () => {
     const [url, init] = fetchMock.mock.calls[2] as [unknown, RequestInit];
     expect(url).toBe('/admin/users/alice/key');
     expect(init.method).toBe('PUT');
-    expect(JSON.parse(String(init.body))).toEqual({ key: 'brand-new-secret-42' });
+    expect(JSON.parse(String(init.body))).toEqual({ key: generatedKey });
 
-    // Success state: references "the key you just set", shows no key material.
-    expect(await screen.findByText(/use the key you just set for future MCP calls/)).toBeInTheDocument();
+    // Success state: references the generated key, shows no key material.
+    expect(
+      await screen.findByText(/use the newly generated key for future MCP calls/),
+    ).toBeInTheDocument();
     const dialog = screen.getByRole('dialog', { name: /Key rotated/ });
-    expect(dialog.textContent).not.toContain('brand-new-secret-42');
+    expect(dialog.textContent).not.toContain(generatedKey);
     expect(screen.queryByLabelText('New API key')).toBeNull();
   });
 
@@ -324,7 +341,7 @@ describe('UserDetailView — rotate and delete', () => {
     await screen.findByRole('heading', { name: 'Config grants' });
 
     await openRotateDialog();
-    await setField('New API key', 'some-new-key');
+    // The read-only field arrives with a generated key — no typing needed.
     await fireEvent.click(
       screen.getByRole('checkbox', { name: /I understand the current key stops working/ }),
     );

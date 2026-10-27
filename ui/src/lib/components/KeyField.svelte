@@ -10,23 +10,52 @@
   let { id, label, value = $bindable('') }: Props = $props();
 
   let revealed = $state(false);
-  let copied = $state(false);
+  let status = $state('');
+  let statusSeq = 0;
+  let statusTimer: ReturnType<typeof setTimeout> | undefined;
 
-  // Only offered on secure origins (crypto.subtle); hidden otherwise.
+  // Generation only needs getRandomValues — available on secure and insecure
+  // origins alike. Hidden solely when Web Crypto is missing entirely.
   const mayGenerate = canGenerateKey();
   // navigator.clipboard is unavailable on insecure origins — disable Copy
   // there instead of silently doing nothing (Reveal is the fallback).
   const mayCopy = typeof navigator !== 'undefined' && Boolean(navigator.clipboard);
 
+  function announce(message: string): void {
+    status = message;
+    const seq = ++statusSeq;
+    clearTimeout(statusTimer);
+    statusTimer = setTimeout(() => {
+      if (seq === statusSeq) status = '';
+    }, 2000);
+  }
+
+  // The dialog remounts this field per open ({#key}) — never let a
+  // status-clear timer outlive the component it belongs to.
+  $effect(() => () => clearTimeout(statusTimer));
+
+  function regenerate(): void {
+    value = generateUserKey();
+    revealed = false;
+    announce('New key generated.');
+  }
+
   async function copy(): Promise<void> {
     if (!navigator.clipboard || !value) return;
     try {
       await navigator.clipboard.writeText(value);
-      copied = true;
-      setTimeout(() => (copied = false), 2000);
+      announce('Copied to clipboard.');
     } catch {
-      copied = false;
+      status = '';
     }
+  }
+
+  // Generated-only field: never typed. Browsers already block typing on a
+  // read-only input; this re-syncs from state if an input event fires anyway
+  // (scripted DOM, autofill), so what is displayed always equals the
+  // generated key that will be submitted.
+  function resync(event: Event): void {
+    (event.currentTarget as HTMLInputElement).value = value;
   }
 </script>
 
@@ -36,12 +65,14 @@
     <input
       {id}
       type={revealed ? 'text' : 'password'}
-      bind:value
+      value={value}
+      oninput={resync}
+      readonly
       autocomplete="off"
       spellcheck="false"
     />
     {#if mayGenerate}
-      <button type="button" onclick={() => (value = generateUserKey())}>Generate</button>
+      <button type="button" onclick={regenerate}>Regenerate</button>
     {/if}
     <button type="button" aria-pressed={revealed} onclick={() => (revealed = !revealed)}>
       {revealed ? 'Hide' : 'Reveal'}
@@ -49,7 +80,7 @@
     <button type="button" onclick={copy} disabled={!value || !mayCopy}>Copy</button>
   </div>
   <p class="hint" role="status" aria-live="polite">
-    {copied ? 'Copied to clipboard.' : ''}
+    {status}
   </p>
 </div>
 

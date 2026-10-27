@@ -1,5 +1,6 @@
 <script lang="ts">
   import { ApiError, createUser, type User } from '../api';
+  import { canGenerateKey, generateUserKey } from '../keygen';
   import { rateLimitSeconds, triggerRateLimit } from '../rate';
   import { reportMutation } from '../toasts';
   import KeyField from './KeyField.svelte';
@@ -26,10 +27,11 @@
     if (!dialogEl) return;
     if (open && !dialogEl.open) {
       // Fresh attempt every time the dialog opens — no stale error or
-      // leftover key material from a cancelled attempt.
+      // leftover key material from a cancelled attempt, and a freshly
+      // generated key so the operator never types one.
       fieldError = '';
       username = '';
-      key = '';
+      key = canGenerateKey() ? generateUserKey() : '';
       dialogEl.showModal();
     }
     if (!open && dialogEl.open) dialogEl.close();
@@ -43,7 +45,7 @@
     event.preventDefault();
     if (submitting || $rateLimitSeconds > 0) return;
     const enteredUsername = username.trim();
-    const enteredKey = key; // exact admin-visible value — never transformed
+    const enteredKey = key; // exact generated value shown in the field
     fieldError = '';
     submitting = true;
     try {
@@ -90,8 +92,8 @@
       <KeyField id="create-key" label="API key" bind:value={key} />
     {/key}
     <p class="hint">
-      The key is shown only here — the server stores only its hash. Reveal and copy it before you
-      close this dialog.
+      A new API key has been generated — the server stores only its hash. Reveal and copy it before
+      you close this dialog; it cannot be shown again.
     </p>
     <div class="actions">
       <button type="button" onclick={close}>Cancel</button>
