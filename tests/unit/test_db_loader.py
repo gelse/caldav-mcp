@@ -454,3 +454,34 @@ class TestStorePathAccess:
         msg = str(excinfo.value)
         assert "errno=" in msg, f"message must include errno: {msg!r}"
         assert "not found" not in msg.lower(), f"other OSError must not say not found: {msg!r}"
+
+    def test_non_regular_file_raises_distinct_message(self, tmp_path: Path) -> None:
+        """A FIFO at the store path → distinct message, never handed to SQLite."""
+        fifo = tmp_path / "store.db"
+        os.mkfifo(fifo)
+
+        with pytest.raises(ProConfigError) as excinfo:
+            load_pro_state(str(fifo), SECRET)
+
+        msg = str(excinfo.value)
+        assert "not a regular file" in msg, f"expected non-regular-file text: {msg!r}"
+        assert str(fifo) in msg
+        assert "not found" not in msg.lower()
+        assert "permission denied" not in msg.lower()
+
+    def test_readonly_store_still_loads(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A mode-0444 store loads fine (SQLite read-only fallback) — the startup
+        writability warning fires *after* such a successful load, never instead
+        of it.  Works for root too (root ignores the mode)."""
+        db = str(tmp_path / "store.db")
+        monkeypatch.setenv("CALDAV_MCP_CONFIG_SECRET", SECRET)
+        _seed_store(db)
+        Path(db).chmod(0o444)
+        try:
+            state = load_pro_state(db, SECRET)
+        finally:
+            Path(db).chmod(0o644)
+
+        assert state.app_config.configs[0].name == "work"

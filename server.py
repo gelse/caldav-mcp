@@ -276,9 +276,8 @@ def main() -> None:
             # write means every admin mutation would 503 later — surface it
             # now while the mount/ownership is still fresh in mind.
             _db_path = os.environ["CALDAV_MCP_DB_PATH"].strip()
-            if not os.access(_db_path, os.W_OK) or not os.access(
-                os.path.dirname(_db_path) or ".", os.W_OK
-            ):
+            _store_dir = os.path.dirname(os.path.realpath(_db_path)) or "."
+            if not os.access(_db_path, os.W_OK) or not os.access(_store_dir, os.W_OK | os.X_OK):
                 log.warning(
                     "Admin API enabled but pro-mode config store %r is not writable by "
                     "uid=%d gid=%d — admin mutations will fail until the store is "

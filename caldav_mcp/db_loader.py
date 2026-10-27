@@ -185,6 +185,10 @@ def _check_store_path(db_path: str) -> None:
         raise ProConfigError(
             f"Pro-mode config store path is a directory, not a SQLite database file: {db_path!r}"
         )
+    if not stat.S_ISREG(st.st_mode):
+        # Device/FIFO/socket at the path — never hand these to SQLite (the
+        # pre-stat is_file() check used to reject every non-regular file).
+        raise ProConfigError(f"Pro-mode config store path is not a regular file: {db_path!r}")
     if not os.access(db_path, os.R_OK):
         raise ProConfigError(
             f"Pro-mode config store permission denied: cannot read {db_path!r} as "

@@ -303,6 +303,7 @@ def _run_main_pro_mode(
     with (
         mock.patch.object(config, "ADMIN_KEY", admin_key),
         mock.patch.object(config, "DB_CONFIG_ENABLED", True),
+        mock.patch.object(config, "SHOW_UI", False),
         mock.patch.object(server, "API_KEY", ""),
         mock.patch.object(db_loader, "load_pro_state", return_value=pro_stub),
         mock.patch.object(app_config, "configure_app_config"),

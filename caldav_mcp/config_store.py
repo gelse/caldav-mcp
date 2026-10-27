@@ -261,6 +261,8 @@ def _describe_open_failure(path: str, exc: sqlite3.OperationalError) -> str:
 
     if stat.S_ISDIR(st.st_mode):
         return f"path is a directory, not a SQLite database file (running as uid={uid} gid={gid})"
+    if not stat.S_ISREG(st.st_mode):
+        return f"path is not a regular file (running as uid={uid} gid={gid})"
     if not os.access(path, os.R_OK):
         return f"permission denied reading {path!r} (running as uid={uid} gid={gid})"
     if not os.access(path, os.W_OK):
