@@ -351,29 +351,19 @@ class TestShowUIConfig:
         assert _reload_show_ui(None) is False
 
 
-@pytest.fixture()
-def show_ui_dist(tmp_path):
-    """Minimal dist fixture (index.html only) for the server.py gate test."""
-    (tmp_path / "index.html").write_text(
-        "<!doctype html><html><head><title>gate-fixture</title></head></html>",
-        encoding="utf-8",
-    )
-    return tmp_path
-
-
 def _run_main_show_ui(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     show_ui: bool,
-    ui_dist,
 ) -> tuple[list[str], mock.MagicMock]:
     """Run ``server.main()`` with ``SHOW_UI`` controlled and the UI spy armed.
 
     Mirrors ``_run_main_simple_mode``: the HTTP launch, the app-config
-    singleton, and the pro/simple branch flags are patched.  The spy wraps
-    the real ``configure_ui_routes`` (dist present via the patched
-    ``default_dist_dir``), so a true run both records the call and exercises
-    the real registration.  Returns ``(log messages, spy)``.
+    singleton, and the pro/simple branch flags are patched.  The spy
+    *replaces* ``configure_ui_routes`` so the shared ``server.mcp`` singleton
+    is never mutated (its real registration/fail-fast path is covered by
+    ``tests/unit/test_ui_static.py``); the gate's job is only the
+    called/never-called contract.  Returns ``(log messages, spy)``.
     """
     import server
     from caldav_mcp import app_config, config, ui_static
@@ -383,15 +373,10 @@ def _run_main_show_ui(
 
     app_stub = SimpleNamespace(mode="header")
     with (
-        mock.patch.object(
-            ui_static,
-            "configure_ui_routes",
-            wraps=ui_static.configure_ui_routes,
-        ) as spy,
+        mock.patch.object(ui_static, "configure_ui_routes") as spy,
         mock.patch.object(config, "SHOW_UI", show_ui),
         mock.patch.object(config, "ADMIN_KEY", ""),
         mock.patch.object(config, "DB_CONFIG_ENABLED", False),
-        mock.patch.object(ui_static, "default_dist_dir", return_value=ui_dist),
         mock.patch.object(app_config, "load_app_config", return_value=object()),
         mock.patch.object(app_config, "configure_app_config"),
         mock.patch.object(app_config, "get_app_config", return_value=app_stub),
@@ -409,23 +394,20 @@ class TestShowUIGate:
         self,
         monkeypatch: pytest.MonkeyPatch,
         caplog: pytest.LogCaptureFixture,
-        show_ui_dist,
     ) -> None:
         """SHOW_UI true → configure_ui_routes called exactly once with the shared mcp."""
         import server
 
-        messages, spy = _run_main_show_ui(monkeypatch, caplog, True, show_ui_dist)
-        spy.assert_called_once()
-        assert spy.call_args.args == (server.mcp,)
+        messages, spy = _run_main_show_ui(monkeypatch, caplog, True)
+        spy.assert_called_once_with(server.mcp)
         assert any("UI enabled at /ui (SHOW_UI=true)" in m for m in messages)
 
     def test_configure_never_called_when_show_ui_false(
         self,
         monkeypatch: pytest.MonkeyPatch,
         caplog: pytest.LogCaptureFixture,
-        show_ui_dist,
     ) -> None:
         """SHOW_UI false (default) → the routes are never registered."""
-        messages, spy = _run_main_show_ui(monkeypatch, caplog, False, show_ui_dist)
+        messages, spy = _run_main_show_ui(monkeypatch, caplog, False)
         spy.assert_not_called()
         assert not any("UI enabled at /ui" in m for m in messages)
