@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import errno
+import os
 from pathlib import Path
 
 import pytest
@@ -315,3 +317,140 @@ class TestBackwardCompat:
     def test_header_mode_configs_default_empty(self) -> None:
         app = AppConfig(mode="header", config=None)
         assert app.configs == ()
+
+
+# ---------------------------------------------------------------------------
+# Case 7: Store-path access errors → distinct, actionable ProConfigError
+# ---------------------------------------------------------------------------
+
+_IS_ROOT = getattr(os, "geteuid", lambda: -1)() == 0
+
+
+def _assert_permission_denied_message(msg: str, path: str) -> None:
+    """Shared contract for permission failures: actionable, never "not found"."""
+    assert "permission denied" in msg.lower(), f"message must say permission denied: {msg!r}"
+    assert "not found" not in msg.lower(), f"permission failure must not say not found: {msg!r}"
+    assert path in msg, f"message must include the store path {path!r}: {msg!r}"
+    assert f"uid={os.getuid()}" in msg, f"message must include the running uid: {msg!r}"
+    assert f"gid={os.getgid()}" in msg, f"message must include the running gid: {msg!r}"
+    # Remedies required by the bugfix contract.
+    assert "user:" in msg, f"message must mention the compose user: remedy: {msg!r}"
+    assert "chown -R 100:101" in msg, f"message must mention the chown remedy: {msg!r}"
+
+
+class TestStorePathAccess:
+    """Pro-mode store path probing maps errno → distinct ProConfigError messages.
+
+    Reproduction tests for the bind-mount permission bug: a store beneath a
+    directory the process cannot traverse (or a file it cannot read) must be
+    reported as *permission denied* with uid/gid and remedies — never as the
+    misleading "store not found" produced by a swallowed ``OSError``.
+    """
+
+    @pytest.mark.skipif(_IS_ROOT, reason="root bypasses filesystem permission checks")
+    def test_untraversable_parent_dir_raises_permission_denied(self, tmp_path: Path) -> None:
+        """chmod 000 parent directory → permission-denied message, not "not found"."""
+        locked = tmp_path / "locked"
+        locked.mkdir()
+        db = str(locked / "store.db")
+        locked.chmod(0o000)
+        try:
+            with pytest.raises(ProConfigError) as excinfo:
+                load_pro_state(db, SECRET)
+        finally:
+            locked.chmod(0o700)  # let pytest clean up tmp_path
+
+        _assert_permission_denied_message(str(excinfo.value), db)
+
+    def test_stat_permission_error_maps_to_permission_denied(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Root-safe variant: os.stat raising PermissionError → same message."""
+        db = str(tmp_path / "store.db")
+        Path(db).write_text("placeholder")
+
+        real_stat = os.stat
+
+        def deny_stat(path, *args, **kwargs):  # type: ignore[no-untyped-def]
+            if os.fspath(path) == db:
+                raise PermissionError(errno.EACCES, "Permission denied", os.fspath(path))
+            return real_stat(path, *args, **kwargs)
+
+        monkeypatch.setattr(os, "stat", deny_stat)
+
+        with pytest.raises(ProConfigError) as excinfo:
+            load_pro_state(db, SECRET)
+
+        _assert_permission_denied_message(str(excinfo.value), db)
+
+    def test_missing_store_still_reports_not_found(self, tmp_path: Path) -> None:
+        """True ENOENT keeps the original "store not found" contract."""
+        db = str(tmp_path / "does_not_exist.db")
+
+        with pytest.raises(ProConfigError) as excinfo:
+            load_pro_state(db, SECRET)
+
+        msg = str(excinfo.value)
+        assert "not found" in msg, f"true ENOENT must keep the not-found message: {msg!r}"
+        assert "permission denied" not in msg.lower()
+        assert db in msg
+
+    def test_store_path_directory_raises_distinct_message(self, tmp_path: Path) -> None:
+        """A directory at the store path gets a directory message (not not-found)."""
+        d = tmp_path / "store.db"
+        d.mkdir()
+
+        with pytest.raises(ProConfigError) as excinfo:
+            load_pro_state(str(d), SECRET)
+
+        msg = str(excinfo.value)
+        assert "directory" in msg.lower(), f"message must say directory: {msg!r}"
+        assert "not found" not in msg.lower()
+        assert "permission denied" not in msg.lower()
+        assert str(d) in msg
+
+    @pytest.mark.skipif(_IS_ROOT, reason="root bypasses filesystem permission checks")
+    def test_unreadable_store_file_raises_permission_denied(self, tmp_path: Path) -> None:
+        """chmod 000 file (parent traversable) → permission-denied naming the path."""
+        db = tmp_path / "store.db"
+        db.write_text("placeholder")
+        db.chmod(0o000)
+        try:
+            with pytest.raises(ProConfigError) as excinfo:
+                load_pro_state(str(db), SECRET)
+        finally:
+            db.chmod(0o600)
+
+        _assert_permission_denied_message(str(excinfo.value), str(db))
+
+    def test_unreadable_file_maps_via_access_check(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Root-safe variant: os.access(…, R_OK) False → permission-denied message."""
+        db = str(tmp_path / "store.db")
+        Path(db).write_text("placeholder")
+
+        real_access = os.access
+
+        def deny_read(path, mode, *args, **kwargs):  # type: ignore[no-untyped-def]
+            if os.fspath(path) == db and mode & os.R_OK:
+                return False
+            return real_access(path, mode, *args, **kwargs)
+
+        monkeypatch.setattr(os, "access", deny_read)
+
+        with pytest.raises(ProConfigError) as excinfo:
+            load_pro_state(db, SECRET)
+
+        _assert_permission_denied_message(str(excinfo.value), db)
+
+    def test_other_oserror_includes_errno(self, tmp_path: Path) -> None:
+        """ENAMETOOLONG-class OSError → distinct message including errno."""
+        db = str(tmp_path / ("x" * 300))  # component > NAME_MAX → OSError, not ENOENT
+
+        with pytest.raises(ProConfigError) as excinfo:
+            load_pro_state(db, SECRET)
+
+        msg = str(excinfo.value)
+        assert "errno=" in msg, f"message must include errno: {msg!r}"
+        assert "not found" not in msg.lower(), f"other OSError must not say not found: {msg!r}"

@@ -270,6 +270,119 @@ class TestAdminKeyStartupWarning:
 
 
 # ---------------------------------------------------------------------------
+# Pro-mode store writability warning (startup, never fatal)
+# ---------------------------------------------------------------------------
+
+
+def _run_main_pro_mode(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    *,
+    admin_key: str,
+    db_path: str,
+) -> tuple[list[str], mock.AsyncMock]:
+    """Run ``server.main()`` down the pro-mode path with side effects mocked.
+
+    Mirrors ``_run_main_simple_mode``: the HTTP launch, the config singleton,
+    the loader, and the admin-route registration are patched so the call is
+    side-effect free.  Returns ``(WARNING-level log messages, run spy)``.
+    """
+    import server
+    from caldav_mcp import admin, app_config, auth, config, db_loader
+
+    monkeypatch.setenv("DB_CONFIG_ENABLED", "true")
+    monkeypatch.setenv("CALDAV_MCP_DB_PATH", db_path)
+    monkeypatch.setenv("CALDAV_MCP_CONFIG_SECRET", "unit-test-secret")
+    monkeypatch.delenv("SHOW_UI", raising=False)
+    monkeypatch.delenv("CALDAV_URL", raising=False)
+
+    pro_stub = SimpleNamespace(
+        app_config=SimpleNamespace(mode="db", config=None, configs=()),
+        users=(),
+    )
+    with (
+        mock.patch.object(config, "ADMIN_KEY", admin_key),
+        mock.patch.object(config, "DB_CONFIG_ENABLED", True),
+        mock.patch.object(server, "API_KEY", ""),
+        mock.patch.object(db_loader, "load_pro_state", return_value=pro_stub),
+        mock.patch.object(app_config, "configure_app_config"),
+        mock.patch.object(auth, "configure_pro_users"),
+        mock.patch.object(admin, "configure_admin_routes") as admin_routes_spy,
+        mock.patch.object(server.mcp, "run_http_async", new=mock.AsyncMock()) as run_spy,
+        caplog.at_level(logging.WARNING, logger="caldav-mcp"),
+    ):
+        server.main()
+    assert admin_routes_spy.called or not admin_key
+    return [record.getMessage() for record in caplog.records], run_spy
+
+
+_IS_ROOT = getattr(os, "geteuid", lambda: -1)() == 0
+
+
+class TestProStoreWritableWarning:
+    """Admin API enabled + non-writable store → startup warning, never a failure."""
+
+    @pytest.mark.skipif(_IS_ROOT, reason="root bypasses filesystem permission checks")
+    def test_warns_when_store_not_writable(
+        self,
+        tmp_path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Read-only store file with admin key set → one actionable warning."""
+        db = tmp_path / "store.db"
+        db.write_text("placeholder")
+        db.chmod(0o444)
+        try:
+            messages, run_spy = _run_main_pro_mode(
+                monkeypatch, caplog, admin_key="test-admin-key", db_path=str(db)
+            )
+        finally:
+            db.chmod(0o644)
+
+        warnings = [m for m in messages if "not writable" in m]
+        assert len(warnings) == 1, f"expected exactly one writability warning: {messages}"
+        assert str(db) in warnings[0]
+        assert f"uid={os.getuid()}" in warnings[0]
+        assert f"gid={os.getgid()}" in warnings[0]
+        # Never fatal: startup continued to the HTTP launch.
+        run_spy.assert_called_once()
+
+    def test_no_warning_when_store_writable(
+        self,
+        tmp_path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Writable store → no writability warning."""
+        db = tmp_path / "store.db"
+        db.write_text("placeholder")
+
+        messages, _ = _run_main_pro_mode(
+            monkeypatch, caplog, admin_key="test-admin-key", db_path=str(db)
+        )
+        assert not any("not writable" in m for m in messages)
+
+    def test_warning_does_not_echo_admin_key(
+        self,
+        tmp_path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """No-secrets rule: the admin key value never appears in any message."""
+        secret = "super-secret-admin-key-do-not-log"
+        db = tmp_path / "store.db"
+        db.write_text("placeholder")
+        db.chmod(0o444)
+        try:
+            messages, _ = _run_main_pro_mode(monkeypatch, caplog, admin_key=secret, db_path=str(db))
+        finally:
+            db.chmod(0o644)
+        for message in messages:
+            assert secret not in message
+
+
+# ---------------------------------------------------------------------------
 # SHOW_UI (milestone UI-M3, design (a) + (d))
 # ---------------------------------------------------------------------------
 

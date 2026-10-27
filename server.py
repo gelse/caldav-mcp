@@ -272,6 +272,21 @@ def main() -> None:
         if ADMIN_KEY:
             from caldav_mcp.admin import configure_admin_routes
 
+            # Startup warning (never fatal): a store the current uid cannot
+            # write means every admin mutation would 503 later — surface it
+            # now while the mount/ownership is still fresh in mind.
+            _db_path = os.environ["CALDAV_MCP_DB_PATH"].strip()
+            if not os.access(_db_path, os.W_OK) or not os.access(
+                os.path.dirname(_db_path) or ".", os.W_OK
+            ):
+                log.warning(
+                    "Admin API enabled but pro-mode config store %r is not writable by "
+                    "uid=%d gid=%d — admin mutations will fail until the store is "
+                    'writable (compose `user: "<uid>:<gid>"` or `chown -R 100:101 <dir>`)',
+                    _db_path,
+                    os.getuid(),
+                    os.getgid(),
+                )
             configure_admin_routes(mcp)
         else:
             log.info("Admin API disabled: CALDAV_MCP_ADMIN_KEY is not set")

@@ -86,6 +86,7 @@ from caldav_mcp.config_store import (
     StoreConflictError,
     StoreError,
     StoreNotFoundError,
+    StoreOpenError,
     StoreSchemaError,
     StoreValidationError,
     UserRecord,
@@ -197,6 +198,10 @@ def _map_store_error(exc: Exception) -> JSONResponse:
         status_code, message = 503, f"config store unavailable: {exc}"
     elif isinstance(exc, sqlite3.OperationalError):
         # Locked or unreadable store — carries the retry hint (edge-case table).
+        status_code, message = 503, f"config store unavailable ({exc}) - retry shortly"
+    elif isinstance(exc, StoreOpenError):
+        # Typed open failure (permission/dir/…) — same retry-hint contract as
+        # the raw sqlite3.OperationalError it replaced.
         status_code, message = 503, f"config store unavailable ({exc}) - retry shortly"
     elif isinstance(exc, StoreError):
         status_code, message = 503, f"config store unavailable: {exc}"
