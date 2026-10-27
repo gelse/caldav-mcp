@@ -20,8 +20,9 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import os
+import stat
 from dataclasses import dataclass
-from pathlib import Path
 
 from cryptography.fernet import Fernet, InvalidToken
 
@@ -141,6 +142,63 @@ class ProConfigError(Exception):
     """
 
 
+def _check_store_path(db_path: str) -> None:
+    """Validate that *db_path* points at an accessible regular file.
+
+    An explicit ``os.stat`` probe replaces a blind existence check so that
+    permission failures (e.g. a bind-mounted store directory the container
+    user cannot traverse) are never reported as "store not found".  The
+    mapping — each with a distinct, actionable message carrying the path,
+    the running uid/gid and concrete remedies, never secrets:
+
+    * ``FileNotFoundError``  → "store not found" (original ENOENT contract),
+    * ``PermissionError``    → "permission denied" (inaccessible parent dir),
+    * directory at the path  → "is a directory, not a SQLite database file",
+    * file not readable      → "permission denied" (file mode),
+    * any other ``OSError``  → message including the errno.
+
+    Raises
+    ------
+    ProConfigError
+        On any of the failure classes above.
+    """
+    try:
+        st = os.stat(db_path)
+    except FileNotFoundError as exc:
+        raise ProConfigError(f"Pro-mode config store not found: {db_path!r}") from exc
+    except PermissionError as exc:
+        raise ProConfigError(
+            f"Pro-mode config store permission denied: cannot access {db_path!r} as "
+            f"uid={os.getuid()} gid={os.getgid()} "
+            f"({exc.strerror or exc}; a parent directory is likely not traversable). "
+            f"Fix: run the container as the store owner via compose "
+            f'`user: "<uid>:<gid>"`, or `chown -R 100:101 <dir>` so the store '
+            f"matches the image's app user (uid=100 gid=101)."
+        ) from exc
+    except OSError as exc:
+        raise ProConfigError(
+            f"Cannot access pro-mode config store {db_path!r}: {exc.strerror or exc} "
+            f"(errno={exc.errno}) — check the path and its parent directory/mount."
+        ) from exc
+
+    if stat.S_ISDIR(st.st_mode):
+        raise ProConfigError(
+            f"Pro-mode config store path is a directory, not a SQLite database file: {db_path!r}"
+        )
+    if not stat.S_ISREG(st.st_mode):
+        # Device/FIFO/socket at the path — never hand these to SQLite (the
+        # pre-stat is_file() check used to reject every non-regular file).
+        raise ProConfigError(f"Pro-mode config store path is not a regular file: {db_path!r}")
+    if not os.access(db_path, os.R_OK):
+        raise ProConfigError(
+            f"Pro-mode config store permission denied: cannot read {db_path!r} as "
+            f"uid={os.getuid()} gid={os.getgid()} (file mode denies read access). "
+            f"Fix: run the container as the store owner via compose "
+            f'`user: "<uid>:<gid>"`, or `chown -R 100:101 <dir>` so the store '
+            f"matches the image's app user (uid=100 gid=101)."
+        )
+
+
 def load_pro_state(db_path: str, secret: str) -> ProState:
     """Read the SQLite store and assemble an ``AppConfig`` + user snapshot.
 
@@ -155,13 +213,13 @@ def load_pro_state(db_path: str, secret: str) -> ProState:
     Raises
     ------
     ProConfigError
-        When the store file is missing, unreadable, or its schema version
-        is newer than the code supports.
+        When the store file is missing, unreadable (permission denied on
+        the file or a parent directory), not a regular file, or its schema
+        version is newer than the code supports.
     ConfigSecretError
         When decryption of any stored password fails (wrong secret).
     """
-    if not Path(db_path).is_file():
-        raise ProConfigError(f"Pro-mode config store not found: {db_path!r}")
+    _check_store_path(db_path)
 
     try:
         with ConfigStore(db_path) as store:

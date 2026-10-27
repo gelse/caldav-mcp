@@ -7,7 +7,9 @@ All tests follow the plain-function style of tests/unit/test_auth.py.
 from __future__ import annotations
 
 import dataclasses
+import os
 import sqlite3
+from pathlib import Path
 
 import pytest
 
@@ -18,7 +20,9 @@ from caldav_mcp.config_store import (
     ConfigStore,
     RemoteRecord,
     StoreConflictError,
+    StoreError,
     StoreNotFoundError,
+    StoreOpenError,
     StoreSchemaError,
     StoreValidationError,
     UserRecord,
@@ -97,6 +101,67 @@ def test_newer_schema_version_raises(tmp_path):
     conn.close()
     with pytest.raises(StoreSchemaError, match="newer than supported"):
         ConfigStore(path).__enter__()
+
+
+# ---------------------------------------------------------------------------
+# 2b. Open-path failures → typed StoreError, never an opaque sqlite3 error
+# ---------------------------------------------------------------------------
+
+_IS_ROOT = getattr(os, "geteuid", lambda: -1)() == 0
+
+
+@pytest.mark.skipif(_IS_ROOT, reason="root bypasses filesystem permission checks")
+def test_open_unreadable_file_raises_typed_store_error(tmp_path):
+    """EACCES on the store file itself → typed StoreError naming path + uid/gid."""
+    path = _store_path(tmp_path, "unreadable.db")
+    p = Path(path)
+    p.write_text("placeholder")
+    p.chmod(0o000)
+    try:
+        with pytest.raises(StoreError) as excinfo:
+            ConfigStore(path)
+    finally:
+        p.chmod(0o600)
+
+    msg = str(excinfo.value)
+    assert "permission denied" in msg.lower(), f"expected permission-denied text: {msg!r}"
+    assert path in msg, f"expected store path in message: {msg!r}"
+    assert f"uid={os.getuid()}" in msg, f"expected running uid in message: {msg!r}"
+    assert f"gid={os.getgid()}" in msg, f"expected running gid in message: {msg!r}"
+    # The typed error must be StoreOpenError (a StoreError subclass), not
+    # sqlite3.OperationalError leaking through.
+    assert isinstance(excinfo.value, StoreOpenError)
+
+
+def test_open_directory_path_raises_typed_store_error(tmp_path):
+    """A directory at the store path → typed StoreError with a directory message."""
+    path = str(tmp_path)
+    with pytest.raises(StoreError) as excinfo:
+        ConfigStore(path)
+
+    msg = str(excinfo.value)
+    assert "directory" in msg.lower(), f"expected directory text: {msg!r}"
+    assert path in msg, f"expected store path in message: {msg!r}"
+    assert isinstance(excinfo.value, StoreOpenError)
+
+
+def test_open_operational_error_is_wrapped_typed(monkeypatch, tmp_path):
+    """Root-safe variant: sqlite3.connect failure → typed StoreError, sqlite text kept."""
+    path = _store_path(tmp_path, "wrapped.db")
+
+    def boom(*args, **kwargs):
+        raise sqlite3.OperationalError("unable to open database file")
+
+    monkeypatch.setattr("caldav_mcp.config_store.sqlite3.connect", boom)
+
+    with pytest.raises(StoreError) as excinfo:
+        ConfigStore(path)
+
+    msg = str(excinfo.value)
+    assert path in msg
+    assert "unable to open database file" in msg
+    assert isinstance(excinfo.value, StoreOpenError)
+    assert not isinstance(excinfo.value, sqlite3.OperationalError)
 
 
 # ---------------------------------------------------------------------------

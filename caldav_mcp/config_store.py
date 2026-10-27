@@ -55,8 +55,10 @@ or ``ROLLBACK``) via ``isolation_level=None``.
 
 from __future__ import annotations
 
+import os
 import re
 import sqlite3
+import stat
 from dataclasses import dataclass
 from typing import Literal
 
@@ -83,6 +85,15 @@ class StoreNotFoundError(StoreError):
 
 class StoreSchemaError(StoreError):
     """Raised when the on-disk schema version is newer than this code supports."""
+
+
+class StoreOpenError(StoreError):
+    """Raised when the SQLite database file cannot be opened.
+
+    Surfaces permission problems, a directory at the store path, or a
+    missing parent directory with an actionable message (path + running
+    uid/gid, never secrets) instead of an opaque ``sqlite3.OperationalError``.
+    """
 
 
 # ---------------------------------------------------------------------------
@@ -215,6 +226,54 @@ def _validate_remote_auth(remote: RemoteRecord) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Open-failure diagnostics
+# ---------------------------------------------------------------------------
+
+
+def _describe_open_failure(path: str, exc: sqlite3.OperationalError) -> str:
+    """Turn an opaque sqlite3 open failure into an actionable description.
+
+    Probes the path (never raising) to distinguish permission problems, a
+    directory at the store path, and a missing parent directory from the
+    generic sqlite message.  Includes the path and the running uid/gid;
+    never secrets.
+    """
+    uid, gid = os.getuid(), os.getgid()
+    try:
+        st = os.stat(path)
+    except FileNotFoundError:
+        parent = os.path.dirname(os.path.abspath(path)) or "."
+        if not os.path.isdir(parent):
+            return f"parent directory {parent!r} does not exist — check the path/mount"
+        if not os.access(parent, os.W_OK | os.X_OK):
+            return (
+                f"permission denied creating the store in {parent!r} "
+                f"(running as uid={uid} gid={gid})"
+            )
+        return str(exc)
+    except PermissionError:
+        return (
+            f"permission denied accessing {path!r} or a parent directory "
+            f"(running as uid={uid} gid={gid})"
+        )
+    except OSError:
+        return str(exc)
+
+    if stat.S_ISDIR(st.st_mode):
+        return f"path is a directory, not a SQLite database file (running as uid={uid} gid={gid})"
+    if not stat.S_ISREG(st.st_mode):
+        return f"path is not a regular file (running as uid={uid} gid={gid})"
+    if not os.access(path, os.R_OK):
+        return f"permission denied reading {path!r} (running as uid={uid} gid={gid})"
+    if not os.access(path, os.W_OK):
+        return (
+            f"permission denied writing {path!r} (running as uid={uid} gid={gid}) — "
+            f"store is read-only; CLI/admin mutations will fail"
+        )
+    return str(exc)
+
+
+# ---------------------------------------------------------------------------
 # ConfigStore
 # ---------------------------------------------------------------------------
 
@@ -235,7 +294,15 @@ class ConfigStore:
 
     def __init__(self, path: str) -> None:
         self._path = path
-        self._conn: sqlite3.Connection = sqlite3.connect(self._path, isolation_level=None)
+        try:
+            self._conn: sqlite3.Connection = sqlite3.connect(self._path, isolation_level=None)
+        except sqlite3.OperationalError as exc:
+            # Inaccessible file/dir (EACCES, directory at path, missing
+            # parent, …) surfaces from sqlite as an opaque "unable to open
+            # database file" — map it to a typed, actionable error.
+            raise StoreOpenError(
+                f"Cannot open config store {path!r}: {_describe_open_failure(path, exc)}"
+            ) from exc
         self._conn.execute("PRAGMA foreign_keys = ON")
         self._init_schema()
 
