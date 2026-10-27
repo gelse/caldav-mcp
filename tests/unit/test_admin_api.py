@@ -1,4 +1,4 @@
-"""Unit tests for the admin REST API (M2.3 guard + GET, M3.1 writes, M4.1 key rotation).
+"""Unit tests for the admin REST API (M2.3 reads, M3.1 writes, M4.1 rotation, M5.1 reload).
 
 **Test vehicle (pinned by the milestone):** Starlette ``TestClient`` against
 the FastMCP HTTP app (``mcp.http_app()``) — the guard consumes a real
@@ -7,10 +7,17 @@ pinned vehicle proved compatible with the installed fastmcp 3.4.7, so no
 fallback to direct-handler invocation was needed.
 
 Fixture pattern mirrors ``tests/unit/test_auth_pro_mode.py``: autouse
-``configure_app_config``/``configure_pro_users`` + env patching + teardown;
+``configure_app_config``/pro-user-snapshot reset + env patching + teardown;
 the admin rate limiter is isolated per test by installing a fresh
 ``RateLimiter`` on ``caldav_mcp.admin.admin_rate_limiter`` (yielded so tests
 can assert on genuinely recorded failures).
+
+M5.1 (users-only hot reload): mutation responses carry no
+``restart_required``; a failed post-write snapshot refresh adds
+``"reload": "failed"``; grant/replace attach
+``config_topology_restart_required`` only when a referenced config is
+absent from the frozen topology.  Snapshot swaps are observed through
+``get_pro_users()``.
 
 All tests are Docker-free: the store is a per-test SQLite file in ``tmp_path``.
 """
@@ -39,7 +46,9 @@ from caldav_mcp.app_config import (
     configure_app_config,
     reset_app_config,
 )
+from caldav_mcp.auth import configure_pro_users, get_pro_users, reset_pro_users
 from caldav_mcp.config_store import ConfigStore, RemoteRecord, StoreConflictError
+from caldav_mcp.db_loader import ProUser
 from caldav_mcp.key_hash import hash_api_key, verify_api_key
 from caldav_mcp.rate_limit import RateLimiter
 
@@ -113,7 +122,9 @@ def _admin_setup(tmp_path, monkeypatch):
 
     Yields the fresh ``RateLimiter`` installed on ``caldav_mcp.admin`` so
     tests can assert on genuinely recorded failures (fixture pattern of
-    ``test_auth_pro_mode.py``).
+    ``test_auth_pro_mode.py``).  The pro-user snapshot is reset to ``()``
+    around each test: M5 mutations swap it via ``configure_pro_users``, so
+    every test starts from a known slate and none leaks a snapshot.
     """
     db_path = str(tmp_path / "admin-store.db")
     with ConfigStore(db_path) as store:
@@ -124,9 +135,11 @@ def _admin_setup(tmp_path, monkeypatch):
     monkeypatch.setenv("CALDAV_MCP_DB_PATH", db_path)
     monkeypatch.setattr(config, "ADMIN_KEY", _ADMIN_KEY, raising=True)
     configure_app_config(_PRO_APP)
+    reset_pro_users()
     fresh = RateLimiter(max_failures=3, window_seconds=300)
     with mock.patch.object(admin, "admin_rate_limiter", fresh):
         yield fresh
+    reset_pro_users()
     reset_app_config()
 
 
@@ -469,7 +482,7 @@ def test_unexpected_error_500_generic_message(client):
 
 
 def test_create_user_201_hashes_key_and_audits(client):
-    """201 with the user payload + restart_required; key stored hashed only."""
+    """201 with the user payload (live apply, no restart signal); key stored hashed only."""
     with mock.patch.object(admin, "log_admin_operation") as mock_admin_audit:
         resp = client.post(
             "/admin/users",
@@ -478,11 +491,10 @@ def test_create_user_201_hashes_key_and_audits(client):
         )
     assert resp.status_code == 201
     body = resp.json()
-    # User payload + restart signal; never key material (Design (f)).
-    assert set(body) == {"username", "configs", "restart_required"}
+    # User payload only — M5 dropped "restart_required"; never key material.
+    assert set(body) == {"username", "configs"}
     assert body["username"] == "carol"
     assert body["configs"] == []
-    assert body["restart_required"] is True
     assert "carol-plain-key" not in resp.text
     assert "key_hash" not in resp.text
     # Completed CRUD outcome audited; audit arguments carry no secrets.
@@ -605,8 +617,8 @@ def test_guard_runs_before_body_parse_on_writes(client):
 # ---------------------------------------------------------------------------
 
 
-def test_delete_user_200_with_restart_body(client):
-    """Create → DELETE → 200 {deleted, username, restart_required} → 404 on GET."""
+def test_delete_user_200_with_live_body(client):
+    """Create → DELETE → 200 {deleted, username} → 404 on GET (applies live)."""
     created = client.post(
         "/admin/users",
         json={"username": "dave", "key": "dave-key"},
@@ -616,11 +628,7 @@ def test_delete_user_200_with_restart_body(client):
     with mock.patch.object(admin, "log_admin_operation") as mock_admin_audit:
         resp = client.delete("/admin/users/dave", headers=_BEARER)
     assert resp.status_code == 200
-    assert resp.json() == {
-        "deleted": True,
-        "username": "dave",
-        "restart_required": True,
-    }
+    assert resp.json() == {"deleted": True, "username": "dave"}
     mock_admin_audit.assert_called_once_with(
         action="delete_user", status="ok", target_user="dave", client_ip="testclient"
     )
@@ -651,7 +659,7 @@ def test_delete_user_400_transport_guard(client):
 
 
 def test_grant_config_200_idempotent(client):
-    """Grant → 200 user + restart_required; re-grant is a no-op → 200."""
+    """Grant → 200 user (no restart signal, no topology flag); re-grant → 200."""
     with mock.patch.object(admin, "log_admin_operation") as mock_admin_audit:
         resp = client.post(
             "/admin/users/bob/configs",
@@ -660,10 +668,10 @@ def test_grant_config_200_idempotent(client):
         )
     assert resp.status_code == 200
     body = resp.json()
-    assert set(body) == {"username", "configs", "restart_required"}
+    # "default" is part of the frozen topology → no config_topology flag.
+    assert set(body) == {"username", "configs"}
     assert body["username"] == "bob"
     assert body["configs"] == ["default"]
-    assert body["restart_required"] is True
     mock_admin_audit.assert_called_once_with(
         action="grant_config", status="ok", target_user="bob", client_ip="testclient"
     )
@@ -730,15 +738,15 @@ def test_grant_config_400_passthrough_violation(client):
 
 
 def test_revoke_config_200_idempotent_with_body(client):
-    """Revoke → 200 {revoked, username, config, restart_required}; repeat → 200."""
+    """Revoke → 200 {revoked, username, config}; repeat → 200 (no signals)."""
     with mock.patch.object(admin, "log_admin_operation") as mock_admin_audit:
         resp = client.delete("/admin/users/alice/configs/default", headers=_BEARER)
     assert resp.status_code == 200
+    # No restart_required, no reload, and never the topology flag (edge table).
     assert resp.json() == {
         "revoked": True,
         "username": "alice",
         "config": "default",
-        "restart_required": True,
     }
     mock_admin_audit.assert_called_once_with(
         action="revoke_config",
@@ -776,7 +784,7 @@ def test_revoke_config_404_unknown_user_precheck(client):
 
 
 def test_replace_configs_200_replace_all(client):
-    """Replace-all → 200 user + restart_required; duplicates deduped; [] clears."""
+    """Replace-all → 200 user; duplicates deduped; [] clears (live apply)."""
     with mock.patch.object(admin, "log_admin_operation") as mock_admin_audit:
         resp = client.put(
             "/admin/users/bob/configs",
@@ -785,9 +793,9 @@ def test_replace_configs_200_replace_all(client):
         )
     assert resp.status_code == 200
     body = resp.json()
-    assert set(body) == {"username", "configs", "restart_required"}
+    # All referenced configs frozen → no config_topology flag either.
+    assert set(body) == {"username", "configs"}
     assert body["configs"] == ["default"]  # set semantics: deduped
-    assert body["restart_required"] is True
     mock_admin_audit.assert_called_once_with(
         action="set_user_configs",
         status="ok",
@@ -941,7 +949,7 @@ def test_create_user_503_store_unavailable(client, tmp_path, monkeypatch):
 
 
 def test_rotate_key_200_rotates_hash_and_audits(client):
-    """Rotate → 200 {username, rotated, restart_required}; store hash swapped."""
+    """Rotate → 200 {username, rotated} (no restart signal); store hash swapped."""
     with mock.patch.object(admin, "log_admin_operation") as mock_admin_audit:
         resp = client.put(
             "/admin/users/alice/key",
@@ -950,10 +958,9 @@ def test_rotate_key_200_rotates_hash_and_audits(client):
         )
     assert resp.status_code == 200
     body = resp.json()
-    assert set(body) == {"username", "rotated", "restart_required"}
+    assert set(body) == {"username", "rotated"}
     assert body["username"] == "alice"
     assert body["rotated"] is True
-    assert body["restart_required"] is True
     # Completed CRUD outcome audited; audit arguments carry no key material.
     mock_admin_audit.assert_called_once_with(
         action="rotate_key", status="ok", target_user="alice", client_ip="testclient"
@@ -1106,3 +1113,231 @@ def test_rotate_key_400_invalid_utf8_key(client):
     with ConfigStore(os.environ["CALDAV_MCP_DB_PATH"]) as store:
         record = store.get_user("alice")
     assert verify_api_key("alice-unit-key", record.key_hash)
+
+
+# ---------------------------------------------------------------------------
+# 15. M5.1 users-only hot reload: snapshot swap + reload-failure signal
+#     (all names contain "reload" — the milestone's `-k reload` gate)
+# ---------------------------------------------------------------------------
+
+
+def test_create_user_reload_swaps_pro_users_snapshot(client):
+    """POST 201 → get_pro_users() swapped to the store contents (no restart).
+
+    The fixture installs no snapshot (``()``), so observing the full store
+    tuple afterwards proves the post-write refresh ran
+    (``_refresh_pro_users`` → ``configure_pro_users``).
+    """
+    assert get_pro_users() == ()
+    resp = client.post(
+        "/admin/users",
+        json={"username": "carol", "key": "carol-plain-key"},
+        headers=_BEARER,
+    )
+    assert resp.status_code == 201
+    users = get_pro_users()
+    assert [u.username for u in users] == ["alice", "bob", "carol"]
+    carol = users[-1]
+    assert verify_api_key("carol-plain-key", carol.key_hash)
+    assert carol.config_names == ()
+    # Live apply: no restart_required (and no reload signal on success).
+    assert set(resp.json()) == {"username", "configs"}
+
+
+def test_delete_user_reload_removes_from_snapshot(client):
+    """DELETE 200 → the user is gone from get_pro_users() immediately."""
+    created = client.post(
+        "/admin/users",
+        json={"username": "dave", "key": "dave-key"},
+        headers=_BEARER,
+    )
+    assert created.status_code == 201
+    assert [u.username for u in get_pro_users()] == ["alice", "bob", "dave"]
+    resp = client.delete("/admin/users/dave", headers=_BEARER)
+    assert resp.status_code == 200
+    assert [u.username for u in get_pro_users()] == ["alice", "bob"]
+
+
+def test_rotate_key_reload_updates_snapshot_hash(client):
+    """Rotate → the snapshot carries the new hash; the old key stops verifying."""
+    assert get_pro_users() == ()
+    resp = client.put(
+        "/admin/users/alice/key",
+        json={"key": "alice-unit-key-v2"},
+        headers=_BEARER,
+    )
+    assert resp.status_code == 200
+    users = {u.username: u for u in get_pro_users()}
+    assert set(users) == {"alice", "bob"}
+    assert verify_api_key("alice-unit-key-v2", users["alice"].key_hash)
+    assert not verify_api_key("alice-unit-key", users["alice"].key_hash)
+
+
+def test_grant_revoke_reload_update_snapshot_grants(client):
+    """grant/revoke → the snapshot's config_names swap without a restart."""
+    assert get_pro_users() == ()
+    granted = client.post(
+        "/admin/users/bob/configs",
+        json={"config": "default"},
+        headers=_BEARER,
+    )
+    assert granted.status_code == 200
+    users = {u.username: u for u in get_pro_users()}
+    assert users["alice"].config_names == ("default",)
+    assert users["bob"].config_names == ("default",)
+    revoked = client.delete("/admin/users/bob/configs/default", headers=_BEARER)
+    assert revoked.status_code == 200
+    users = {u.username: u for u in get_pro_users()}
+    assert users["alice"].config_names == ("default",)
+    assert users["bob"].config_names == ()
+
+
+def test_replace_reload_update_snapshot_grants(client):
+    """replace-all → the snapshot's config_names swap without a restart."""
+    assert get_pro_users() == ()
+    cleared = client.put(
+        "/admin/users/alice/configs",
+        json={"configs": []},
+        headers=_BEARER,
+    )
+    assert cleared.status_code == 200
+    users = {u.username: u for u in get_pro_users()}
+    assert users["alice"].config_names == ()  # replace-all cleared it live
+    assert users["bob"].config_names == ()
+    restored = client.put(
+        "/admin/users/alice/configs",
+        json={"configs": ["default"]},
+        headers=_BEARER,
+    )
+    assert restored.status_code == 200
+    users = {u.username: u for u in get_pro_users()}
+    assert users["alice"].config_names == ("default",)
+    assert users["bob"].config_names == ()
+
+
+def test_reload_failure_write_stands_and_reports_failed(client):
+    """Post-write refresh failure → 201 + "reload": "failed" + error log; write stands.
+
+    Edge-case row: a transient store read error after a successful write
+    must not roll back or mask the write — the store row exists, the read
+    API sees it, the response reports the failed reload, and the detail is
+    logged (never echoed in the response body).  A pre-existing snapshot is
+    left untouched: the change reaches auth on the next successful refresh
+    or a restart, never half-applied.
+    """
+    seed = (
+        ProUser(username="pre-m5-user", key_hash="seed-hash-fixture", config_names=("default",)),
+    )
+    configure_pro_users(seed)
+    with (
+        mock.patch.object(
+            ConfigStore,
+            "list_users",
+            side_effect=sqlite3.OperationalError("database is locked"),
+        ),
+        mock.patch.object(admin, "log") as mock_log,
+    ):
+        resp = client.post(
+            "/admin/users",
+            json={"username": "frank", "key": "frank-plain-key"},
+            headers=_BEARER,
+        )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["reload"] == "failed"
+    assert "restart_required" not in body
+    assert "database is locked" not in resp.text  # detail stays in the log
+    # The write stands: the read API sees the new user …
+    assert client.get("/admin/users/frank", headers=_BEARER).status_code == 200
+    # … while the pre-existing snapshot was never swapped (refresh aborted).
+    assert get_pro_users() == seed
+    # The failure is logged exactly once as an error.
+    mock_log.error.assert_called_once()
+    assert "refresh failed" in str(mock_log.error.call_args)
+
+
+# ---------------------------------------------------------------------------
+# 16. M5.1 topology flag: attach/suppress per the frozen AppConfig
+#     (all names contain "reload" — the milestone's `-k reload` gate)
+# ---------------------------------------------------------------------------
+
+
+def _add_store_only_config(db_path: str, name: str) -> None:
+    """Create a config that exists in the store but not in the frozen singleton.
+
+    Mirrors the edge row: a config added via CLI **after** startup never
+    appears in ``get_app_config().configs`` until a restart.
+    """
+    with ConfigStore(db_path) as store:
+        store.create_config(name)
+
+
+def test_reload_topology_flag_on_grant_for_absent_config(client):
+    """Grant of a store-only config → 200 + config_topology_restart_required."""
+    _add_store_only_config(os.environ["CALDAV_MCP_DB_PATH"], "late")
+    resp = client.post(
+        "/admin/users/bob/configs",
+        json={"config": "late"},
+        headers=_BEARER,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["configs"] == ["late"]
+    assert body["config_topology_restart_required"] is True
+    assert "restart_required" not in body
+
+
+def test_reload_topology_flag_suppressed_for_frozen_config(client):
+    """Grant of a config present in the frozen topology → no topology flag."""
+    resp = client.post(
+        "/admin/users/bob/configs",
+        json={"config": "default"},
+        headers=_BEARER,
+    )
+    assert resp.status_code == 200
+    assert "config_topology_restart_required" not in resp.json()
+
+
+def test_reload_topology_flag_replace_only_when_any_absent(client):
+    """Replace: any store-only config → flag; all-frozen or [] → no flag."""
+    _add_store_only_config(os.environ["CALDAV_MCP_DB_PATH"], "late")
+    resp = client.put(
+        "/admin/users/bob/configs",
+        json={"configs": ["default", "late"]},
+        headers=_BEARER,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["config_topology_restart_required"] is True
+
+    resp = client.put(
+        "/admin/users/bob/configs",
+        json={"configs": ["default"]},
+        headers=_BEARER,
+    )
+    assert resp.status_code == 200
+    assert "config_topology_restart_required" not in resp.json()
+
+    # The empty replacement references no config → never the flag.
+    resp = client.put(
+        "/admin/users/bob/configs",
+        json={"configs": []},
+        headers=_BEARER,
+    )
+    assert resp.status_code == 200
+    assert "config_topology_restart_required" not in resp.json()
+
+
+def test_reload_topology_flag_never_on_revoke(client):
+    """Revoke of a store-only config → 200 without the topology flag (edge row)."""
+    _add_store_only_config(os.environ["CALDAV_MCP_DB_PATH"], "late")
+    granted = client.post(
+        "/admin/users/bob/configs",
+        json={"config": "late"},
+        headers=_BEARER,
+    )
+    assert granted.status_code == 200
+    assert granted.json()["config_topology_restart_required"] is True
+
+    resp = client.delete("/admin/users/bob/configs/late", headers=_BEARER)
+    assert resp.status_code == 200
+    assert resp.json() == {"revoked": True, "username": "bob", "config": "late"}

@@ -7,7 +7,8 @@ single server instance must route requests to different CalDAV accounts.
 > **How the CLI and server work together:**
 > The CLI manages the SQLite store; the server reads it at startup in pro
 > mode (`DB_CONFIG_ENABLED=true`)
-> (user rows are also writable via the admin API, restart-to-apply). The
+> (user rows are also writable via the admin API — those changes apply
+> without a restart). The
 > `CALDAV_MCP_CONFIG_SECRET` must
 > **match** between CLI and server — the CLI encrypts passwords with it, and
 > the server decrypts them on startup. Config changes require a server
@@ -427,12 +428,20 @@ rm -f "$STORE"
   `CALDAV_MCP_CONFIG_SECRET` or user API keys. Re-add remotes / re-create
   users after a secret change.~~ **Superseded for user API keys (M4):**
   rotate a user's key with the admin API endpoint
-  `PUT /admin/users/{username}/key` (restart-to-apply). **Still true for
+  `PUT /admin/users/{username}/key` — it applies immediately since M5, no
+  restart (the `restart_required` response field from earlier M3/M4
+  milestones of this release is gone). **Still true for
   `CALDAV_MCP_CONFIG_SECRET`:** there is no built-in flow to rotate it —
   re-add remotes after a secret change.
-- **No hot reload** — the server reads configuration at startup. Changes
-  to the store require a server restart (inherited from the singleton
-  design of [`caldav_mcp/app_config.py`](../caldav_mcp/app_config.py)).
+- **No hot reload** — with one exception: since M5, **user** changes made
+  through the admin API (create, delete, key rotation, grant, revoke,
+  replace grants) apply on the next request, no restart. Everything else
+  in the store — configs, remotes, calendars, and CLI-made changes —
+  still requires a server restart (inherited from the singleton design of
+  [`caldav_mcp/app_config.py`](../caldav_mcp/app_config.py)). That also
+  covers access to a config added after startup: a grant for it is stored,
+  but reaching the config needs a restart (the grant response carries
+  `config_topology_restart_required: true`).
 
 ## Cross-references
 

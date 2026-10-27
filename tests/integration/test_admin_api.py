@@ -1,4 +1,4 @@
-"""Admin API integration tests (M2.3 read cases + M3.1 write cases + M4.1 rotation).
+"""Admin API integration tests (M2.3 read cases + M3/M4 write cases + M5.1 live apply).
 
 Requires the compose test stack from ``docker-compose.test.yaml`` (the
 ``make test-integration`` target builds the pro store and starts it):
@@ -15,18 +15,24 @@ Write cases use **disposable ``admin-e2e-*`` users only**: created via the
 API, deleted again in ``finally`` — ``alice``/``bob`` are never mutated
 (milestone edge-case table, ``conftest_pro.py:206-215``).  The one
 exception is the dedicated, never-granted ``admin-snapshot-user`` (seeded
-by ``conftest_pro._build_pro_store``): M4.1 rotates its key and restores it
-in ``finally`` — it is never deleted.
+by ``conftest_pro._build_pro_store``): the rotation proof rotates its key
+and restores it in ``finally`` — it is never deleted.
 
 Because these tests mutate the bind-mounted store, manual runs of the
 README flow must re-run ``build_pro_store.py`` first; ``make test-integration``
 rebuilds the store automatically.
 
-The restart-window proof issues an explicit ``docker compose restart
-mcp-pro`` plus a container-health poll (no fixed sleeps) so it fits the
-60 s per-test timeout (``Makefile:44``); it restarts once more first for a
-clean baseline (see ``TestAdminRestartWindow`` for why).  The M4.1
-rotation proof (``TestAdminKeyRotation``) reuses the exact same pattern.
+**M5.1 live round-trips** (they replace M3's restart-window proof and M4's
+pre-restart rotation assertions, which would contradict live semantics):
+create → authenticates on the next request; delete → AUTH immediately;
+grant/revoke → addressing-layer observables while auth keeps succeeding;
+grant of a CLI-added config → ``config_topology_restart_required`` + a
+restart still needed for access.  ``docker compose restart`` appears only
+where it proves restart-harmlessness (a live-applied user/rotation
+survives it) or restart necessity (topology).  Rejection observables are
+the typed tool-level results of ``_mcp_probe`` (``/mcp`` has no HTTP-401
+mapping); every test resets the shared in-memory auth rate-limiter bucket
+with a successful probe before expecting a rejection.
 """
 
 from __future__ import annotations
@@ -37,11 +43,16 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 import requests
 
-from tests.integration.conftest_pro import ADMIN_SNAPSHOT_KEY, ADMIN_SNAPSHOT_USER
+from tests.integration.conftest_pro import (
+    ADMIN_SNAPSHOT_KEY,
+    ADMIN_SNAPSHOT_USER,
+    PRO_STORE_SECRET,
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
@@ -57,7 +68,7 @@ _ADMIN_HEADERS = {"Authorization": f"Bearer {_ADMIN_KEY}"}
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _STORE_PATH = _PROJECT_ROOT / "tests" / "integration" / "pro-store" / "pro-store.db"
 
-# MCP streamable-HTTP endpoint + container used by the restart-window proof.
+# MCP streamable-HTTP endpoint + container used by the live-apply proofs.
 _MCP_URL = f"{_PRO_URL}/mcp"
 _PRO_CONTAINER = "caldav-mcp-pro-test"
 _MCP_REQ_HEADERS = {
@@ -77,13 +88,20 @@ def _delete_user_best_effort(username: str) -> None:
 
 
 def _run_config_cli(*args: str) -> subprocess.CompletedProcess:
-    """Run the store CLI on the host against the bind-mounted pro store."""
+    """Run the store CLI on the host against the bind-mounted pro store.
+
+    ``CALDAV_MCP_CONFIG_SECRET`` is pinned explicitly (same value the
+    ``mcp-pro`` container is started with): commands that store a password
+    (``remote add``) must encrypt with that master secret, and a clean host
+    environment does not carry it.
+    """
     return subprocess.run(
         [sys.executable, "-m", "caldav_mcp.config_cli", "--db", str(_STORE_PATH), *args],
         cwd=_PROJECT_ROOT,
         capture_output=True,
         text=True,
         timeout=30,
+        env={**os.environ, "CALDAV_MCP_CONFIG_SECRET": PRO_STORE_SECRET},
     )
 
 
@@ -123,16 +141,25 @@ def _parse_rpc_response(resp: requests.Response) -> dict[str, object]:
     return payload
 
 
-def _mcp_auth_probe(username: str, key: str) -> tuple[str, str]:
-    """Call ``caldav_list_calendars`` as *username*; return ``(status, message)``.
+def _mcp_probe(
+    username: str,
+    key: str,
+    tool: str = "caldav_list_calendars",
+    arguments: dict | None = None,
+) -> tuple[str, str]:
+    """Call *tool* as *username*; return ``(status, message)``.
 
-    Rejection observable: the MCP endpoint authenticates at the **tool**
+    Default tool is ``caldav_list_calendars`` (parameterless fan-out — the
+    auth/visibility probe); pass ``tool``/``arguments`` for dotted-path
+    probes.  Observable: the MCP endpoint authenticates at the **tool**
     layer — ``auth.py:_require_auth_db_user`` returns
     ``ToolResult.failure(Status.AUTH, …)`` inside a 200 JSON-RPC response;
     ``/mcp`` has no HTTP-401 mapping (see the "no HTTP 401/403 → auth
     mapping" note in ``test_multi_remote_fanout.py``).  The typed
-    ``status == "auth"`` plus the standard unauthorized message is therefore
-    the rejection signal the restart-window proof asserts.
+    ``status == "auth"`` plus the standard unauthorized message is
+    therefore the rejection signal.  A rate-limit rejection is also
+    ``"auth"`` but carries a different message — assertions pair the status
+    with the message so a hot bucket can never pass vacuously.
     """
     with requests.Session() as session:
         _mcp_initialize(session)
@@ -140,7 +167,7 @@ def _mcp_auth_probe(username: str, key: str) -> tuple[str, str]:
             "jsonrpc": "2.0",
             "id": 2,
             "method": "tools/call",
-            "params": {"name": "caldav_list_calendars", "arguments": {}},
+            "params": {"name": tool, "arguments": arguments or {}},
         }
         headers = {
             **_MCP_REQ_HEADERS,
@@ -151,6 +178,7 @@ def _mcp_auth_probe(username: str, key: str) -> tuple[str, str]:
         resp.raise_for_status()
         rpc = _parse_rpc_response(resp)
 
+    assert "error" not in rpc, f"JSON-RPC-level error: {rpc}"
     result = rpc.get("result")
     assert isinstance(result, dict), f"Expected result dict, got {rpc!r}"
     structured = result.get("structuredContent")
@@ -163,18 +191,23 @@ def _mcp_auth_probe(username: str, key: str) -> tuple[str, str]:
     return str(text_payload.get("status", "")), str(text_payload.get("message", ""))
 
 
-def _mcp_auth_probe_retry(
-    username: str, key: str, attempts: int = 3, delay_seconds: float = 1.0
+def _mcp_probe_retry(
+    username: str,
+    key: str,
+    tool: str = "caldav_list_calendars",
+    arguments: dict | None = None,
+    attempts: int = 3,
+    delay_seconds: float = 1.0,
 ) -> tuple[str, str]:
     """Probe with a short retry for transient connection errors (post-restart)."""
     last_error: Exception | None = None
     for _ in range(attempts):
         try:
-            return _mcp_auth_probe(username, key)
+            return _mcp_probe(username, key, tool=tool, arguments=arguments)
         except requests.RequestException as exc:
             last_error = exc
             time.sleep(delay_seconds)
-    raise AssertionError(f"MCP auth probe failed after {attempts} attempts: {last_error}")
+    raise AssertionError(f"MCP probe failed after {attempts} attempts: {last_error}")
 
 
 def _restart_pro_and_wait_healthy() -> None:
@@ -286,10 +319,10 @@ class TestAdminWriteProMode:
             # 201 — NOT 503: the bind-mounted store is writable by `app`.
             assert resp.status_code == 201, resp.text
             body = resp.json()
-            assert set(body) == {"username", "configs", "restart_required"}
+            # M5: live apply — no restart_required, no reload signal on success.
+            assert set(body) == {"username", "configs"}
             assert body["username"] == username
             assert body["configs"] == []
-            assert body["restart_required"] is True
             # No key material echoed or returned (Design (f) hygiene).
             assert "admin-e2e-user-key" not in resp.text
             assert "key_hash" not in resp.text
@@ -313,11 +346,7 @@ class TestAdminWriteProMode:
                 f"{_PRO_URL}/admin/users/{username}", headers=_ADMIN_HEADERS, timeout=10
             )
             assert deleted.status_code == 200, deleted.text
-            assert deleted.json() == {
-                "deleted": True,
-                "username": username,
-                "restart_required": True,
-            }
+            assert deleted.json() == {"deleted": True, "username": username}
             gone = requests.get(
                 f"{_PRO_URL}/admin/users/{username}", headers=_ADMIN_HEADERS, timeout=10
             )
@@ -389,7 +418,9 @@ class TestAdminWriteProMode:
             )
             assert grant.status_code == 200, grant.text
             assert grant.json()["configs"] == ["main"]
-            assert grant.json()["restart_required"] is True
+            # "main" is part of the frozen topology: live apply, no signals.
+            assert "restart_required" not in grant.json()
+            assert "config_topology_restart_required" not in grant.json()
 
             again = requests.post(
                 f"{_PRO_URL}/admin/users/{username}/configs",
@@ -408,7 +439,8 @@ class TestAdminWriteProMode:
             )
             assert replaced.status_code == 200, replaced.text
             assert replaced.json()["configs"] == ["second"]
-            assert replaced.json()["restart_required"] is True
+            assert "restart_required" not in replaced.json()
+            assert "config_topology_restart_required" not in replaced.json()
 
             # Pre-check 404 names the missing config; existing grants untouched.
             missing = "admin-e2e-no-such-config"
@@ -433,11 +465,12 @@ class TestAdminWriteProMode:
                 timeout=10,
             )
             assert revoked.status_code == 200, revoked.text
+            # M5: live apply — no restart_required, and revoke never carries
+            # the config-topology flag (revocation never requires topology).
             assert revoked.json() == {
                 "revoked": True,
                 "username": username,
                 "config": "second",
-                "restart_required": True,
             }
             # Revoking again (never-granted now) → 200 idempotent no-op.
             revoked_again = requests.delete(
@@ -493,41 +526,37 @@ class TestAdminWriteProMode:
 
 
 # ---------------------------------------------------------------------------
-# Restart-window proof (M3.1) — ONE dedicated test + efficient health poll
+# M5.1 live apply: create/delete take effect on the next MCP request
 # ---------------------------------------------------------------------------
 
 
-class TestAdminRestartWindow:
-    """Restart-to-apply semantics for a user created via the admin API."""
+class TestAdminLiveApply:
+    """User create/delete apply live — these round-trips replace M3's
+    restart-window proof (its pre-restart rejection assertion would
+    contradict live semantics).
 
-    def test_created_user_rejected_until_restart_then_accepted(self) -> None:
-        """Create → 201 → MCP auth rejected pre-restart → restart → accepted.
+    Rejections are the typed AUTH failure probed by ``_mcp_probe`` (``/mcp``
+    has no HTTP-401 mapping — rejection is tool-level, ``auth.py:257-327``).
+    Each test runs a successful probe before any rejection so the shared
+    in-memory auth rate-limiter bucket (``auth.py`` client-IP quirk, see
+    ``test_pro_mode.py:424``) is reset; paired with the "unauthorized"
+    message assertion, a rate-limit rejection (also ``"auth"``) can never
+    pass vacuously.
+    """
 
-        The pre-restart rejection is the typed AUTH failure probed by
-        ``_mcp_auth_probe`` (the ``/mcp`` endpoint has no HTTP-401 mapping —
-        rejection is tool-level, ``auth.py:257-327``).  The restart step is
-        explicit (``docker compose restart mcp-pro``) with a container-health
-        poll so the whole sequence fits the 60 s per-test timeout.
+    def test_created_user_authenticates_immediately_and_survives_restart(self) -> None:
+        """Create → 201 → accepted on the very next request; restart harmless.
 
-        The proof is bracketed by an extra baseline restart first: (1) a
-        previous run's ``finally`` deletes the disposable user from the
-        store, but the running container keeps authenticating it from its
-        startup snapshot until the next restart (the very restart-to-apply
-        semantics under test), so a warm-stack re-run of this test must
-        reload the snapshot before the pre-restart rejection means anything;
-        (2) failed MCP auths pile into the single shared fallback bucket
-        (``auth.py`` client-IP quirk, see ``test_pro_mode.py:424``) and the
-        rate-limit check runs before credential verification, so a stale
-        hot bucket would produce a rate-limit rejection — also ``"auth"``
-        but vacuous as snapshot evidence.  A fresh process resets both.
+        The explicit ``docker compose restart mcp-pro`` + container-health
+        poll (no fixed sleeps, fits the 60 s per-test timeout,
+        ``Makefile:44``) gates nothing anymore — it only proves the
+        live-applied user also survives a snapshot reload: the restart
+        step of M3's proof, reduced to its restart-harmless remainder.
         """
-        username = "admin-e2e-restart"
-        key = "admin-e2e-restart-key"
+        username = "admin-e2e-live-create"
+        key = "admin-e2e-live-create-key"
+        _delete_user_best_effort(username)  # clear warm-stack leftovers
         try:
-            # Baseline restart: pristine startup snapshot + in-memory auth
-            # rate limiter (see docstring) before the proof window opens.
-            _restart_pro_and_wait_healthy()
-
             created = requests.post(
                 f"{_PRO_URL}/admin/users",
                 json={"username": username, "key": key},
@@ -535,67 +564,94 @@ class TestAdminRestartWindow:
                 timeout=10,
             )
             assert created.status_code == 201, created.text
-            assert created.json()["restart_required"] is True
+            # M5: no restart_required, and no reload signal on success.
+            assert set(created.json()) == {"username", "configs"}
+            assert "admin-e2e-live-create-key" not in created.text
 
-            # Pre-restart: absent from the startup snapshot → rejected.
-            status, message = _mcp_auth_probe_retry(username, key)
-            assert status == "auth", (status, message)
-            assert "unauthorized" in message.lower(), message
+            # Live apply: the fresh user authenticates on the next request.
+            # Ungranted user → zero fan-out scopes → status "empty" == auth OK.
+            status, message = _mcp_probe_retry(username, key)
+            assert status in ("ok", "empty"), (status, message)
+            assert "unauthorized" not in message.lower(), message
 
-            # Explicit restart + efficient health wait (no fixed sleep).
+            # Restart-harmlessness: the live-applied user survives a reload.
             _restart_pro_and_wait_healthy()
-
-            # Post-restart: snapshot reloaded from the store → accepted.
-            status, message = _mcp_auth_probe_retry(username, key)
+            status, message = _mcp_probe_retry(username, key)
             assert status in ("ok", "empty"), (status, message)
             assert "unauthorized" not in message.lower(), message
         finally:
             _delete_user_best_effort(username)
 
+    def test_deleted_user_rejected_immediately(self) -> None:
+        """Create → accepted → DELETE → 200 → rejected (AUTH) without restart."""
+        username = "admin-e2e-live-delete"
+        key = "admin-e2e-live-delete-key"
+        _delete_user_best_effort(username)  # clear warm-stack leftovers
+        try:
+            created = requests.post(
+                f"{_PRO_URL}/admin/users",
+                json={"username": username, "key": key},
+                headers=_ADMIN_HEADERS,
+                timeout=10,
+            )
+            assert created.status_code == 201, created.text
+            # Successful probe first: resets the shared auth rate-limiter bucket.
+            status, message = _mcp_probe_retry(username, key)
+            assert status in ("ok", "empty"), (status, message)
+
+            deleted = requests.delete(
+                f"{_PRO_URL}/admin/users/{username}",
+                headers=_ADMIN_HEADERS,
+                timeout=10,
+            )
+            assert deleted.status_code == 200, deleted.text
+            assert deleted.json() == {"deleted": True, "username": username}
+
+            # Auth layer, immediately: the deleted user's next request is rejected.
+            status, message = _mcp_probe_retry(username, key)
+            assert status == "auth", (status, message)
+            assert "unauthorized" in message.lower(), message
+        finally:
+            _delete_user_best_effort(username)
+
 
 # ---------------------------------------------------------------------------
-# Key-rotation round-trip (M4.1) — ONE dedicated test + efficient health poll
+# M5.1 key rotation: inversion on the next request (replaces M4's
+# restart-inversion test — its pre-restart OLD/NEW window is gone)
 # ---------------------------------------------------------------------------
 
 
 class TestAdminKeyRotation:
-    """Restart-to-apply semantics for a key rotated via ``PUT …/key`` (M4.1)."""
+    """M5: a key rotated via ``PUT …/key`` applies live — no restart step."""
 
-    def test_rotated_key_inverts_auth_across_restart(self) -> None:
-        """Rotate → OLD accepted / NEW rejected → restart → NEW / OLD inverted.
+    def test_rotated_key_inverts_auth_immediately(self) -> None:
+        """Rotate → NEW accepted / OLD rejected on the very next request.
 
-        Pre-restart the MCP endpoint authenticates from the startup snapshot
-        (``auth.py:257-327``), so the seeded OLD key of
-        ``admin-snapshot-user`` is accepted and the NEW key is rejected; after
-        the explicit ``docker compose restart mcp-pro`` + health-wait step the
-        snapshot holds the rotated hash and the inversion holds (NEW accepted,
-        OLD rejected) — the exact per-phase semantics of the M4.1 block (M5
-        then removes the restart step).
+        No restart sits between the rotation and the inversion assertions —
+        M4's pre-restart window (OLD accepted, NEW rejected until a restart)
+        would contradict M5 live semantics.  The trailing
+        ``docker compose restart mcp-pro`` + health-wait step (no fixed
+        sleeps, fits the 60 s per-test timeout) proves restart-harmlessness
+        instead: the live-applied rotation still holds after a snapshot
+        reload.
 
-        Rejection is the typed AUTH failure probed by ``_mcp_auth_probe``
-        (``/mcp`` has no HTTP-401 mapping).  Bracketed by a baseline restart
-        first for the same two reasons as ``TestAdminRestartWindow``: a warm
-        container may still carry a previous run's snapshot while the rebuilt
-        store holds the seeded key, and stale auth rate-limiter failures would
-        otherwise produce a rate-limit rejection that is ``"auth"`` but vacuous
-        as snapshot evidence.
+        Rejection is the typed AUTH failure probed by ``_mcp_probe``
+        (``/mcp`` has no HTTP-401 mapping), always paired with the
+        "unauthorized" message so a rate-limit rejection (also ``"auth"``)
+        cannot pass vacuously — and every probe before the first rejection
+        is a success, resetting the shared bucket.
 
-        Both keys are clearly-fake disposable test values and never printed.
+        ``admin-snapshot-user`` is rotated but never deleted; the seeded key
+        is restored in ``finally``.  Both keys are clearly-fake disposable
+        test values and never printed.
         """
         old_key = ADMIN_SNAPSHOT_KEY
         new_key = "admin-snapshot-user-rotated-test-key"
         try:
-            # Baseline restart: pristine startup snapshot of the freshly built
-            # store + in-memory auth rate limiter (see docstring).
-            _restart_pro_and_wait_healthy()
-
-            # Pre-restart (startup snapshot): OLD accepted, NEW rejected.
-            status, message = _mcp_auth_probe_retry(ADMIN_SNAPSHOT_USER, old_key)
+            # Seeded OLD key authenticates (also resets the shared bucket).
+            status, message = _mcp_probe_retry(ADMIN_SNAPSHOT_USER, old_key)
             assert status in ("ok", "empty"), (status, message)
             assert "unauthorized" not in message.lower(), message
-            status, message = _mcp_auth_probe_retry(ADMIN_SNAPSHOT_USER, new_key)
-            assert status == "auth", (status, message)
-            assert "unauthorized" in message.lower(), message
 
             # Rotate via the admin API — response must carry zero key material.
             rotated = requests.put(
@@ -605,30 +661,33 @@ class TestAdminKeyRotation:
                 timeout=10,
             )
             assert rotated.status_code == 200, rotated.text
-            assert rotated.json() == {
-                "username": ADMIN_SNAPSHOT_USER,
-                "rotated": True,
-                "restart_required": True,
-            }
+            # M5: live apply — no restart_required, no reload failure signal.
+            assert rotated.json() == {"username": ADMIN_SNAPSHOT_USER, "rotated": True}
             assert old_key not in rotated.text
             assert new_key not in rotated.text
             assert "key_hash" not in rotated.text
 
-            # Explicit restart + efficient health wait (no fixed sleep).
-            _restart_pro_and_wait_healthy()
-
-            # Post-restart: inversion — NEW accepted, OLD rejected.
-            status, message = _mcp_auth_probe_retry(ADMIN_SNAPSHOT_USER, new_key)
+            # Live inversion — no restart between rotation and these probes.
+            status, message = _mcp_probe_retry(ADMIN_SNAPSHOT_USER, new_key)
             assert status in ("ok", "empty"), (status, message)
             assert "unauthorized" not in message.lower(), message
-            status, message = _mcp_auth_probe_retry(ADMIN_SNAPSHOT_USER, old_key)
+            status, message = _mcp_probe_retry(ADMIN_SNAPSHOT_USER, old_key)
+            assert status == "auth", (status, message)
+            assert "unauthorized" in message.lower(), message
+
+            # Restart-harmlessness: the rotation survives a snapshot reload.
+            _restart_pro_and_wait_healthy()
+            status, message = _mcp_probe_retry(ADMIN_SNAPSHOT_USER, new_key)
+            assert status in ("ok", "empty"), (status, message)
+            assert "unauthorized" not in message.lower(), message
+            status, message = _mcp_probe_retry(ADMIN_SNAPSHOT_USER, old_key)
             assert status == "auth", (status, message)
             assert "unauthorized" in message.lower(), message
         finally:
             # Never delete admin-snapshot-user; restore the seeded key so the
-            # next run's baseline restart reloads the original snapshot key
-            # even without a store rebuild.  Best-effort: cleanup must never
-            # mask the primary failure (mirrors _delete_user_best_effort).
+            # next run starts from the seeded state even without a store
+            # rebuild.  Best-effort: cleanup must never mask the primary
+            # failure (mirrors _delete_user_best_effort).
             try:
                 requests.put(
                     f"{_PRO_URL}/admin/users/{ADMIN_SNAPSHOT_USER}/key",
@@ -638,6 +697,215 @@ class TestAdminKeyRotation:
                 )
             except requests.RequestException:
                 pass
+
+
+# ---------------------------------------------------------------------------
+# M5.1 grant/revoke: addressing-layer observables while auth keeps succeeding
+# ---------------------------------------------------------------------------
+
+
+class TestAdminGrantRevokeLiveApply:
+    """grant/revoke move what resolves — never what authenticates.
+
+    Layer split per the M5 deliverable: grants never gate
+    ``_require_auth_db_user``, so every probe below authenticates; the
+    observables live in the addressing layer (fan-out visibility and the
+    generic ``unknown calendar path`` error from ``addressing.py:146-149``).
+    """
+
+    def test_revoked_config_stops_resolving_while_auth_succeeds(self) -> None:
+        """grant → visible → revoke → invisible + generic path error; auth keeps succeeding."""
+        username = "admin-e2e-live-grants"
+        key = "admin-e2e-live-grants-key"
+        _delete_user_best_effort(username)  # clear warm-stack leftovers
+        try:
+            created = requests.post(
+                f"{_PRO_URL}/admin/users",
+                json={"username": username, "key": key},
+                headers=_ADMIN_HEADERS,
+                timeout=10,
+            )
+            assert created.status_code == 201, created.text
+
+            # Ungranted: auth succeeds, no scopes (bucket reset probe).
+            status, message = _mcp_probe_retry(username, key)
+            assert status in ("ok", "empty"), (status, message)
+            assert "unauthorized" not in message.lower(), message
+
+            granted = requests.post(
+                f"{_PRO_URL}/admin/users/{username}/configs",
+                json={"config": "main"},
+                headers=_ADMIN_HEADERS,
+                timeout=10,
+            )
+            assert granted.status_code == 200, granted.text
+            assert granted.json()["configs"] == ["main"]
+            # "main" is in the frozen topology → no restart/topology signals.
+            assert "restart_required" not in granted.json()
+            assert "config_topology_restart_required" not in granted.json()
+
+            # Addressing applies live: the config's remotes show up in the fan-out.
+            status, message = _mcp_probe_retry(username, key)
+            assert status in ("ok", "empty"), (status, message)
+            assert "main." in message, message
+
+            revoked = requests.delete(
+                f"{_PRO_URL}/admin/users/{username}/configs/main",
+                headers=_ADMIN_HEADERS,
+                timeout=10,
+            )
+            assert revoked.status_code == 200, revoked.text
+            assert revoked.json() == {
+                "revoked": True,
+                "username": username,
+                "config": "main",
+            }
+
+            # Auth still succeeds — revocation never gates _require_auth_db_user …
+            status, message = _mcp_probe_retry(username, key)
+            assert status != "auth", (status, message)
+            assert "unauthorized" not in message.lower(), message
+            # … while the calendar vanished from caldav_list_calendars …
+            assert "main." not in message, message
+
+            # … and a revoked dotted path fails at the addressing access check
+            # (generic unknown-path error, addressing.py:146-149) — no server
+            # contact happens, so this failed create has no side effects.
+            status, message = _mcp_probe_retry(
+                username,
+                key,
+                tool="caldav_create_event",
+                arguments={
+                    "calendar_name": "main.radicale.work",
+                    "summary": "must never be created",
+                    "start": "2026-12-01T10:00:00",
+                    "end": "2026-12-01T11:00:00",
+                },
+            )
+            assert status == "error", (status, message)
+            assert "unknown calendar path" in message, message
+            assert "unauthorized" not in message.lower(), message
+
+            # Re-grant applies live too: the calendar comes back.
+            re_granted = requests.post(
+                f"{_PRO_URL}/admin/users/{username}/configs",
+                json={"config": "main"},
+                headers=_ADMIN_HEADERS,
+                timeout=10,
+            )
+            assert re_granted.status_code == 200, re_granted.text
+            status, message = _mcp_probe_retry(username, key)
+            assert status in ("ok", "empty"), (status, message)
+            assert "main." in message, message
+        finally:
+            _delete_user_best_effort(username)
+
+
+# ---------------------------------------------------------------------------
+# M5.1 config-topology freeze: CLI-added config needs a restart for access
+# ---------------------------------------------------------------------------
+
+
+class TestAdminConfigTopologyRestart:
+    """Grant of a config added via CLI after startup: flag + restart still needed.
+
+    The grant succeeds at the store (and applies to the user snapshot live),
+    but the frozen ``AppConfig`` does not know the config — access keeps
+    failing until a restart loads the topology.  The config name is
+    unique per run so a warm stack's earlier restart can never have loaded
+    it into the frozen singleton.
+    """
+
+    def test_cli_added_config_flags_topology_restart_and_access_needs_restart(self) -> None:
+        """Grant → config_topology_restart_required; dotted path dead until restart."""
+        suffix = uuid4().hex[:8]
+        late_config = f"admin-e2e-late-{suffix}"
+        username = f"admin-e2e-topo-{suffix}"
+        key = f"{username}-key"
+        _delete_user_best_effort(username)  # clear warm-stack leftovers
+        try:
+            # Config + remote + calendar added via CLI *after* startup.
+            added = _run_config_cli("config", "add", "--name", late_config)
+            assert added.returncode == 0, added.stderr
+            added = _run_config_cli(
+                "remote",
+                "add",
+                "--config",
+                late_config,
+                "--name",
+                "relay",
+                "--url",
+                "http://radicale:5232",
+                "--auth-mode",
+                "direct",
+                "--username",
+                "testuser",
+                "--password",
+                "testpass",
+            )
+            assert added.returncode == 0, added.stderr
+            added = _run_config_cli(
+                "calendar", "add", "--config", late_config, "--remote", "relay", "--name", "latecal"
+            )
+            assert added.returncode == 0, added.stderr
+
+            created = requests.post(
+                f"{_PRO_URL}/admin/users",
+                json={"username": username, "key": key},
+                headers=_ADMIN_HEADERS,
+                timeout=10,
+            )
+            assert created.status_code == 201, created.text
+            # Bucket-reset probe: auth succeeds (no grants visible yet).
+            status, message = _mcp_probe_retry(username, key)
+            assert status in ("ok", "empty"), (status, message)
+
+            granted = requests.post(
+                f"{_PRO_URL}/admin/users/{username}/configs",
+                json={"config": late_config},
+                headers=_ADMIN_HEADERS,
+                timeout=10,
+            )
+            assert granted.status_code == 200, granted.text
+            body = granted.json()
+            assert body["configs"] == [late_config]
+            # The store write + grant applied, but the topology is frozen:
+            assert body["config_topology_restart_required"] is True
+            assert "restart_required" not in body
+
+            # Auth keeps succeeding; the frozen fan-out still has no scopes …
+            status, message = _mcp_probe_retry(username, key)
+            assert status in ("ok", "empty"), (status, message)
+            assert "unauthorized" not in message.lower(), message
+            assert late_config not in message, message
+
+            # … and the config is not addressable until a restart
+            # (generic unknown-path error — no server contact, no side effects).
+            status, message = _mcp_probe_retry(
+                username,
+                key,
+                tool="caldav_create_event",
+                arguments={
+                    "calendar_name": f"{late_config}.relay.latecal",
+                    "summary": "must never be created",
+                    "start": "2026-12-01T10:00:00",
+                    "end": "2026-12-01T11:00:00",
+                },
+            )
+            assert status == "error", (status, message)
+            assert "unknown calendar path" in message, message
+            assert "unauthorized" not in message.lower(), message
+
+            # Restart loads the CLI-made config from the store → access works.
+            _restart_pro_and_wait_healthy()
+            status, message = _mcp_probe_retry(username, key)
+            assert status in ("ok", "empty"), (status, message)
+            assert f"{late_config}.relay" in message, message
+        finally:
+            _delete_user_best_effort(username)
+            # Best-effort cleanup of the CLI-made config (cascades remote +
+            # calendar).  A unique name means a leftover never conflicts.
+            _run_config_cli("config", "delete", "--name", late_config, "--force")
 
 
 # ---------------------------------------------------------------------------

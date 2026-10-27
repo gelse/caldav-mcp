@@ -62,7 +62,13 @@ _FAILURE_MSG = "unauthorized - missing or invalid credentials"
 
 
 def configure_pro_users(users: tuple[ProUser, ...]) -> None:
-    """Install the pro-user snapshot from the DB loader (called once at startup)."""
+    """Install the pro-user snapshot — the single atomic swap point.
+
+    Called once at startup (DB loader) and, since M5, after every
+    successful admin-API user mutation (``admin._refresh_pro_users``);
+    each call is one global assignment, so in-flight requests holding the
+    previous tuple keep it.
+    """
     global _pro_users  # noqa: PLW0603
     _pro_users = users
 
@@ -221,13 +227,20 @@ def _find_matched_pro_user() -> "ProUser | None":
     This performs the same header scan as :func:`_require_auth_db_user` but
     returns the matched user instead of a ``ToolResult``.  Called only when
     auth has already succeeded — no rate-limit or audit side-effects.
+
+    Since M5 the snapshot is swapped by concurrent admin mutations, so a
+    user can vanish between the verification read and this scan; the
+    miss is fail-closed (``pro_user=None`` → empty fan-out, dotted-path
+    errors) and never re-opens the auth gate.
     """
     headers = _hdrs()()
     username = headers.get(HDR_MCP_USERNAME, "").strip()
     for user in get_pro_users():
         if user.username == username:
             return user
-    return None  # pragma: no cover (auth already succeeded)
+    # pragma below covers the steady state; since M5 a concurrent snapshot
+    # swap can also land here — still fail-closed, never fail-open.
+    return None  # pragma: no cover (auth succeeded against the first read)
 
 
 def _require_auth() -> "ToolResult | None":
