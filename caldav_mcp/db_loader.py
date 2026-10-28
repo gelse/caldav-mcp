@@ -1,15 +1,19 @@
 """Pro-mode DB loader — assembles the M2 singleton shape from the M3 store.
 
-This module reads the SQLite configuration store **once** at startup and
-produces an :class:`~caldav_mcp.app_config.AppConfig` in ``"db"`` mode
+This module reads the SQLite configuration store — at startup, and on the
+runtime topology reloads after user calendar writes — and produces an
+:class:`~caldav_mcp.app_config.AppConfig` in ``"db"`` mode
 plus a tuple of :class:`ProUser` snapshots for downstream auth (M4.2+).
 
 **Design invariants**
 
-* The loader runs exactly once at server startup.  Beyond creating an
-  empty store (schema only) when the file is missing but its parent
-  directory exists and is writable, the loader never writes to the store;
-  configuration changes require a restart.  The admin API is the server's
+* The loader's primary run is at server startup; it is additionally
+  re-invoked at runtime for live topology reloads after user calendar
+  writes (users and user-provisioned configs apply live via re-load —
+  startup remains the primary path; admin/CLI topology changes still
+  require a restart).  Beyond creating an empty store (schema only) when
+  the file is missing but its parent directory exists and is writable,
+  the loader never writes to the store.  The admin API is the server's
   store writer, users only.
 * No env-var reads inside this module — the master secret is passed
   explicitly via the *secret* parameter so that callers (and tests) control
@@ -25,6 +29,7 @@ import hashlib
 import logging
 import os
 import stat
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from cryptography.fernet import Fernet, InvalidToken
@@ -66,6 +71,15 @@ class ProState:
 # Internal helpers
 # ---------------------------------------------------------------------------
 
+USER_TOKEN_PREFIX = "u1:"
+"""Tag marking a ``password_enc`` value as per-user-encrypted.
+
+``:`` is not part of Fernet's base64url alphabet, so a bare Fernet token
+can never collide with this prefix: bare token = master-encrypted (rows
+written before this feature plus CLI ``remote add``), ``u1:``-prefixed =
+per-user-encrypted (the stored form is ``USER_TOKEN_PREFIX + token``).
+"""
+
 
 def _derive_master_key(secret: str) -> bytes:
     """Derive a 32-byte Fernet key from the master *secret* (SHA-256 → b64)."""
@@ -89,15 +103,96 @@ def _decrypt_with_secret(token: str, secret: str) -> str:
         ) from exc
 
 
-def _map_remote(rec: RemoteRecord, secret: str) -> Remote:
-    """Map a :class:`RemoteRecord` to an :class:`Remote`.
+def _encrypt_with_secret(plaintext: str, secret: str) -> str:
+    """Encrypt *plaintext* with *secret* as key material; return a bare Fernet token.
 
-    For ``"direct"`` remotes the encrypted password is decrypted with the
-    master *secret*.  For ``"passthrough"`` remotes username and password
-    stay empty (per-request headers supply them).
+    The mirror image of :func:`_decrypt_with_secret` — same SHA-256 → b64
+    key derivation as the master key (see :func:`_derive_master_key`), so
+    per-user and master ciphertexts are interchangeable except for the
+    tag.  Returns the **untagged** token; callers tag the stored form
+    with :data:`USER_TOKEN_PREFIX` (``u1:<token>``) so the loader can tell
+    per-user ciphertext from master-encrypted rows.  Each call produces a
+    different token (random IV embedded by Fernet).
+    """
+    key = _derive_master_key(secret)
+    return Fernet(key).encrypt(plaintext.encode("utf-8")).decode("ascii")
+
+
+def _decrypt_tagged_with_candidates(token: str, candidates: Sequence[str]) -> str | None:
+    """Decrypt a ``u1:``-tagged *token* with the first candidate that works.
+
+    Returns ``None`` when *candidates* is empty or every candidate fails
+    (stale row: grant revoked or user deleted).  :class:`ConfigSecretError`
+    is caught **per candidate** — the helper wraps Fernet's
+    ``InvalidToken``/``ValueError``, and letting it escape would abort the
+    whole load on one wrong candidate.
+    """
+    bare = token.removeprefix(USER_TOKEN_PREFIX)
+    for candidate in candidates:
+        try:
+            return _decrypt_with_secret(bare, candidate)
+        except ConfigSecretError:
+            continue
+    return None
+
+
+def _build_candidate_secrets(store: ConfigStore) -> dict[str, list[str]]:
+    """Build the per-config map of candidate user secrets for decryption.
+
+    For each config name, the encryption secrets of every user granted
+    that config (``get_user_secrets()`` joined with
+    ``list_users().config_names``), **sorted by username** so multi-grant
+    configs decrypt deterministically regardless of insertion order.
+    Users whose secret column is still NULL (pre-v2 rows — impossible
+    after a successful schema migration) are skipped.
+    """
+    secrets_by_user = store.get_user_secrets()
+    candidates: dict[str, list[str]] = {}
+    for user in sorted(store.list_users(), key=lambda u: u.username):
+        user_secret = secrets_by_user.get(user.username)
+        if user_secret is None:
+            continue
+        for config_name in user.config_names:
+            candidates.setdefault(config_name, []).append(user_secret)
+    return candidates
+
+
+def _map_remote(rec: RemoteRecord, secret: str, candidates: Sequence[str]) -> Remote | None:
+    """Map a :class:`RemoteRecord` to an :class:`Remote` — or ``None`` to drop it.
+
+    For ``"direct"`` remotes:
+
+    * bare ``password_enc`` (master-encrypted) → decrypted with the
+      master *secret* exactly as before; a failure still raises
+      :class:`ConfigSecretError` (a wrong master secret is a
+      configuration error, not stale data),
+    * ``u1:``-tagged ``password_enc`` (per-user-encrypted) → decrypted
+      with the per-config candidate user secrets, first success wins.
+      Zero candidates or all candidates failing logs a WARNING and drops
+      the remote instead of raising, so stale rows (user deleted or
+      grant revoked — neither cleans up remote rows) never abort
+      ``load_pro_state`` at startup or on a later reload.
+
+    For ``"passthrough"`` remotes username and password stay empty
+    (per-request headers supply them).
     """
     if rec.auth_mode == "direct":
-        password = _decrypt_with_secret(rec.password_enc, secret)
+        if rec.password_enc.startswith(USER_TOKEN_PREFIX):
+            password = _decrypt_tagged_with_candidates(rec.password_enc, candidates)
+            if password is None:
+                logger.warning(
+                    "Dropping remote %r of config %r from the loaded configuration: its "
+                    "per-user encrypted password cannot be decrypted with any of the %d "
+                    "candidate user secret(s) — the grant was revoked, the user was "
+                    "deleted, or the password was written with a different secret. "
+                    "Re-provision the calendar to restore access.",
+                    rec.name,
+                    rec.config_name,
+                    len(candidates),
+                )
+                return None
+        else:
+            password = _decrypt_with_secret(rec.password_enc, secret)
         return Remote(
             name=rec.name,
             url=rec.url,
@@ -116,22 +211,32 @@ def _map_remote(rec: RemoteRecord, secret: str) -> Remote:
     )
 
 
-def _map_config(snapshot: ConfigSnapshot, secret: str) -> Config:
-    """Map a :class:`ConfigSnapshot` to a :class:`Config`."""
-    remotes = tuple(_map_remote(r, secret) for r in snapshot.remotes)
+def _map_config(snapshot: ConfigSnapshot, secret: str, candidates: Sequence[str]) -> Config:
+    """Map a :class:`ConfigSnapshot` to a :class:`Config`.
+
+    Remotes dropped by :func:`_map_remote` (undecryptable per-user
+    password) are omitted together with their calendar groups.
+    """
+    remotes: list[Remote] = []
+    kept_remote_names: list[str] = []
+    for rec in snapshot.remotes:
+        mapped = _map_remote(rec, secret, candidates)
+        if mapped is None:
+            continue
+        remotes.append(mapped)
+        kept_remote_names.append(rec.name)
 
     # Group calendars by remote_name → (remote_name, (Calendar, ...))
     groups: dict[str, list[Calendar]] = {}
     for cal_rec in snapshot.calendars:
         groups.setdefault(cal_rec.remote_name, []).append(Calendar(name=cal_rec.name))
 
-    # Preserve remote ordering for calendar groups.
-    remote_names = [r.name for r in snapshot.remotes]
+    # Preserve remote ordering for calendar groups (dropped remotes excluded).
     calendars = tuple(
-        (rname, tuple(groups.get(rname, ()))) for rname in remote_names if rname in groups
+        (rname, tuple(groups.get(rname, ()))) for rname in kept_remote_names if rname in groups
     )
 
-    return Config(name=snapshot.name, remotes=remotes, calendars=calendars)
+    return Config(name=snapshot.name, remotes=tuple(remotes), calendars=calendars)
 
 
 # ---------------------------------------------------------------------------
@@ -271,17 +376,25 @@ def load_pro_state(db_path: str, secret: str) -> ProState:
         directory), is not a regular file, or its schema version is newer
         than the code supports.
     ConfigSecretError
-        When decryption of any stored password fails (wrong secret).
+        When decryption of a master-encrypted (bare-token) stored password
+        fails (wrong secret).  Per-user-encrypted (``u1:``-tagged)
+        passwords that no granted user's secret can decrypt are dropped
+        from the loaded configuration with a WARNING instead — stale
+        rows never abort the load.
     """
     store_missing = _check_store_path(db_path)
 
     try:
         with ConfigStore(db_path) as store:
+            # Candidate user secrets per config — collected before mapping
+            # so every config's remotes can consult them (sorted by
+            # username inside for deterministic multi-grant order).
+            candidate_secrets = _build_candidate_secrets(store)
             config_names = store.list_configs()
             configs: list[Config] = []
             for name in config_names:
                 snapshot = store.load_config(name)
-                configs.append(_map_config(snapshot, secret))
+                configs.append(_map_config(snapshot, secret, candidate_secrets.get(name, ())))
 
             user_records = store.list_users()
     except StoreError as exc:
