@@ -50,10 +50,10 @@ rejects databases whose ``schema_version`` row is *newer* than the version
 this code knows (currently **2**), before any migration runs.  Opening
 also migrates older stores in place: a pre-v2 ``users`` table gains the
 ``enc_secret`` column and every NULL secret is backfilled with a fresh
-random token, with the version row bumped only after both succeed (a
-crash mid-migration re-runs safely on the next open).  The backfill is
-gated — a fully-migrated store opens without issuing a single write, so
-read-only-degraded stores keep loading.
+random token, with the version row bumped only after both succeed — one
+atomic transaction, so a crash rolls back and the next open re-runs the
+migration.  The backfill is gated — a fully-migrated store opens without
+issuing a single write, so read-only-degraded stores keep loading.
 
 All multi-statement writes use an explicit transaction (``BEGIN``/``COMMIT``
 or ``ROLLBACK``) via ``isolation_level=None``.
@@ -91,7 +91,12 @@ class StoreNotFoundError(StoreError):
 
 
 class StoreSchemaError(StoreError):
-    """Raised when the on-disk schema version is newer than this code supports."""
+    """Raised when the on-disk schema cannot be used as-is.
+
+    Covers a ``schema_version`` newer than this code supports, and an
+    in-place migration to the current version that could not be written
+    (e.g. the store is read-only or locked).
+    """
 
 
 class StoreOpenError(StoreError):
@@ -281,6 +286,20 @@ def _describe_open_failure(path: str, exc: sqlite3.OperationalError) -> str:
     return str(exc)
 
 
+def _rollback_quiet(conn: sqlite3.Connection) -> None:
+    """Roll back *conn*, swallowing a failed rollback.
+
+    Used from migration error handlers: when the transaction never started
+    (e.g. ``BEGIN IMMEDIATE`` was refused on a read-only store) there is
+    nothing to roll back, and that secondary error must not mask the
+    original failure.
+    """
+    try:
+        conn.execute("ROLLBACK")
+    except sqlite3.Error:
+        pass
+
+
 # ---------------------------------------------------------------------------
 # ConfigStore
 # ---------------------------------------------------------------------------
@@ -346,8 +365,8 @@ class ConfigStore:
         cur.executescript(_DDL)
 
         # Check existing version (if any row exists).  The
-        # forward-compatibility guard runs BEFORE any ALTER so a database
-        # from a newer release is refused untouched.
+        # forward-compatibility guard runs before any migration step, so a
+        # database from a newer release is rejected without being altered.
         cur.execute("SELECT version FROM schema_version LIMIT 1")
         row = cur.fetchone()
         if row is not None:
@@ -359,59 +378,71 @@ class ConfigStore:
                 )
             stored_version: int | None = on_disk_version
         else:
-            # Fresh database – version is inserted below, after the
-            # (empty) migration steps succeed.
+            # Fresh database – the version row is inserted by the
+            # migration block below, after all steps succeed.
             stored_version = None
 
-        # v1 → v2: add the per-user secret column when missing.  The fresh
-        # DDL above already carries it, so this only fires on pre-v2
-        # databases (CREATE TABLE IF NOT EXISTS leaves old tables alone).
+        # Gated fast path (read-only, no lock): decide whether the v1 → v2
+        # migration has anything to do — the users table lacks the
+        # enc_secret column (pre-v2 DDL; the fresh DDL above already has
+        # it), or the stored version is older, or the read-only probe finds
+        # a NULL secret (crash-recovery / manual tamper).  Each backfilled
+        # row gets its own fresh token.  A fully-migrated store returns
+        # here without issuing a single write, preserving the
+        # read-only-degraded tolerance.
         missing_column = "enc_secret" not in {
             col[1] for col in cur.execute("PRAGMA table_info(users)").fetchall()
         }
-        if missing_column:
-            cur.execute("ALTER TABLE users ADD COLUMN enc_secret TEXT")
-
-        # Gated backfill: only run when there is something to migrate —
-        # stored version < 2, or the read-only probe finds a NULL secret
-        # (crash-recovery / manual tamper).  A fully-migrated store
-        # therefore opens without issuing any write, preserving the
-        # read-only-degraded tolerance.  Each backfilled row gets its own
-        # fresh token; the version row is bumped only AFTER the ALTER and
-        # backfill succeed, so a crash mid-migration re-runs safely on
-        # the next open.
-        if stored_version is not None and stored_version < SCHEMA_VERSION:
-            needs_backfill = True
+        older_version = stored_version is not None and stored_version < SCHEMA_VERSION
+        if missing_column or older_version:
+            needs_migration = True
         else:
-            needs_backfill = (
+            needs_migration = (
                 cur.execute("SELECT 1 FROM users WHERE enc_secret IS NULL LIMIT 1").fetchone()
                 is not None
             )
-        needs_version_write = stored_version != SCHEMA_VERSION  # None → INSERT, <2 → UPDATE
+        if not needs_migration and stored_version == SCHEMA_VERSION:
+            return
 
-        if needs_backfill or needs_version_write:
-            # Multi-statement migration write → explicit transaction.
-            conn.execute("BEGIN")
-            try:
-                if needs_backfill:
-                    pending = cur.execute(
-                        "SELECT username FROM users WHERE enc_secret IS NULL"
-                    ).fetchall()
-                    for (username,) in pending:
-                        cur.execute(
-                            "UPDATE users SET enc_secret = ? WHERE username = ?",
-                            (secrets.token_urlsafe(32), username),
-                        )
-                if stored_version is None:
-                    cur.execute(
-                        "INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,)
-                    )
-                elif needs_version_write:
-                    cur.execute("UPDATE schema_version SET version = ?", (SCHEMA_VERSION,))
-                conn.execute("COMMIT")
-            except BaseException:
-                conn.execute("ROLLBACK")
-                raise
+        # Migration write path: ALTER + per-row backfill + version bump as
+        # ONE atomic transaction (version bumped only AFTER ALTER and
+        # backfill succeed).  BEGIN IMMEDIATE takes the write lock up
+        # front and every precondition is re-checked under it, so
+        # concurrent openers (server start vs. CLI) serialize instead of
+        # racing; a crash rolls the whole unit back and the next open
+        # re-runs it.  Write failures surface as a typed
+        # StoreSchemaError, never as an opaque sqlite3 error.
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            # Re-check under the write lock — a concurrent opener may have
+            # migrated the store while this connection waited for the lock.
+            if "enc_secret" not in {
+                col[1] for col in cur.execute("PRAGMA table_info(users)").fetchall()
+            }:
+                cur.execute("ALTER TABLE users ADD COLUMN enc_secret TEXT")
+            pending = cur.execute("SELECT username FROM users WHERE enc_secret IS NULL").fetchall()
+            for (username,) in pending:
+                cur.execute(
+                    "UPDATE users SET enc_secret = ? WHERE username = ?",
+                    (secrets.token_urlsafe(32), username),
+                )
+            cur.execute("SELECT version FROM schema_version LIMIT 1")
+            version_row = cur.fetchone()
+            if version_row is None:
+                cur.execute("INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
+            elif version_row[0] != SCHEMA_VERSION:
+                cur.execute("UPDATE schema_version SET version = ?", (SCHEMA_VERSION,))
+            conn.execute("COMMIT")
+        except sqlite3.OperationalError as exc:
+            _rollback_quiet(conn)
+            raise StoreSchemaError(
+                f"Config store {self._path!r} needs an in-place migration to schema "
+                f"version {SCHEMA_VERSION} but could not be written ({exc}). Mount it "
+                f"read-write and open it once (e.g. run any CLI command) to migrate."
+            ) from exc
+        except BaseException:
+            _rollback_quiet(conn)
+            raise
 
     # -- read API ------------------------------------------------------------
 
@@ -555,6 +586,8 @@ class ConfigStore:
             raise StoreValidationError("key_hash must not be empty")
         if enc_secret is None:
             enc_secret = secrets.token_urlsafe(32)
+        elif not enc_secret:
+            raise StoreValidationError("enc_secret must not be empty")
         conn = self._get_conn()
         try:
             conn.execute("BEGIN")

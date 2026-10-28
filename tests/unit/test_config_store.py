@@ -352,6 +352,13 @@ def test_create_user_explicit_enc_secret_honored(tmp_path):
         assert store.get_user_secrets() == {"alice": "fixed-test-secret"}
 
 
+def test_create_user_empty_enc_secret_rejected(tmp_path):
+    """An explicitly empty secret must never be stored as key material."""
+    with ConfigStore(_store_path(tmp_path)) as store:
+        with pytest.raises(StoreValidationError, match="enc_secret must not be empty"):
+            store.create_user("alice", "h", enc_secret="")
+
+
 def test_v1_store_migrates_to_v2_with_backfill_and_rows_intact(tmp_path):
     """A hand-built schema-1 store (version row 1, no enc_secret column)
     opens on current code: column added, secrets backfilled distinctly,
@@ -407,6 +414,23 @@ def test_v1_store_migrates_to_v2_with_backfill_and_rows_intact(tmp_path):
         assert snap.calendars == (CalendarRecord("work", "nc", "personal"),)
 
 
+def test_newer_version_guard_runs_before_alter(tmp_path):
+    """Guard-before-ALTER: a newer-version store built from the v1 DDL is
+    refused WITHOUT the enc_secret column ever being added — the only
+    setup where the current DDL's CREATE IF NOT EXISTS cannot mask a
+    guard that runs too late."""
+    path = _store_path(tmp_path, "future.db")
+    conn = sqlite3.connect(path)
+    conn.executescript(_V1_DDL)
+    conn.execute("INSERT INTO schema_version (version) VALUES (3)")
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(StoreSchemaError, match="newer than supported"):
+        ConfigStore(path)
+    assert "enc_secret" not in _user_columns(path), "guard must fire before the ALTER"
+
+
 def test_crash_recovery_column_present_version_1_null_secret_self_heals(tmp_path):
     """Partial migration state (column added, version still 1, NULL secret)
     self-heals on next open: backfill runs and version → 2."""
@@ -425,6 +449,25 @@ def test_crash_recovery_column_present_version_1_null_secret_self_heals(tmp_path
         assert version == 2
         secret = store.get_user_secret("alice")
         assert secret, "NULL secret must be backfilled on reopen"
+
+
+def test_reopen_v2_store_with_null_secret_backfills_via_probe(tmp_path):
+    """Gate (b): version already 2 but a NULL secret → the read-only probe
+    triggers the backfill on reopen; the version stays 2 (gate (a), the
+    version<2 shortcut, is covered by the crash-recovery test above)."""
+    path = _store_path(tmp_path)
+    with ConfigStore(path) as store:
+        store.create_user("alice", "h")
+    conn = sqlite3.connect(path)
+    conn.execute("UPDATE users SET enc_secret = NULL WHERE username = 'alice'")
+    conn.commit()
+    conn.close()
+
+    with ConfigStore(path) as store:
+        secret = store.get_user_secret("alice")
+        assert secret, "probe gate must backfill the NULL secret on reopen"
+        version = store._get_conn().execute("SELECT version FROM schema_version").fetchone()[0]
+        assert version == 2, "backfill-only reopen must not change the version"
 
 
 def test_reopen_fully_migrated_store_issues_no_writes(tmp_path, monkeypatch):
