@@ -446,10 +446,21 @@ def test_needed_migration_on_readonly_store_raises_typed_schema_error(tmp_path):
     p = Path(path)
     p.chmod(0o444)
     try:
-        with pytest.raises(StoreSchemaError, match="could not be written"):
+        with pytest.raises(StoreSchemaError, match="could not be written") as excinfo:
             ConfigStore(path)
     finally:
         p.chmod(0o644)  # let pytest clean up tmp_path
+
+    # Typed error with the sqlite failure preserved as the cause …
+    assert isinstance(excinfo.value.__cause__, sqlite3.OperationalError)
+    # … and the failed migration left the store completely untouched.
+    assert "enc_secret" not in _user_columns(path), "failed migration must not add the column"
+    check = sqlite3.connect(path)
+    try:
+        version = check.execute("SELECT version FROM schema_version").fetchone()[0]
+    finally:
+        check.close()
+    assert version == 1, "failed migration must not bump the version"
 
 
 def test_crash_recovery_column_present_version_1_null_secret_self_heals(tmp_path):
@@ -458,7 +469,9 @@ def test_crash_recovery_column_present_version_1_null_secret_self_heals(tmp_path
     path = _store_path(tmp_path)
     with ConfigStore(path) as store:
         store.create_user("alice", "h")
-    # Simulate the crash window: ALTER committed, backfill/version not yet.
+    # Tamper to a legacy partial state (column added, version still 1,
+    # NULL secret) as a half-migrated pre-atomicity store could leave it —
+    # the self-heal path must repair it on reopen.
     conn = sqlite3.connect(path)
     conn.execute("UPDATE schema_version SET version = 1")
     conn.execute("UPDATE users SET enc_secret = NULL WHERE username = 'alice'")
@@ -489,6 +502,39 @@ def test_reopen_v2_store_with_null_secret_backfills_via_probe(tmp_path):
         assert secret, "probe gate must backfill the NULL secret on reopen"
         version = store._get_conn().execute("SELECT version FROM schema_version").fetchone()[0]
         assert version == 2, "backfill-only reopen must not change the version"
+
+
+def test_mid_migration_failure_rolls_back_alter_and_version(tmp_path, monkeypatch):
+    """The migration is one atomic unit: a failure inside the backfill
+    loop rolls back the ALTER and the version bump together, leaving the
+    store byte-for-byte unmigrated for the next open to retry."""
+    path = _store_path(tmp_path, "atomic.db")
+    conn = sqlite3.connect(path)
+    conn.executescript(_V1_DDL)
+    conn.execute("INSERT INTO schema_version (version) VALUES (1)")
+    conn.execute("INSERT INTO users (username, key_hash) VALUES ('alice', 'hash-alice')")
+    conn.commit()
+    conn.close()
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("backfill interrupted")
+
+    # Fail exactly at the per-row token generation, after the ALTER ran.
+    monkeypatch.setattr("caldav_mcp.config_store.secrets.token_urlsafe", _boom)
+
+    with pytest.raises(RuntimeError, match="backfill interrupted"):
+        ConfigStore(path)
+
+    # Everything — ALTER included — must have been rolled back.
+    assert "enc_secret" not in _user_columns(path), "failed migration must roll back the ALTER"
+    check = sqlite3.connect(path)
+    try:
+        version = check.execute("SELECT version FROM schema_version").fetchone()[0]
+        users = check.execute("SELECT username FROM users").fetchall()
+    finally:
+        check.close()
+    assert version == 1, "failed migration must roll back the version bump"
+    assert users == [("alice",)]
 
 
 def test_reopen_fully_migrated_store_issues_no_writes(tmp_path, monkeypatch):

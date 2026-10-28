@@ -407,11 +407,12 @@ class ConfigStore:
         # Migration write path: ALTER + per-row backfill + version bump as
         # ONE atomic transaction (version bumped only AFTER ALTER and
         # backfill succeed).  BEGIN IMMEDIATE takes the write lock up
-        # front and every precondition is re-checked under it, so
+        # front and every precondition — column, NULL secrets, version —
+        # is re-checked under it (the forward guard included), so
         # concurrent openers (server start vs. CLI) serialize instead of
         # racing; a crash rolls the whole unit back and the next open
-        # re-runs it.  Write failures surface as a typed
-        # StoreSchemaError, never as an opaque sqlite3 error.
+        # re-runs it.  Failures of these migration writes surface as a
+        # typed StoreSchemaError, never as an opaque sqlite3 error.
         try:
             conn.execute("BEGIN IMMEDIATE")
             # Re-check under the write lock — a concurrent opener may have
@@ -430,11 +431,24 @@ class ConfigStore:
             version_row = cur.fetchone()
             if version_row is None:
                 cur.execute("INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
-            elif version_row[0] != SCHEMA_VERSION:
+            elif version_row[0] > SCHEMA_VERSION:
+                # Forward guard re-applied under the lock — never let a
+                # concurrent newer-release writer's version be downgraded.
+                raise StoreSchemaError(
+                    f"Database schema version {version_row[0]} is newer than "
+                    f"supported version {SCHEMA_VERSION}"
+                )
+            elif version_row[0] < SCHEMA_VERSION:
                 cur.execute("UPDATE schema_version SET version = ?", (SCHEMA_VERSION,))
             conn.execute("COMMIT")
         except sqlite3.OperationalError as exc:
             _rollback_quiet(conn)
+            if "locked" in str(exc):
+                raise StoreSchemaError(
+                    f"Config store {self._path!r} needs an in-place migration to schema "
+                    f"version {SCHEMA_VERSION} but the store is locked by another "
+                    f"process — retry shortly ({exc})."
+                ) from exc
             raise StoreSchemaError(
                 f"Config store {self._path!r} needs an in-place migration to schema "
                 f"version {SCHEMA_VERSION} but could not be written ({exc}). Mount it "
