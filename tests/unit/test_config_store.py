@@ -427,8 +427,29 @@ def test_newer_version_guard_runs_before_alter(tmp_path):
     conn.close()
 
     with pytest.raises(StoreSchemaError, match="newer than supported"):
-        ConfigStore(path)
+        ConfigStore(path).__enter__()
     assert "enc_secret" not in _user_columns(path), "guard must fire before the ALTER"
+
+
+@pytest.mark.skipif(_IS_ROOT, reason="root bypasses filesystem permission checks")
+def test_needed_migration_on_readonly_store_raises_typed_schema_error(tmp_path):
+    """A store that still needs migration but sits on a write-protected file
+    fails open as a typed StoreSchemaError with actionable guidance — never a
+    raw sqlite3.OperationalError."""
+    path = _store_path(tmp_path, "v1-readonly.db")
+    conn = sqlite3.connect(path)
+    conn.executescript(_V1_DDL)
+    conn.execute("INSERT INTO schema_version (version) VALUES (1)")
+    conn.commit()
+    conn.close()
+
+    p = Path(path)
+    p.chmod(0o444)
+    try:
+        with pytest.raises(StoreSchemaError, match="could not be written"):
+            ConfigStore(path)
+    finally:
+        p.chmod(0o644)  # let pytest clean up tmp_path
 
 
 def test_crash_recovery_column_present_version_1_null_secret_self_heals(tmp_path):
