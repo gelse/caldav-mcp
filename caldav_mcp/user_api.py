@@ -214,15 +214,21 @@ def _validate_fields(body: dict[str, object]) -> tuple[dict[str, str], JSONRespo
     On success returns the extracted string fields (with the effective
     ``remote_name`` — defaulting to ``calendar_name``) and ``None``; on
     failure an empty dict and the 400 response.  Required fields must be
-    non-empty strings, the URL must be http(s) with a host, and
-    ``calendar_name`` / ``remote_name`` must pass the store's
-    ``_validate_name`` (same message the store would produce).
+    non-empty, UTF-8-encodable strings (a lone surrogate is valid JSON but
+    would blow up on encode *after* the config/grant writes — admin's
+    rotate-key rule applied to every field), the URL must parse as http(s)
+    with a host, and ``calendar_name`` / ``remote_name`` must pass the
+    store's ``_validate_name`` (same message the store would produce).
     """
     fields: dict[str, str] = {}
     for key in _REQUIRED_FIELDS:
         value = body.get(key)
         if not isinstance(value, str) or not value:
             return {}, JSONResponse({"error": f"{key} must be a non-empty string"}, status_code=400)
+        try:
+            value.encode("utf-8")
+        except UnicodeEncodeError:
+            return {}, JSONResponse({"error": f"{key} must be valid UTF-8"}, status_code=400)
         fields[key] = value
 
     raw_remote = body.get("remote_name")
@@ -232,8 +238,20 @@ def _validate_fields(body: dict[str, object]) -> tuple[dict[str, str], JSONRespo
         remote_name = raw_remote
     else:
         return {}, JSONResponse({"error": "remote_name must be a string"}, status_code=400)
+    try:
+        remote_name.encode("utf-8")
+    except UnicodeEncodeError:
+        return {}, JSONResponse({"error": "remote_name must be valid UTF-8"}, status_code=400)
 
-    parsed_url = urlparse(fields["caldav_url"])
+    try:
+        parsed_url = urlparse(fields["caldav_url"])
+    except ValueError:
+        # urlparse raises ValueError on structurally broken inputs (e.g.
+        # "https://[::1/dav" → "Invalid IPv6 URL") — a 400, never a 500.
+        return {}, JSONResponse(
+            {"error": "caldav_url must be an http or https URL with a host"},
+            status_code=400,
+        )
     if parsed_url.scheme not in ("http", "https") or not parsed_url.netloc:
         return {}, JSONResponse(
             {"error": "caldav_url must be an http or https URL with a host"},

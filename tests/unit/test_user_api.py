@@ -503,13 +503,39 @@ def test_bad_calendar_name_400_before_any_store_write(client, calendar_name):
 
 
 def test_invalid_url_400(client):
-    """Non-http scheme / missing host / bare host path → 400 before any write."""
-    for url in ("ftp://cal.example/dav", "https://", "cal.example/dav"):
+    """Non-http scheme / missing host / bare host path / broken parse → 400 before any write."""
+    for url in ("ftp://cal.example/dav", "https://", "cal.example/dav", "https://[::1/dav"):
         resp = client.post(
             "/user/calendars", json=_payload(caldav_url=url), headers=_auth_headers()
         )
         assert resp.status_code == 400, (url, resp.status_code, resp.text)
         assert "caldav_url" in _error_of(resp)
+    with ConfigStore(_db_path()) as store:
+        assert store.list_configs() == ()
+
+
+def test_lone_surrogate_fields_400_before_any_store_write(client):
+    """Lone-surrogate strings (valid JSON, invalid UTF-8) → 400, no store write.
+
+    Regression: surrogates survive ``_validate_fields``' type/emptiness
+    checks and only explode on ``.encode("utf-8")`` — previously *after*
+    ``create_config``/``grant_config`` had committed (500 + partial state).
+    The body is sent as escaped JSON text (``\\ud800``) because httpx's
+    ``json=`` refuses to encode surrogates client-side; the server's
+    ``json.loads`` reconstructs the lone surrogate, which is exactly the
+    input shape that reached the route before the fix.
+    """
+    base = _payload()
+    for key in ("caldav_url", "caldav_username", "caldav_password"):
+        body = dict(base)
+        body[key] = "\ud800"
+        resp = client.post(
+            "/user/calendars",
+            data=json.dumps(body),  # ensure_ascii=True → "\ud800" escape in the wire text
+            headers={"content-type": "application/json", **_auth_headers()},
+        )
+        assert resp.status_code == 400, (key, resp.status_code, resp.text)
+        assert "valid UTF-8" in _error_of(resp)
     with ConfigStore(_db_path()) as store:
         assert store.list_configs() == ()
 
