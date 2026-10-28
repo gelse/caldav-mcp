@@ -369,8 +369,7 @@ def test_v1_store_migrates_to_v2_with_backfill_and_rows_intact(tmp_path):
         "VALUES ('work', 'nc', 'https://cal.example/dav', 'direct', 'u', 'enc')"
     )
     conn.execute(
-        "INSERT INTO calendars (config_name, remote_name, name) "
-        "VALUES ('work', 'nc', 'personal')"
+        "INSERT INTO calendars (config_name, remote_name, name) VALUES ('work', 'nc', 'personal')"
     )
     conn.commit()
     conn.close()
@@ -444,9 +443,11 @@ def test_reopen_fully_migrated_store_issues_no_writes(tmp_path, monkeypatch):
     def _tracing_connect(*args, **kwargs):
         conn = orig_connect(*args, **kwargs)
         conn.set_trace_callback(
-            lambda sql: write_statements.append(sql)
-            if sql.lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE", "ALTER"))
-            else None
+            lambda sql: (
+                write_statements.append(sql)
+                if sql.lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE", "ALTER"))
+                else None
+            )
         )
         return conn
 

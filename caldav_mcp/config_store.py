@@ -476,8 +476,7 @@ class ConfigStore:
         """
         conn = self._get_conn()
         rows = conn.execute(
-            "SELECT username, enc_secret FROM users "
-            "WHERE enc_secret IS NOT NULL ORDER BY rowid"
+            "SELECT username, enc_secret FROM users WHERE enc_secret IS NOT NULL ORDER BY rowid"
         ).fetchall()
         return {r[0]: r[1] for r in rows}
 
