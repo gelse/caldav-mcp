@@ -26,6 +26,7 @@ from caldav_mcp.db_loader import (
     ProConfigError,
     ProState,
     ProUser,
+    _build_candidate_secrets,
     _decrypt_with_secret,
     _encrypt_with_secret,
     load_pro_state,
@@ -720,6 +721,30 @@ class TestUserSecretRoundTrip:
             _decrypt_with_secret(token, OTHER_USER_SECRET)
 
 
+class TestCandidateSecrets:
+    """Plan D3: candidate secrets are per-config and sorted by username."""
+
+    def test_candidates_sorted_by_username_and_scoped_per_config(self, tmp_path: Path) -> None:
+        db = str(tmp_path / "store.db")
+        with ConfigStore(db) as store:
+            store.create_config("work")
+            store.create_config("home")
+            # Reverse username insertion order — rowid order must not win.
+            store.create_user("bob", "hash-bob", enc_secret=OTHER_USER_SECRET)
+            store.create_user("alice", "hash-alice", enc_secret=USER_SECRET)
+            store.grant_config("bob", "work")
+            store.grant_config("alice", "work")
+            store.grant_config("bob", "home")
+
+        with ConfigStore(db) as store:
+            candidates = _build_candidate_secrets(store, store.list_users())
+
+        assert candidates == {
+            "work": [USER_SECRET, OTHER_USER_SECRET],  # alice (sorted) first
+            "home": [OTHER_USER_SECRET],  # alice never granted "home"
+        }
+
+
 class TestTaggedRemoteDecryption:
     """Plan D7: ``u1:``-tagged remotes decrypt via the granted user's secret."""
 
@@ -769,6 +794,19 @@ class TestTaggedRemoteDecryption:
 
         with pytest.raises(ConfigSecretError):
             load_pro_state(db, "wrong-master-secret")
+
+    def test_bare_token_never_tries_user_secret_fallback(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An untagged token the master key cannot decrypt must raise even
+        though the granted user's secret would open it — proof that the
+        bare path is master-only (no candidate fallback for untagged rows)."""
+        db = str(tmp_path / "store.db")
+        monkeypatch.setenv("CALDAV_MCP_CONFIG_SECRET", SECRET)
+        _seed_token_store(db, bare_enc=_encrypt_with_secret("legacy-pwd", USER_SECRET))
+
+        with pytest.raises(ConfigSecretError):
+            load_pro_state(db, SECRET)
 
 
 class TestTaggedDropOnFailure:
@@ -847,6 +885,89 @@ class TestTaggedDropOnFailure:
             db,
             bare_enc=encrypt_secret("legacy-pwd"),
             tagged_enc=_tag("user-pwd", OTHER_USER_SECRET),  # != USER_SECRET
+        )
+
+        with caplog.at_level(logging.WARNING, logger="caldav_mcp.db_loader"):
+            state = load_pro_state(db, SECRET)  # ProConfigError must NOT be raised
+
+        cfg = state.app_config.configs[0]
+        assert find_remote(cfg, "provisioned") is None
+        assert _remote_password(cfg, "legacy") == "legacy-pwd"
+        assert "Dropping remote" in self._drop_warnings(caplog)
+
+    def test_candidate_secrets_scoped_to_granted_config(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Candidates are per config, never a global pool: a user granted
+        only ``beta`` must not decrypt ``alpha``'s tagged row — alpha's
+        remote drops, beta loads intact."""
+        db = str(tmp_path / "store.db")
+        monkeypatch.setenv("CALDAV_MCP_CONFIG_SECRET", SECRET)
+        with ConfigStore(db) as store:
+            store.create_config("alpha")
+            store.create_remote(
+                "alpha",
+                RemoteRecord(
+                    config_name="alpha",
+                    name="provisioned",
+                    url="https://alpha.example.com/dav/",
+                    auth_mode="direct",
+                    username="alice",
+                    password_enc=_tag("user-pwd", USER_SECRET),
+                ),
+            )
+            store.create_calendar("alpha", "provisioned", "personal")
+            store.create_config("beta")
+            store.create_remote(
+                "beta",
+                RemoteRecord(
+                    config_name="beta",
+                    name="healthy",
+                    url="https://beta.example.com/dav/",
+                    auth_mode="direct",
+                    username="svc",
+                    password_enc=encrypt_secret("beta-pwd"),
+                ),
+            )
+            store.create_calendar("beta", "healthy", "personal")
+            store.create_user("alice", "hash-alice", enc_secret=USER_SECRET)
+            store.grant_config("alice", "beta")
+
+        with caplog.at_level(logging.WARNING, logger="caldav_mcp.db_loader"):
+            state = load_pro_state(db, SECRET)  # ProConfigError must NOT be raised
+
+        alpha = find_config(state.app_config, "alpha")
+        beta = find_config(state.app_config, "beta")
+        assert alpha is not None and beta is not None
+        assert find_remote(alpha, "provisioned") is None
+        assert "alpha" in self._drop_warnings(caplog)
+        assert _remote_password(beta, "healthy") == "beta-pwd"
+        assert find_calendar(beta, "healthy", "personal") is not None
+
+    @pytest.mark.parametrize(
+        "tagged_enc",
+        ["u1:not-a-token", "u1:gA", "u1:ünïcode-token"],
+        ids=["garbage-base64", "short-token", "non-ascii"],
+    )
+    def test_malformed_tagged_payload_drops_remote_and_warns(
+        self,
+        tagged_enc: str,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Malformed payloads (bad base64, truncated, non-ASCII) are wrapped
+        into ConfigSecretError per candidate → same drop contract, never
+        raise — corrupted rows must not crash startup either."""
+        db = str(tmp_path / "store.db")
+        monkeypatch.setenv("CALDAV_MCP_CONFIG_SECRET", SECRET)
+        _seed_token_store(
+            db,
+            bare_enc=encrypt_secret("legacy-pwd"),
+            tagged_enc=tagged_enc,
         )
 
         with caplog.at_level(logging.WARNING, logger="caldav_mcp.db_loader"):

@@ -41,6 +41,7 @@ from caldav_mcp.config_store import (
     ConfigStore,
     RemoteRecord,
     StoreError,
+    UserRecord,
 )
 
 logger = logging.getLogger(__name__)
@@ -136,19 +137,23 @@ def _decrypt_tagged_with_candidates(token: str, candidates: Sequence[str]) -> st
     return None
 
 
-def _build_candidate_secrets(store: ConfigStore) -> dict[str, list[str]]:
+def _build_candidate_secrets(
+    store: ConfigStore, users: Sequence[UserRecord]
+) -> dict[str, list[str]]:
     """Build the per-config map of candidate user secrets for decryption.
 
     For each config name, the encryption secrets of every user granted
-    that config (``get_user_secrets()`` joined with
-    ``list_users().config_names``), **sorted by username** so multi-grant
-    configs decrypt deterministically regardless of insertion order.
-    Users whose secret column is still NULL (pre-v2 rows — impossible
-    after a successful schema migration) are skipped.
+    that config (``get_user_secrets()`` joined with *users*
+    ``config_names``), **sorted by username** so multi-grant configs
+    decrypt deterministically regardless of insertion order.  *users* is
+    the same snapshot the caller returns as ``ProState.users``, so the
+    candidate map and the user snapshot are always consistent (fetched
+    once per load).  Users whose secret column is still NULL (pre-v2
+    rows — impossible after a successful schema migration) are skipped.
     """
     secrets_by_user = store.get_user_secrets()
     candidates: dict[str, list[str]] = {}
-    for user in sorted(store.list_users(), key=lambda u: u.username):
+    for user in sorted(users, key=lambda u: u.username):
         user_secret = secrets_by_user.get(user.username)
         if user_secret is None:
             continue
@@ -386,17 +391,18 @@ def load_pro_state(db_path: str, secret: str) -> ProState:
 
     try:
         with ConfigStore(db_path) as store:
-            # Candidate user secrets per config — collected before mapping
-            # so every config's remotes can consult them (sorted by
-            # username inside for deterministic multi-grant order).
-            candidate_secrets = _build_candidate_secrets(store)
+            # One user snapshot serves both the candidate map (below) and
+            # ProState.users, so they can never disagree — collected before
+            # the config-mapping loop so every config's remotes can consult
+            # it (sorted by username inside for deterministic multi-grant
+            # order).
+            user_records = store.list_users()
+            candidate_secrets = _build_candidate_secrets(store, user_records)
             config_names = store.list_configs()
             configs: list[Config] = []
             for name in config_names:
                 snapshot = store.load_config(name)
                 configs.append(_map_config(snapshot, secret, candidate_secrets.get(name, ())))
-
-            user_records = store.list_users()
     except StoreError as exc:
         raise ProConfigError(f"Failed to load pro-mode config from {db_path!r}: {exc}") from exc
     except ConfigSecretError:
