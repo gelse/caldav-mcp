@@ -526,7 +526,7 @@ def test_lone_surrogate_fields_400_before_any_store_write(client):
     input shape that reached the route before the fix.
     """
     base = _payload()
-    for key in ("caldav_url", "caldav_username", "caldav_password"):
+    for key in ("caldav_url", "caldav_username", "caldav_password", "remote_name"):
         body = dict(base)
         body[key] = "\ud800"
         resp = client.post(
