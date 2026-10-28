@@ -19,17 +19,106 @@ SQLite config store at startup, enabling multi-user, multi-account deployments.
 - **Dotted-path writes**: Write tools require a `config.remote.calendar`
   dotted path (e.g. `main.radicale.work`) to uniquely identify the target
   calendar. Plain calendar names are rejected.
-- **Users apply live, configs still need a restart**: The store is read
-  once at startup and frozen into an immutable `AppConfig`, so config,
-  remote, and calendar changes require a server restart. User changes made
-  through the [admin REST API](api.md#admin-rest-api) (create, delete, key
-  rotation, grant, revoke,
-  replace grants) take effect on the next request instead — their
-  responses no longer carry `restart_required` (removed with M5 users-only
-  hot reload); a failed live reload is reported as `"reload": "failed"`.
-  One caveat: granting a config that was added after startup responds with
+- **Users apply live, other config changes still need a restart**: The
+  store is read once at startup and frozen into an immutable `AppConfig`.
+  User changes made through the [admin REST API](api.md#admin-rest-api)
+  (create, delete, key rotation, grant, revoke, replace grants) take
+  effect on the next request instead — their responses no longer carry
+  `restart_required` (removed with M5 users-only hot reload); a failed
+  live reload is reported as `"reload": "failed"`. Calendars provisioned
+  through [`POST /user/calendars`](#user-managed-calendars-homelab) also
+  apply live: the route re-reads the store and swaps the loaded topology
+  in place, so the returned path works immediately. One caveat: granting
+  a config that was added after startup responds with
   `config_topology_restart_required: true` — the grant applies, but
-  reaching that config still needs a restart.
+  reaching that config still needs a restart. Config, remote, and
+  calendar changes made any other way (CLI, direct store edits) require a
+  server restart.
+
+## User-managed calendars (homelab)
+
+`POST /user/calendars` lets a DB user add their own CalDAV calendar in one
+authenticated call. The route builds the whole chain — personal config
+`user-<username>`, a `direct` remote whose password is encrypted with that
+user's per-user store secret, the calendar entry, and the grant — applies
+it live, and returns the dotted `config.remote.calendar` path for
+immediate use with the MCP tools. No restart follows the call; the full
+contract (request fields, status codes, error bodies) is in
+[User calendar provisioning](api.md#user-calendar-provisioning).
+
+```bash
+curl -s -X POST http://localhost:8600/user/calendars \
+  -H "X-Mcp-Username: alice" \
+  -H "Authorization: Bearer <user-key>" \
+  -H "Content-Type: application/json" \
+  -d '{"caldav_url": "http://radicale:5232", "caldav_username": "bob",
+       "caldav_password": "<caldav-password>", "calendar_name": "hobby"}'
+# 201  {"path": "user-alice.hobby.hobby", "config": "user-alice",
+#       "remote": "hobby", "calendar": "hobby"}
+```
+
+**Naming rules.**
+
+- The personal config is always `user-<username>` with every character
+  outside `[A-Za-z0-9_-]` replaced by `-` — derived from the
+  authenticated username, never from the request body.
+- `calendar_name` (and the optional `remote_name`, which defaults to
+  `calendar_name`) must match `^[A-Za-z0-9][A-Za-z0-9_-]*$`: no dots —
+  dots separate the path segments — and no spaces. An invalid name is
+  rejected with 400 before anything is written to the store.
+- `calendar_name` must equal the calendar's **display name on the CalDAV
+  server** exactly. The route only registers the calendar; create it
+  server-side first. A mismatched name still provisions (the route never
+  contacts the server) and fails at first use — the tool's not-found
+  error then lists the server's available names, which is the recovery
+  path (there is no discovery endpoint).
+
+**Security tradeoff.** The per-user secret each password is encrypted
+with lives in the same SQLite file as the ciphertext it protects. A leak
+of the ciphertext alone — an old backup fragment, a copied row, a dump
+synced elsewhere — exposes nothing without the matching secret row; an
+attacker who obtains the database file gets both halves and recovers the
+passwords. That tradeoff is deliberate: homelab convenience, not
+KMS-grade at-rest protection. Treat the store file itself as secret.
+
+**Collisions (409).** The route refuses instead of guessing when:
+
+- the personal config is already provisioned for a *different* user (two
+  usernames can sanitize to the same name);
+- the chosen `remote_name` exists with a different URL or CalDAV username
+  (or belongs to a passthrough remote) — choose another name;
+- the existing remote's stored password cannot be decrypted with the
+  caller's secret — choose another name;
+- the calendar already exists under that config and remote (a genuine
+  duplicate).
+
+Retrying an interrupted call is safe: identical connection details reuse
+the stored remote (a changed password refreshes the token) until the
+calendar row exists — a completed call re-POSTed ends in the
+duplicate-calendar 409.
+
+**Degradation and recovery.** Deleting the user or revoking the grant
+removes the secret material that decrypts the remote's password. At the
+next store load — server start, or any later successful
+`POST /user/calendars`, which re-reads the store — the server logs a
+warning naming the dropped remote and config, omits it from the loaded
+configuration, and keeps loading everything else: the dotted path then
+stops resolving — write tools answer with the generic unknown-path
+error, read fan-outs find no accessible scope. Recovery depends on the
+cause:
+
+- **Grant revoked, user intact** — re-grant the config through the
+  [admin REST API](api.md#admin-rest-api); the remote returns at the next
+  store load (a restart, or the next successful `POST /user/calendars`).
+- **User deleted** — re-create the user, then re-POST the same body with
+  a fresh `remote_name`: the old token died with the deleted user's
+  secret, so the old name answers 409. Alternatively, delete the orphaned
+  `user-<name>` config with the CLI and re-POST under the original name.
+
+**Rate limiting.** This route shares the MCP endpoint's auth limiter, so
+a rate-limited caller gets **401** carrying the limiter's `retry in Ns`
+hint — deliberately not the admin API's 429: re-checking the limiter here
+would double-count the failure.
 
 ## Required env vars
 
@@ -200,6 +289,9 @@ option A or option B above.
 - [`docs/api.md`](api.md#admin-rest-api) — Admin REST API: routes, status
   codes, examples, and restart/reload semantics for managing users
   (create/delete, key rotation, grants) over HTTP
+- [`docs/api.md`](api.md#user-calendar-provisioning) — User calendar
+  provisioning: the `POST /user/calendars` route, its schema, status
+  codes, and reload semantics
 - [`docs/ui.md`](ui.md) — admin UI: manages users through the Admin REST
   API and is served at `/ui` when `SHOW_UI=true` (independent of pro mode;
   without the admin API it shows its “admin API not available” screen)
