@@ -157,7 +157,10 @@ class TestRateLimiting:
                     extra_headers=_auth_headers("alice", "wrong-key"),
                 )
 
-        # The next request should be rate-limited.
+        # The next request should be rate-limited — assert the limiter's own
+        # wording, not the generic auth-rejection fallback: a plain wrong-key
+        # failure also carries status "auth", so "AUTH" in the text would
+        # let a broken limiter pass.
         with requests.Session() as s:
             resp = _mcp_call(
                 s,
@@ -166,4 +169,5 @@ class TestRateLimiting:
                 extra_headers=_auth_headers("alice", "wrong-key"),
             )
             text = _extract_result_text(resp)
-            assert "rate limit" in text.lower() or "AUTH" in text.upper()
+            assert "rate limit" in text.lower(), text
+            assert "retry in" in text.lower(), text

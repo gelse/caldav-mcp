@@ -39,6 +39,8 @@
 - `test_pro_mode.py` — Pro-mode DB auth, fan-out reads, dotted-path writes
 - `test_multi_remote_fanout.py` — Multi-remote fan-out, partial failure, passthrough, header/env edge cases
 - `test_admin_api.py` — Admin REST API: read/write routes, pro/simple mode gating, CLI cross-surface, M5.1 live round-trips (create/delete/rotate apply on the next request; grant/revoke move addressing; CLI-added config still needs a restart)
+- `test_user_api.py` — User calendar provisioning: `POST /user/calendars` end to end (201 → store rows → live dotted-path resolution over MCP)
+- `test_zz_rate_limit.py` — Rate-limit burst on repeated DB auth failures (must stay collected last — see the ordering note below)
 
 ## Configuration
 
@@ -85,10 +87,21 @@ username would serve a healthy remote's cached session).
 
 ### Pro-mode tests
 
-Pro-mode tests (`test_pro_mode.py`, `test_multi_remote_fanout.py`) require the
-`mcp-pro` Docker Compose service running with `DB_CONFIG_ENABLED=true`. The
-Makefile builds the SQLite store automatically before starting compose. The MCP
-server is available at `http://localhost:8080/mcp`.
+Pro-mode tests (`test_pro_mode.py`, `test_multi_remote_fanout.py`,
+`test_admin_api.py`, `test_ui_hosting.py`, `test_user_api.py`,
+`test_zz_rate_limit.py`) require the `mcp-pro` Docker Compose service
+running with `DB_CONFIG_ENABLED=true`. The Makefile builds the SQLite store
+automatically before starting compose. The MCP server is available at
+`http://localhost:8080/mcp`.
+
+> **Ordering invariant: `test_zz_rate_limit.py` must stay collected last.**
+> Its deliberate burst of bad-key requests exhausts the shared in-memory
+> auth-limiter bucket (one fallback `"unknown"` bucket for the whole
+> harness), and the limiter checks the limit *before* verifying
+> credentials — so no later request can reset a hot bucket within the
+> 60-second window. The `zz` prefix keeps pytest's alphabetical collection
+> honoring that; positively-authenticated suites (`test_user_api.py`, …)
+> must never run after it.
 
 Because both modules share that one service, the store built by
 `tests/integration/build_pro_store.py` (topology defined in `conftest_pro.py`)

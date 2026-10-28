@@ -19,15 +19,18 @@ Test cases:
 
 1. DB auth: success, wrong key, unknown user, missing X-Mcp-Username.
 2. CALDAV_MCP_API_KEY-only auth rejected in pro mode.
-3. Rate limiting on repeated DB auth failures.
-4. Fan-out read: ``caldav_list_calendars`` as ``alice`` shows both configs,
+3. Fan-out read: ``caldav_list_calendars`` as ``alice`` shows both configs,
    as ``bob`` only ``main``.
-5. Dotted-path write: ``caldav_create_event`` as ``alice`` with
+4. Dotted-path write: ``caldav_create_event`` as ``alice`` with
    ``calendar_name="main.radicale.work"`` succeeds.
-6. Plain-name write: ``caldav_create_event`` as ``alice`` with
+5. Plain-name write: ``caldav_create_event`` as ``alice`` with
    ``calendar_name="work"`` → typed rejection.
-7. Existing simple-mode suite untouched (verified by ``make test-integration``
+6. Existing simple-mode suite untouched (verified by ``make test-integration``
    running all files).
+
+Rate limiting on repeated DB auth failures lives in
+``test_zz_rate_limit.py``, which must stay collected last: its deliberate
+failure burst exhausts the shared auth-limiter bucket.
 """
 
 from __future__ import annotations
