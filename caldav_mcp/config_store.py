@@ -47,7 +47,13 @@ The store is opened via ``ConfigStore(path)`` which is a context manager.
 On open the module runs ``PRAGMA foreign_keys = ON`` and applies the DDL
 (idempotent ``CREATE TABLE IF NOT EXISTS``).  A forward-compatibility guard
 rejects databases whose ``schema_version`` row is *newer* than the version
-this code knows (currently **1**).
+this code knows (currently **2**), before any migration runs.  Opening
+also migrates older stores in place: a pre-v2 ``users`` table gains the
+``enc_secret`` column and every NULL secret is backfilled with a fresh
+random token, with the version row bumped only after both succeed (a
+crash mid-migration re-runs safely on the next open).  The backfill is
+gated — a fully-migrated store opens without issuing a single write, so
+read-only-degraded stores keep loading.
 
 All multi-statement writes use an explicit transaction (``BEGIN``/``COMMIT``
 or ``ROLLBACK``) via ``isolation_level=None``.
@@ -57,6 +63,7 @@ from __future__ import annotations
 
 import os
 import re
+import secrets
 import sqlite3
 import stat
 from dataclasses import dataclass
@@ -146,7 +153,7 @@ class ConfigSnapshot:
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _DDL = """\
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -155,7 +162,8 @@ CREATE TABLE IF NOT EXISTS schema_version (
 
 CREATE TABLE IF NOT EXISTS users (
     username     TEXT PRIMARY KEY,
-    key_hash     TEXT NOT NULL
+    key_hash     TEXT NOT NULL,
+    enc_secret   TEXT
 );
 
 CREATE TABLE IF NOT EXISTS user_configs (
@@ -337,7 +345,9 @@ class ConfigStore:
         cur = conn.cursor()
         cur.executescript(_DDL)
 
-        # Check existing version (if any row exists).
+        # Check existing version (if any row exists).  The
+        # forward-compatibility guard runs BEFORE any ALTER so a database
+        # from a newer release is refused untouched.
         cur.execute("SELECT version FROM schema_version LIMIT 1")
         row = cur.fetchone()
         if row is not None:
@@ -347,10 +357,61 @@ class ConfigStore:
                     f"Database schema version {on_disk_version} is newer than "
                     f"supported version {SCHEMA_VERSION}"
                 )
-            # version == SCHEMA_VERSION → nothing to do
+            stored_version: int | None = on_disk_version
         else:
-            # Fresh database – insert version.
-            cur.execute("INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
+            # Fresh database – version is inserted below, after the
+            # (empty) migration steps succeed.
+            stored_version = None
+
+        # v1 → v2: add the per-user secret column when missing.  The fresh
+        # DDL above already carries it, so this only fires on pre-v2
+        # databases (CREATE TABLE IF NOT EXISTS leaves old tables alone).
+        missing_column = "enc_secret" not in {
+            col[1] for col in cur.execute("PRAGMA table_info(users)").fetchall()
+        }
+        if missing_column:
+            cur.execute("ALTER TABLE users ADD COLUMN enc_secret TEXT")
+
+        # Gated backfill: only run when there is something to migrate —
+        # stored version < 2, or the read-only probe finds a NULL secret
+        # (crash-recovery / manual tamper).  A fully-migrated store
+        # therefore opens without issuing any write, preserving the
+        # read-only-degraded tolerance.  Each backfilled row gets its own
+        # fresh token; the version row is bumped only AFTER the ALTER and
+        # backfill succeed, so a crash mid-migration re-runs safely on
+        # the next open.
+        if stored_version is not None and stored_version < SCHEMA_VERSION:
+            needs_backfill = True
+        else:
+            needs_backfill = (
+                cur.execute("SELECT 1 FROM users WHERE enc_secret IS NULL LIMIT 1").fetchone()
+                is not None
+            )
+        needs_version_write = stored_version != SCHEMA_VERSION  # None → INSERT, <2 → UPDATE
+
+        if needs_backfill or needs_version_write:
+            # Multi-statement migration write → explicit transaction.
+            conn.execute("BEGIN")
+            try:
+                if needs_backfill:
+                    pending = cur.execute(
+                        "SELECT username FROM users WHERE enc_secret IS NULL"
+                    ).fetchall()
+                    for (username,) in pending:
+                        cur.execute(
+                            "UPDATE users SET enc_secret = ? WHERE username = ?",
+                            (secrets.token_urlsafe(32), username),
+                        )
+                if stored_version is None:
+                    cur.execute(
+                        "INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,)
+                    )
+                elif needs_version_write:
+                    cur.execute("UPDATE schema_version SET version = ?", (SCHEMA_VERSION,))
+                conn.execute("COMMIT")
+            except BaseException:
+                conn.execute("ROLLBACK")
+                raise
 
     # -- read API ------------------------------------------------------------
 
@@ -387,6 +448,52 @@ class ConfigStore:
             ]
             result.append(UserRecord(username=r[0], key_hash=r[1], config_names=tuple(configs)))
         return tuple(result)
+
+    def get_user_secret(self, username: str) -> str | None:
+        """Return the user's per-user encryption secret.
+
+        Returns ``None`` only when the column is still NULL (a pre-v2 row
+        that has not been backfilled — cannot happen after a successful
+        schema migration).  Raises ``StoreNotFoundError`` if the user does
+        not exist.  Never returned via :class:`UserRecord` (that record
+        must not carry secret material).
+        """
+        conn = self._get_conn()
+        _validate_username(username)
+        row = conn.execute(
+            "SELECT enc_secret FROM users WHERE username = ?", (username,)
+        ).fetchone()
+        if row is None:
+            raise StoreNotFoundError(f"user not found: {username!r}")
+        secret: str | None = row[0]
+        return secret
+
+    def get_user_secrets(self) -> dict[str, str]:
+        """Return ``{username: enc_secret}`` for users with a non-NULL secret.
+
+        Insertion (rowid) order — callers needing deterministic candidate
+        ordering sort themselves.  NULL secrets are omitted.
+        """
+        conn = self._get_conn()
+        rows = conn.execute(
+            "SELECT username, enc_secret FROM users "
+            "WHERE enc_secret IS NOT NULL ORDER BY rowid"
+        ).fetchall()
+        return {r[0]: r[1] for r in rows}
+
+    def list_config_grants(self, config_name: str) -> tuple[str, ...]:
+        """Return the usernames granted *config_name*, in grant (rowid) order.
+
+        An unknown or never-granted config returns an empty tuple (no
+        raise) — callers use this for collision checks before writing.
+        """
+        conn = self._get_conn()
+        _validate_name(config_name, "config name")
+        rows = conn.execute(
+            "SELECT username FROM user_configs WHERE config_name = ? ORDER BY rowid",
+            (config_name,),
+        ).fetchall()
+        return tuple(r[0] for r in rows)
 
     def load_config(self, name: str) -> ConfigSnapshot:
         """Return an aggregate snapshot of a config with its remotes and calendars.
@@ -435,17 +542,26 @@ class ConfigStore:
 
     # -- write API -----------------------------------------------------------
 
-    def create_user(self, username: str, key_hash: str) -> None:
-        """Create a new user.  Raises ``StoreConflictError`` on duplicate."""
+    def create_user(self, username: str, key_hash: str, enc_secret: str | None = None) -> None:
+        """Create a new user with a per-user encryption secret.
+
+        Raises ``StoreConflictError`` on duplicate.  *enc_secret* defaults
+        to a fresh random token (``secrets.token_urlsafe(32)``); callers
+        may pass an explicit value for deterministic tests.  The token is
+        stored verbatim — this module never derives keys or encrypts
+        (crypto lives in ``db_loader`` / ``config_crypto``).
+        """
         _validate_username(username)
         if not key_hash:
             raise StoreValidationError("key_hash must not be empty")
+        if enc_secret is None:
+            enc_secret = secrets.token_urlsafe(32)
         conn = self._get_conn()
         try:
             conn.execute("BEGIN")
             conn.execute(
-                "INSERT INTO users (username, key_hash) VALUES (?, ?)",
-                (username, key_hash),
+                "INSERT INTO users (username, key_hash, enc_secret) VALUES (?, ?, ?)",
+                (username, key_hash, enc_secret),
             )
             conn.execute("COMMIT")
         except sqlite3.IntegrityError as exc:
