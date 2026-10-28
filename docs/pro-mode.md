@@ -97,15 +97,16 @@ the stored remote (a changed password refreshes the token) until the
 calendar row exists — a completed call re-POSTed ends in the
 duplicate-calendar 409.
 
-**Degradation and recovery.** Deleting the user or revoking the grant
-removes the secret material that decrypts the remote's password. At the
-next store load — server start, or any later successful
-`POST /user/calendars`, which re-reads the store — the server logs a
-warning naming the dropped remote and config, omits it from the loaded
-configuration, and keeps loading everything else: the dotted path then
-stops resolving — write tools answer with the generic unknown-path
-error, read fan-outs find no accessible scope. Recovery depends on the
-cause:
+**Degradation and recovery.** Once the grant is revoked or the user
+deleted, nothing left can decrypt the remote's password: the loader only
+tries secrets of users currently granted the config — a revoked grant's
+secret stops counting immediately, and a deleted user's secret row is
+gone with them. At the next store load — server start, or any later
+successful `POST /user/calendars`, which re-reads the store — the server
+logs a warning naming the dropped remote and config, omits it, and keeps
+loading everything else: the dotted path then stops resolving — write
+tools answer with the generic unknown-path error, read fan-outs find no
+accessible scope. Recovery depends on the cause:
 
 - **Grant revoked, user intact** — re-grant the config through the
   [admin REST API](api.md#admin-rest-api); the remote returns at the next

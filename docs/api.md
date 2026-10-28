@@ -468,11 +468,12 @@ curl -s -X POST http://localhost:8600/user/calendars \
 {"path": "user-alice.hobby.hobby", "config": "user-alice", "remote": "hobby", "calendar": "hobby"}
 ```
 
-`path` is the dotted identifier the MCP write tools expect. On success
-the topology has already been swapped in-process — the path works on the
-next MCP request, and the response carries no reload signal. The CalDAV
-password, the stored token, and the user's encryption secret are never
-echoed.
+`path` is the dotted identifier to pass as `calendar_name` to the MCP
+tools — in pro mode any tool call that explicitly names a calendar uses
+this form, reads and writes alike. On success the topology has already
+been swapped in-process — the path works on the next MCP request, and the
+response carries no reload signal. The CalDAV password, the stored token,
+and the user's encryption secret are never echoed.
 
 **`"reload": "failed"`** — appended to the 201 body when the live-apply
 step could not run (its cause is logged server-side): the store write
