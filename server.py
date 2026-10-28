@@ -289,6 +289,15 @@ def main() -> None:
             configure_admin_routes(mcp)
         else:
             log.info("Admin API disabled: CALDAV_MCP_ADMIN_KEY is not set")
+        # User calendar provisioning (POST /user/calendars): registered for
+        # the whole pro branch — callers authenticate as DB users, so no
+        # admin key is required. The handler itself fail-closes to 404
+        # outside pro mode, but registration also stays inside this branch
+        # so non-pro deployments are unchanged.
+        from caldav_mcp.user_api import configure_user_routes
+
+        configure_user_routes(mcp)
+        log.info("User calendar provisioning enabled at POST /user/calendars")
     else:
         # --- Simple-mode wiring (env / header) — unchanged from M2.2 ---
         if ADMIN_KEY:
