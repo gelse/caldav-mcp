@@ -716,6 +716,27 @@ def test_audit_user_add_calendar_ok(client):
     )
 
 
+def test_validation_failure_audits_error_once(client):
+    """A validation 400 still emits exactly one user_add_calendar error audit.
+
+    Pins D1.10's "one audit entry per authenticated attempt" contract for
+    the failure branch (success is pinned above).
+    """
+    with mock.patch.object(user_api, "log_admin_operation") as mock_audit:
+        resp = client.post(
+            "/user/calendars",
+            json=_payload(calendar_name="bad.name"),
+            headers=_auth_headers(),
+        )
+    assert resp.status_code == 400
+    mock_audit.assert_called_once_with(
+        action="user_add_calendar",
+        status="error",
+        target_user="alice",
+        client_ip="testclient",
+    )
+
+
 # ---------------------------------------------------------------------------
 # 10. Addressing integration + grant-revocation degradation
 # ---------------------------------------------------------------------------
