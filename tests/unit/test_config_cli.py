@@ -349,6 +349,19 @@ def test_user_show_never_prints_key(tmp_path, capsys):
     assert key_hash not in out
 
 
+def test_user_add_never_prints_generated_secret(tmp_path, capsys):
+    """user add auto-generates a per-user secret that must never be echoed."""
+    rc = _run(tmp_path, "user", "add", "--username", "bob", "--key", "secretkey")
+    assert rc == 0
+    captured = capsys.readouterr()
+    # Read the generated secret from the store to build the assertion.
+    with ConfigStore(_db(tmp_path)) as store:
+        secret = store.get_user_secret("bob")
+    assert secret, "user add must generate a non-empty per-user secret"
+    assert secret not in captured.out, "generated secret must not be printed to stdout"
+    assert secret not in captured.err, "generated secret must not be printed to stderr"
+
+
 # ---------------------------------------------------------------------------
 # 6. verify_api_key edge cases
 # ---------------------------------------------------------------------------
