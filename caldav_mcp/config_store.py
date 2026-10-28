@@ -47,7 +47,13 @@ The store is opened via ``ConfigStore(path)`` which is a context manager.
 On open the module runs ``PRAGMA foreign_keys = ON`` and applies the DDL
 (idempotent ``CREATE TABLE IF NOT EXISTS``).  A forward-compatibility guard
 rejects databases whose ``schema_version`` row is *newer* than the version
-this code knows (currently **1**).
+this code knows (currently **2**), before any migration runs.  Opening
+also migrates older stores in place: a pre-v2 ``users`` table gains the
+``enc_secret`` column and every NULL secret is backfilled with a fresh
+random token, with the version row bumped only after both succeed — one
+atomic transaction, so a crash rolls back and the next open re-runs the
+migration.  The backfill is gated — a fully-migrated store opens without
+issuing a single write, so read-only-degraded stores keep loading.
 
 All multi-statement writes use an explicit transaction (``BEGIN``/``COMMIT``
 or ``ROLLBACK``) via ``isolation_level=None``.
@@ -57,6 +63,7 @@ from __future__ import annotations
 
 import os
 import re
+import secrets
 import sqlite3
 import stat
 from dataclasses import dataclass
@@ -84,7 +91,12 @@ class StoreNotFoundError(StoreError):
 
 
 class StoreSchemaError(StoreError):
-    """Raised when the on-disk schema version is newer than this code supports."""
+    """Raised when the on-disk schema cannot be used as-is.
+
+    Covers a ``schema_version`` newer than this code supports, and an
+    in-place migration to the current version that could not be written
+    (e.g. the store is read-only or locked).
+    """
 
 
 class StoreOpenError(StoreError):
@@ -146,7 +158,7 @@ class ConfigSnapshot:
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _DDL = """\
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -155,7 +167,8 @@ CREATE TABLE IF NOT EXISTS schema_version (
 
 CREATE TABLE IF NOT EXISTS users (
     username     TEXT PRIMARY KEY,
-    key_hash     TEXT NOT NULL
+    key_hash     TEXT NOT NULL,
+    enc_secret   TEXT
 );
 
 CREATE TABLE IF NOT EXISTS user_configs (
@@ -273,6 +286,20 @@ def _describe_open_failure(path: str, exc: sqlite3.OperationalError) -> str:
     return str(exc)
 
 
+def _rollback_quiet(conn: sqlite3.Connection) -> None:
+    """Roll back *conn*, swallowing a failed rollback.
+
+    Used from migration error handlers: when the transaction never started
+    (e.g. ``BEGIN IMMEDIATE`` was refused on a read-only store) there is
+    nothing to roll back, and that secondary error must not mask the
+    original failure.
+    """
+    try:
+        conn.execute("ROLLBACK")
+    except sqlite3.Error:
+        pass
+
+
 # ---------------------------------------------------------------------------
 # ConfigStore
 # ---------------------------------------------------------------------------
@@ -337,7 +364,9 @@ class ConfigStore:
         cur = conn.cursor()
         cur.executescript(_DDL)
 
-        # Check existing version (if any row exists).
+        # Check existing version (if any row exists).  The
+        # forward-compatibility guard runs before any migration step, so a
+        # database from a newer release is rejected without being altered.
         cur.execute("SELECT version FROM schema_version LIMIT 1")
         row = cur.fetchone()
         if row is not None:
@@ -347,10 +376,87 @@ class ConfigStore:
                     f"Database schema version {on_disk_version} is newer than "
                     f"supported version {SCHEMA_VERSION}"
                 )
-            # version == SCHEMA_VERSION → nothing to do
+            stored_version: int | None = on_disk_version
         else:
-            # Fresh database – insert version.
-            cur.execute("INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
+            # Fresh database – the version row is inserted by the
+            # migration block below, after all steps succeed.
+            stored_version = None
+
+        # Gated fast path (read-only, no lock): decide whether the v1 → v2
+        # migration has anything to do — the users table lacks the
+        # enc_secret column (pre-v2 DDL; the fresh DDL above already has
+        # it), or the stored version is older, or the read-only probe finds
+        # a NULL secret (crash-recovery / manual tamper).  Each backfilled
+        # row gets its own fresh token.  A fully-migrated store returns
+        # here without issuing a single write, preserving the
+        # read-only-degraded tolerance.
+        missing_column = "enc_secret" not in {
+            col[1] for col in cur.execute("PRAGMA table_info(users)").fetchall()
+        }
+        older_version = stored_version is not None and stored_version < SCHEMA_VERSION
+        if missing_column or older_version:
+            needs_migration = True
+        else:
+            needs_migration = (
+                cur.execute("SELECT 1 FROM users WHERE enc_secret IS NULL LIMIT 1").fetchone()
+                is not None
+            )
+        if not needs_migration and stored_version == SCHEMA_VERSION:
+            return
+
+        # Migration write path: ALTER + per-row backfill + version bump as
+        # ONE atomic transaction (version bumped only AFTER ALTER and
+        # backfill succeed).  BEGIN IMMEDIATE takes the write lock up
+        # front and every precondition — column, NULL secrets, version —
+        # is re-checked under it (the forward guard included), so
+        # concurrent openers (server start vs. CLI) serialize instead of
+        # racing; a crash rolls the whole unit back and the next open
+        # re-runs it.  Failures of these migration writes surface as a
+        # typed StoreSchemaError, never as an opaque sqlite3 error.
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            # Re-check under the write lock — a concurrent opener may have
+            # migrated the store while this connection waited for the lock.
+            if "enc_secret" not in {
+                col[1] for col in cur.execute("PRAGMA table_info(users)").fetchall()
+            }:
+                cur.execute("ALTER TABLE users ADD COLUMN enc_secret TEXT")
+            pending = cur.execute("SELECT username FROM users WHERE enc_secret IS NULL").fetchall()
+            for (username,) in pending:
+                cur.execute(
+                    "UPDATE users SET enc_secret = ? WHERE username = ?",
+                    (secrets.token_urlsafe(32), username),
+                )
+            cur.execute("SELECT version FROM schema_version LIMIT 1")
+            version_row = cur.fetchone()
+            if version_row is None:
+                cur.execute("INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
+            elif version_row[0] > SCHEMA_VERSION:
+                # Forward guard re-applied under the lock — never let a
+                # concurrent newer-release writer's version be downgraded.
+                raise StoreSchemaError(
+                    f"Database schema version {version_row[0]} is newer than "
+                    f"supported version {SCHEMA_VERSION}"
+                )
+            elif version_row[0] < SCHEMA_VERSION:
+                cur.execute("UPDATE schema_version SET version = ?", (SCHEMA_VERSION,))
+            conn.execute("COMMIT")
+        except sqlite3.OperationalError as exc:
+            _rollback_quiet(conn)
+            if "locked" in str(exc):
+                raise StoreSchemaError(
+                    f"Config store {self._path!r} needs an in-place migration to schema "
+                    f"version {SCHEMA_VERSION} but the store is locked by another "
+                    f"process — retry shortly ({exc})."
+                ) from exc
+            raise StoreSchemaError(
+                f"Config store {self._path!r} needs an in-place migration to schema "
+                f"version {SCHEMA_VERSION} but could not be written ({exc}). Mount it "
+                f"read-write and open it once (e.g. run any CLI command) to migrate."
+            ) from exc
+        except BaseException:
+            _rollback_quiet(conn)
+            raise
 
     # -- read API ------------------------------------------------------------
 
@@ -387,6 +493,51 @@ class ConfigStore:
             ]
             result.append(UserRecord(username=r[0], key_hash=r[1], config_names=tuple(configs)))
         return tuple(result)
+
+    def get_user_secret(self, username: str) -> str | None:
+        """Return the user's per-user encryption secret.
+
+        Returns ``None`` only when the column is still NULL (a pre-v2 row
+        that has not been backfilled — cannot happen after a successful
+        schema migration).  Raises ``StoreNotFoundError`` if the user does
+        not exist.  Never returned via :class:`UserRecord` (that record
+        must not carry secret material).
+        """
+        conn = self._get_conn()
+        _validate_username(username)
+        row = conn.execute(
+            "SELECT enc_secret FROM users WHERE username = ?", (username,)
+        ).fetchone()
+        if row is None:
+            raise StoreNotFoundError(f"user not found: {username!r}")
+        secret: str | None = row[0]
+        return secret
+
+    def get_user_secrets(self) -> dict[str, str]:
+        """Return ``{username: enc_secret}`` for users with a non-NULL secret.
+
+        Insertion (rowid) order — callers needing deterministic candidate
+        ordering sort themselves.  NULL secrets are omitted.
+        """
+        conn = self._get_conn()
+        rows = conn.execute(
+            "SELECT username, enc_secret FROM users WHERE enc_secret IS NOT NULL ORDER BY rowid"
+        ).fetchall()
+        return {r[0]: r[1] for r in rows}
+
+    def list_config_grants(self, config_name: str) -> tuple[str, ...]:
+        """Return the usernames granted *config_name*, in grant (rowid) order.
+
+        An unknown or never-granted config returns an empty tuple (no
+        raise) — callers use this for collision checks before writing.
+        """
+        conn = self._get_conn()
+        _validate_name(config_name, "config name")
+        rows = conn.execute(
+            "SELECT username FROM user_configs WHERE config_name = ? ORDER BY rowid",
+            (config_name,),
+        ).fetchall()
+        return tuple(r[0] for r in rows)
 
     def load_config(self, name: str) -> ConfigSnapshot:
         """Return an aggregate snapshot of a config with its remotes and calendars.
@@ -435,17 +586,28 @@ class ConfigStore:
 
     # -- write API -----------------------------------------------------------
 
-    def create_user(self, username: str, key_hash: str) -> None:
-        """Create a new user.  Raises ``StoreConflictError`` on duplicate."""
+    def create_user(self, username: str, key_hash: str, enc_secret: str | None = None) -> None:
+        """Create a new user with a per-user encryption secret.
+
+        Raises ``StoreConflictError`` on duplicate.  *enc_secret* defaults
+        to a fresh random token (``secrets.token_urlsafe(32)``); callers
+        may pass an explicit value for deterministic tests.  The token is
+        stored verbatim — this module never derives keys or encrypts
+        (crypto lives in ``db_loader`` / ``config_crypto``).
+        """
         _validate_username(username)
         if not key_hash:
             raise StoreValidationError("key_hash must not be empty")
+        if enc_secret is None:
+            enc_secret = secrets.token_urlsafe(32)
+        elif not enc_secret:
+            raise StoreValidationError("enc_secret must not be empty")
         conn = self._get_conn()
         try:
             conn.execute("BEGIN")
             conn.execute(
-                "INSERT INTO users (username, key_hash) VALUES (?, ?)",
-                (username, key_hash),
+                "INSERT INTO users (username, key_hash, enc_secret) VALUES (?, ?, ?)",
+                (username, key_hash, enc_secret),
             )
             conn.execute("COMMIT")
         except sqlite3.IntegrityError as exc:

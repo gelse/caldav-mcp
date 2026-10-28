@@ -4,7 +4,8 @@ Requires the pro-mode MCP server running via:
     docker compose -f docker-compose.test.yaml up -d
 
 The pro-mode service (``mcp-pro``) starts with ``DB_CONFIG_ENABLED=true``
-and a pre-built SQLite store containing:
+and a pre-built SQLite store — these tests exercise this subset (the full
+union topology lives in ``conftest_pro.py``):
 
 * config ``main`` → remote ``radicale`` (user A) → calendars ``personal``, ``work``
 * config ``mirror`` → remote ``radicale-mirror`` (user B) → calendar ``shared``
@@ -19,15 +20,18 @@ Test cases:
 
 1. DB auth: success, wrong key, unknown user, missing X-Mcp-Username.
 2. CALDAV_MCP_API_KEY-only auth rejected in pro mode.
-3. Rate limiting on repeated DB auth failures.
-4. Fan-out read: ``caldav_list_calendars`` as ``alice`` shows both configs,
+3. Fan-out read: ``caldav_list_calendars`` as ``alice`` shows both configs,
    as ``bob`` only ``main``.
-5. Dotted-path write: ``caldav_create_event`` as ``alice`` with
+4. Dotted-path write: ``caldav_create_event`` as ``alice`` with
    ``calendar_name="main.radicale.work"`` succeeds.
-6. Plain-name write: ``caldav_create_event`` as ``alice`` with
+5. Plain-name write: ``caldav_create_event`` as ``alice`` with
    ``calendar_name="work"`` → typed rejection.
-7. Existing simple-mode suite untouched (verified by ``make test-integration``
+6. Existing simple-mode suite untouched (verified by ``make test-integration``
    running all files).
+
+Rate limiting on repeated DB auth failures lives in
+``test_zz_rate_limit.py``, which must stay collected last: its deliberate
+failure burst exhausts the shared auth-limiter bucket.
 """
 
 from __future__ import annotations
@@ -287,7 +291,7 @@ class TestEnvApiKeyIgnoredInProMode:
 
 
 # ---------------------------------------------------------------------------
-# 4. Fan-out read: caldav_list_calendars
+# 3. Fan-out read: caldav_list_calendars
 # ---------------------------------------------------------------------------
 
 
@@ -336,7 +340,7 @@ class TestFanoutRead:
 
 
 # ---------------------------------------------------------------------------
-# 5. Dotted-path write
+# 4. Dotted-path write
 # ---------------------------------------------------------------------------
 
 
@@ -389,7 +393,7 @@ class TestDottedPathWrite:
 
 
 # ---------------------------------------------------------------------------
-# 6. Plain-name write → typed rejection
+# 5. Plain-name write → typed rejection
 # ---------------------------------------------------------------------------
 
 
@@ -415,42 +419,3 @@ class TestPlainNameWriteRejected:
             assert "config.remote.calendar" in text.lower(), (
                 f"Expected dotted-path error, got: {text}"
             )
-
-
-# ---------------------------------------------------------------------------
-# 3. Rate limiting on repeated DB auth failures
-# ---------------------------------------------------------------------------
-#
-# NOTE: this class is intentionally ordered LAST.  The rate limiter keys on
-# the client IP, which resolves to the shared fallback ``"unknown"`` for the
-# harness (no ``X-Forwarded-For`` / ``X-Real-IP`` is sent).  Its deliberate
-# burst of failures therefore exhausts the single shared bucket and would
-# poison any legitimate request issued afterwards, so it must run after all
-# positively-authenticated tests.
-
-
-class TestRateLimiting:
-    """Repeated bad keys from one client IP hit the rate limit."""
-
-    def test_rate_limit_after_failures(self) -> None:
-        """Enough bad-key attempts should trigger rate limiting."""
-        # Send several bad auth requests to build up failure count.
-        for _ in range(12):
-            with requests.Session() as s:
-                _mcp_call(
-                    s,
-                    "caldav_list_calendars",
-                    {},
-                    extra_headers=_auth_headers("alice", "wrong-key"),
-                )
-
-        # The next request should be rate-limited.
-        with requests.Session() as s:
-            resp = _mcp_call(
-                s,
-                "caldav_list_calendars",
-                {},
-                extra_headers=_auth_headers("alice", "wrong-key"),
-            )
-            text = _extract_result_text(resp)
-            assert "rate limit" in text.lower() or "AUTH" in text.upper()

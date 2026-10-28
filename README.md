@@ -31,7 +31,7 @@ Ask your assistant:
 - **No iTIP/imip scheduling** — attendees are stored on events, but no email invitations or scheduling messages are sent.
 - **Client-side search** — [`caldav_search_events`](caldav_mcp/tools/queries.py) fetches all events and filters locally. Works well for small-to-medium calendars; may be slow on very large ones.
 - **Non-atomic move** — [`caldav_move_event`](caldav_mcp/tools/mutations.py) copies the event then deletes the original. A failure after copy leaves a duplicate (the safer failure mode).
-- **No config hot-reload** — config changes require a server restart. The store is frozen into an immutable singleton at startup (pro-mode *user* changes via the admin API are the exception and apply live).
+- **No config hot-reload** — config changes require a server restart. The store is frozen into an immutable singleton at startup (pro-mode *user* changes via the admin API, and calendars provisioned via `POST /user/calendars`, are exceptions and apply live — that call's full-store re-read may also pick up earlier CLI-made changes).
 - **Self-hosted only** — not a SaaS. You run and operate the server yourself.
 
 ## Quick start
@@ -168,7 +168,7 @@ Most users only need these:
 
 **Admin UI:** `SHOW_UI=true` serves the built SPA at `/ui` (the Docker image ships the build; local runs need `make ui-build` first). See [`docs/ui.md`](docs/ui.md).
 
-**Pro mode** (`DB_CONFIG_ENABLED=true`): loads users and configs from a SQLite store at startup. Supports per-user keys, fan-out reads across multiple remotes, and dotted-path writes. Requires `CALDAV_MCP_DB_PATH` and `CALDAV_MCP_CONFIG_SECRET`. User management (create, delete, key rotation, grants) is also available over the [admin REST API](docs/api.md#admin-rest-api) — enable it with `CALDAV_MCP_ADMIN_KEY` — and those changes apply live; user changes made through the CLI, and all config changes, require a restart. Details: [`docs/pro-mode.md`](docs/pro-mode.md), [`docs/cli.md`](docs/cli.md).
+**Pro mode** (`DB_CONFIG_ENABLED=true`): loads users and configs from a SQLite store at startup. Supports per-user keys, fan-out reads across multiple remotes, and dotted-path writes. Requires `CALDAV_MCP_DB_PATH` and `CALDAV_MCP_CONFIG_SECRET`. User management (create, delete, key rotation, grants) is also available over the [admin REST API](docs/api.md#admin-rest-api) — enable it with `CALDAV_MCP_ADMIN_KEY` — and those changes apply live, as do calendars users provision themselves via `POST /user/calendars`; user changes made through the CLI, and config changes made any other way, reach a running server at their next restart — a later successful `POST /user/calendars` re-reads the whole store and may apply them sooner. Details: [`docs/pro-mode.md`](docs/pro-mode.md), [`docs/cli.md`](docs/cli.md).
 
 ## Documentation
 
@@ -187,7 +187,7 @@ Most users only need these:
 
 - Client-side search does not scale to very large calendars.
 - `caldav_move_event` is non-atomic (copy + delete; duplicate on failure).
-- Config changes require a server restart — no hot-reload yet (pro-mode user changes via the admin API already apply live).
+- Config changes require a server restart — no hot-reload yet (pro-mode user changes via the admin API, and calendars users provision via `POST /user/calendars`, already apply live; a later provisioning call may also pick up CLI-made changes early).
 - No stdio transport — Streamable HTTP only.
 - Version `0.1.0` — pre-1.0, API may change between releases.
 - `X-Caldav-Username` / `X-Caldav-Password` passthrough mode reserved for future use.

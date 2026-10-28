@@ -261,6 +261,376 @@ def test_set_user_key_hash_empty_username_rejected(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# 3c. Per-user secret (enc_secret) — schema v2, migration/backfill, reads
+# ---------------------------------------------------------------------------
+
+
+# Verbatim schema-1 DDL (pre-enc_secret): used to build migration fixtures.
+_V1_DDL = """\
+CREATE TABLE IF NOT EXISTS schema_version (
+    version INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS users (
+    username     TEXT PRIMARY KEY,
+    key_hash     TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS user_configs (
+    username     TEXT NOT NULL REFERENCES users(username) ON DELETE CASCADE,
+    config_name  TEXT NOT NULL REFERENCES configs(name)    ON DELETE CASCADE,
+    PRIMARY KEY (username, config_name)
+);
+
+CREATE TABLE IF NOT EXISTS configs (
+    name         TEXT PRIMARY KEY
+);
+
+CREATE TABLE IF NOT EXISTS remotes (
+    config_name  TEXT NOT NULL REFERENCES configs(name) ON DELETE CASCADE,
+    name         TEXT NOT NULL,
+    url          TEXT NOT NULL,
+    auth_mode    TEXT NOT NULL CHECK (auth_mode IN ('direct', 'passthrough')),
+    username     TEXT NOT NULL DEFAULT '',
+    password_enc TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (config_name, name)
+);
+
+CREATE TABLE IF NOT EXISTS calendars (
+    config_name  TEXT NOT NULL,
+    remote_name  TEXT NOT NULL,
+    name         TEXT NOT NULL,
+    PRIMARY KEY (config_name, remote_name, name),
+    FOREIGN KEY (config_name, remote_name)
+        REFERENCES remotes(config_name, name) ON DELETE CASCADE
+);
+"""
+
+
+def _user_columns(path):
+    conn = sqlite3.connect(path)
+    try:
+        return {r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
+    finally:
+        conn.close()
+
+
+def test_fresh_store_is_v2_with_enc_secret_column(tmp_path):
+    """Fresh DB → schema version 2 and the users table carries enc_secret."""
+    path = _store_path(tmp_path)
+    with ConfigStore(path):
+        pass
+    conn = sqlite3.connect(path)
+    try:
+        version = conn.execute("SELECT version FROM schema_version").fetchone()[0]
+    finally:
+        conn.close()
+    assert version == 2
+    assert "enc_secret" in _user_columns(path)
+
+
+def test_create_user_generates_distinct_nonempty_secrets(tmp_path):
+    """Two users → auto-generated secrets that are both non-empty and distinct."""
+    with ConfigStore(_store_path(tmp_path)) as store:
+        store.create_user("alice", "h1")
+        store.create_user("bob", "h2")
+        secrets_map = store.get_user_secrets()
+        assert set(secrets_map) == {"alice", "bob"}
+        alice_secret, bob_secret = secrets_map["alice"], secrets_map["bob"]
+        assert alice_secret, "generated secret must be non-empty"
+        assert bob_secret, "generated secret must be non-empty"
+        assert alice_secret != bob_secret, "each user must get its own secret"
+        # get_user_secret agrees with the bulk read.
+        assert store.get_user_secret("alice") == alice_secret
+
+
+def test_create_user_explicit_enc_secret_honored(tmp_path):
+    """The enc_secret parameter is stored verbatim (deterministic tests)."""
+    with ConfigStore(_store_path(tmp_path)) as store:
+        store.create_user("alice", "h", enc_secret="fixed-test-secret")
+        assert store.get_user_secret("alice") == "fixed-test-secret"
+        assert store.get_user_secrets() == {"alice": "fixed-test-secret"}
+
+
+def test_create_user_empty_enc_secret_rejected(tmp_path):
+    """An explicitly empty secret must never be stored as key material."""
+    with ConfigStore(_store_path(tmp_path)) as store:
+        with pytest.raises(StoreValidationError, match="enc_secret must not be empty"):
+            store.create_user("alice", "h", enc_secret="")
+
+
+def test_v1_store_migrates_to_v2_with_backfill_and_rows_intact(tmp_path):
+    """A hand-built schema-1 store (version row 1, no enc_secret column)
+    opens on current code: column added, secrets backfilled distinctly,
+    version bumped to 2, all pre-existing rows intact."""
+    path = _store_path(tmp_path, "v1.db")
+    conn = sqlite3.connect(path)
+    conn.executescript(_V1_DDL)
+    conn.execute("INSERT INTO schema_version (version) VALUES (1)")
+    conn.execute("INSERT INTO users (username, key_hash) VALUES ('alice', 'hash-alice')")
+    conn.execute("INSERT INTO users (username, key_hash) VALUES ('bob', 'hash-bob')")
+    conn.execute("INSERT INTO configs (name) VALUES ('work')")
+    conn.execute("INSERT INTO user_configs (username, config_name) VALUES ('alice', 'work')")
+    conn.execute(
+        "INSERT INTO remotes (config_name, name, url, auth_mode, username, password_enc) "
+        "VALUES ('work', 'nc', 'https://cal.example/dav', 'direct', 'u', 'enc')"
+    )
+    conn.execute(
+        "INSERT INTO calendars (config_name, remote_name, name) VALUES ('work', 'nc', 'personal')"
+    )
+    conn.commit()
+    conn.close()
+
+    assert "enc_secret" not in _user_columns(path), "fixture must start as schema 1"
+
+    with ConfigStore(path) as store:
+        # Column added, version bumped.
+        assert "enc_secret" in _user_columns(path)
+        version = store._get_conn().execute("SELECT version FROM schema_version").fetchone()[0]
+        assert version == 2
+        # Existing users' secrets backfilled: non-NULL, non-empty, distinct.
+        secrets_map = store.get_user_secrets()
+        assert set(secrets_map) == {"alice", "bob"}
+        assert secrets_map["alice"] and secrets_map["bob"]
+        assert secrets_map["alice"] != secrets_map["bob"]
+        # Pre-existing rows intact.
+        assert store.get_user("alice") == UserRecord(
+            username="alice", key_hash="hash-alice", config_names=("work",)
+        )
+        assert store.get_user("bob") == UserRecord(
+            username="bob", key_hash="hash-bob", config_names=()
+        )
+        snap = store.load_config("work")
+        assert snap.remotes == (
+            RemoteRecord(
+                config_name="work",
+                name="nc",
+                url="https://cal.example/dav",
+                auth_mode="direct",
+                username="u",
+                password_enc="enc",
+            ),
+        )
+        assert snap.calendars == (CalendarRecord("work", "nc", "personal"),)
+
+
+def test_newer_version_guard_runs_before_alter(tmp_path):
+    """Guard-before-ALTER: a newer-version store built from the v1 DDL is
+    refused WITHOUT the enc_secret column ever being added — the only
+    setup where the current DDL's CREATE IF NOT EXISTS cannot mask a
+    guard that runs too late."""
+    path = _store_path(tmp_path, "future.db")
+    conn = sqlite3.connect(path)
+    conn.executescript(_V1_DDL)
+    conn.execute("INSERT INTO schema_version (version) VALUES (3)")
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(StoreSchemaError, match="newer than supported"):
+        ConfigStore(path).__enter__()
+    assert "enc_secret" not in _user_columns(path), "guard must fire before the ALTER"
+
+
+@pytest.mark.skipif(_IS_ROOT, reason="root bypasses filesystem permission checks")
+def test_needed_migration_on_readonly_store_raises_typed_schema_error(tmp_path):
+    """A store that still needs migration but sits on a write-protected file
+    fails open as a typed StoreSchemaError with actionable guidance — never a
+    raw sqlite3.OperationalError."""
+    path = _store_path(tmp_path, "v1-readonly.db")
+    conn = sqlite3.connect(path)
+    conn.executescript(_V1_DDL)
+    conn.execute("INSERT INTO schema_version (version) VALUES (1)")
+    conn.commit()
+    conn.close()
+
+    p = Path(path)
+    p.chmod(0o444)
+    try:
+        with pytest.raises(StoreSchemaError, match="could not be written") as excinfo:
+            ConfigStore(path)
+    finally:
+        p.chmod(0o644)  # let pytest clean up tmp_path
+
+    # Typed error with the sqlite failure preserved as the cause …
+    assert isinstance(excinfo.value.__cause__, sqlite3.OperationalError)
+    # … and the failed migration left the store completely untouched.
+    assert "enc_secret" not in _user_columns(path), "failed migration must not add the column"
+    check = sqlite3.connect(path)
+    try:
+        version = check.execute("SELECT version FROM schema_version").fetchone()[0]
+    finally:
+        check.close()
+    assert version == 1, "failed migration must not bump the version"
+
+
+def test_crash_recovery_column_present_version_1_null_secret_self_heals(tmp_path):
+    """Partial migration state (column added, version still 1, NULL secret)
+    self-heals on next open: backfill runs and version → 2."""
+    path = _store_path(tmp_path)
+    with ConfigStore(path) as store:
+        store.create_user("alice", "h")
+    # Tamper to a legacy partial state (column added, version still 1,
+    # NULL secret) as a half-migrated pre-atomicity store could leave it —
+    # the self-heal path must repair it on reopen.
+    conn = sqlite3.connect(path)
+    conn.execute("UPDATE schema_version SET version = 1")
+    conn.execute("UPDATE users SET enc_secret = NULL WHERE username = 'alice'")
+    conn.commit()
+    conn.close()
+
+    with ConfigStore(path) as store:
+        version = store._get_conn().execute("SELECT version FROM schema_version").fetchone()[0]
+        assert version == 2
+        secret = store.get_user_secret("alice")
+        assert secret, "NULL secret must be backfilled on reopen"
+
+
+def test_reopen_v2_store_with_null_secret_backfills_via_probe(tmp_path):
+    """Gate (b): version already 2 but a NULL secret → the read-only probe
+    triggers the backfill on reopen; the version stays 2 (gate (a), the
+    version<2 shortcut, is covered by the crash-recovery test above)."""
+    path = _store_path(tmp_path)
+    with ConfigStore(path) as store:
+        store.create_user("alice", "h")
+    conn = sqlite3.connect(path)
+    conn.execute("UPDATE users SET enc_secret = NULL WHERE username = 'alice'")
+    conn.commit()
+    conn.close()
+
+    with ConfigStore(path) as store:
+        secret = store.get_user_secret("alice")
+        assert secret, "probe gate must backfill the NULL secret on reopen"
+        version = store._get_conn().execute("SELECT version FROM schema_version").fetchone()[0]
+        assert version == 2, "backfill-only reopen must not change the version"
+
+
+def test_mid_migration_failure_rolls_back_alter_and_version(tmp_path, monkeypatch):
+    """The migration is one atomic unit: a failure inside the backfill
+    loop rolls back the ALTER and the version bump together, leaving the
+    store byte-for-byte unmigrated for the next open to retry."""
+    path = _store_path(tmp_path, "atomic.db")
+    conn = sqlite3.connect(path)
+    conn.executescript(_V1_DDL)
+    conn.execute("INSERT INTO schema_version (version) VALUES (1)")
+    conn.execute("INSERT INTO users (username, key_hash) VALUES ('alice', 'hash-alice')")
+    conn.commit()
+    conn.close()
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("backfill interrupted")
+
+    # Fail exactly at the per-row token generation, after the ALTER ran.
+    monkeypatch.setattr("caldav_mcp.config_store.secrets.token_urlsafe", _boom)
+
+    with pytest.raises(RuntimeError, match="backfill interrupted"):
+        ConfigStore(path)
+
+    # Everything — ALTER included — must have been rolled back.
+    assert "enc_secret" not in _user_columns(path), "failed migration must roll back the ALTER"
+    check = sqlite3.connect(path)
+    try:
+        version = check.execute("SELECT version FROM schema_version").fetchone()[0]
+        users = check.execute("SELECT username FROM users").fetchall()
+    finally:
+        check.close()
+    assert version == 1, "failed migration must roll back the version bump"
+    assert users == [("alice",)]
+
+
+def test_reopen_fully_migrated_store_issues_no_writes(tmp_path, monkeypatch):
+    """Gated backfill: reopening a fully-migrated store issues no write at
+    all (INSERT/UPDATE/DELETE/ALTER) — read-only-degraded stores keep working."""
+    path = _store_path(tmp_path)
+    with ConfigStore(path) as store:
+        store.create_user("alice", "h")
+        store.create_config("work")
+        # Sanity: row writes ARE counted on this connection while seeding.
+        assert store._get_conn().total_changes > 0
+
+    write_statements: list[str] = []
+    orig_connect = sqlite3.connect
+
+    def _tracing_connect(*args, **kwargs):
+        conn = orig_connect(*args, **kwargs)
+        conn.set_trace_callback(
+            lambda sql: (
+                write_statements.append(sql)
+                if sql.lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE", "ALTER"))
+                else None
+            )
+        )
+        return conn
+
+    monkeypatch.setattr("caldav_mcp.config_store.sqlite3.connect", _tracing_connect)
+    with ConfigStore(path) as store:
+        assert store._get_conn().total_changes == 0, "open must not change any row"
+    assert write_statements == [], f"open must not issue writes: {write_statements}"
+
+
+def test_list_config_grants_membership_and_order(tmp_path):
+    """Granted/not-granted membership plus stable grant (rowid) order."""
+    with ConfigStore(_store_path(tmp_path)) as store:
+        store.create_config("c1")
+        store.create_config("c2")
+        store.create_user("alice", "h")
+        store.create_user("bob", "h")
+        store.create_user("carol", "h")
+        # Unknown / never-granted config → empty tuple, no raise.
+        assert store.list_config_grants("never-granted") == ()
+        assert store.list_config_grants("c1") == ()
+        # Grant order is the order grants were written; non-members excluded.
+        store.grant_config("bob", "c1")
+        store.grant_config("alice", "c1")
+        store.grant_config("alice", "c2")
+        assert store.list_config_grants("c1") == ("bob", "alice")
+        assert store.list_config_grants("c2") == ("alice",)
+        assert "carol" not in store.list_config_grants("c1")
+
+
+def test_get_user_secret_unknown_user_raises(tmp_path):
+    with ConfigStore(_store_path(tmp_path)) as store:
+        with pytest.raises(StoreNotFoundError, match="user not found"):
+            store.get_user_secret("ghost")
+
+
+def test_get_user_secrets_excludes_null_secrets(tmp_path):
+    """NULL secrets are omitted from the bulk read (and read as None)."""
+    with ConfigStore(_store_path(tmp_path)) as store:
+        store.create_user("alice", "h")
+        store.create_user("bob", "h")
+        # Force a NULL via a second connection — no reopen (reopen heals).
+        seed = sqlite3.connect(_store_path(tmp_path))
+        seed.execute("UPDATE users SET enc_secret = NULL WHERE username = 'alice'")
+        seed.commit()
+        seed.close()
+        assert store.get_user_secret("alice") is None
+        secrets_map = store.get_user_secrets()
+        assert "alice" not in secrets_map
+        assert set(secrets_map) == {"bob"}
+
+
+def test_user_records_never_expose_enc_secret(tmp_path):
+    """UserRecord (ProUser/admin payload source) must not carry the secret."""
+    with ConfigStore(_store_path(tmp_path)) as store:
+        store.create_config("c1")
+        store.create_user("alice", "h")
+        store.grant_config("alice", "c1")
+        secret = store.get_user_secret("alice")
+        assert secret
+
+        user = store.get_user("alice")
+        assert "enc_secret" not in {f.name for f in dataclasses.fields(user)}
+        assert "enc_secret" not in dataclasses.asdict(user)
+        assert secret not in repr(user)
+
+        users = store.list_users()
+        for u in users:
+            assert "enc_secret" not in {f.name for f in dataclasses.fields(u)}
+            assert "enc_secret" not in dataclasses.asdict(u)
+            assert secret not in repr(u)
+
+
+# ---------------------------------------------------------------------------
 # 4. Config / remote / calendar CRUD + cascades + load_config round-trip
 # ---------------------------------------------------------------------------
 

@@ -100,7 +100,7 @@ The `with_caldav_client` decorator in `tools/__init__.py` handles auth, client c
 
 ### Config Singleton
 
-`caldav_mcp/app_config.py` provides a read-only config singleton that serves as the single source of CalDAV connection data. It is loaded once at startup and is truly read-only after initialization — all dataclasses use `frozen=True` and collections are tuples. Config changes require a process restart; there is no hot reload for the topology (configs, remotes, calendars). The pro-mode user snapshot is separate from this singleton and refreshable at runtime: the admin API re-reads user rows after every successful user mutation (M5 users-only hot reload), so user changes apply without a restart while the topology stays frozen.
+`caldav_mcp/app_config.py` provides a read-only config singleton that serves as the single source of CalDAV connection data. It is loaded once at startup and is truly read-only after initialization — all dataclasses use `frozen=True` and collections are tuples. Config changes require a process restart — the sole live exception is the pro-mode user calendar route (`POST /user/calendars`), which re-loads the store and swaps this singleton wholesale so its new path resolves immediately. The pro-mode user snapshot is separate from this singleton and refreshable at runtime: the admin API re-reads user rows after every successful user mutation (M5 users-only hot reload), so user changes apply without a restart while operator-made topology stays frozen.
 
 Three modes, encoding the M1 precedence rule as an architectural invariant:
 

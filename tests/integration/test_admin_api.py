@@ -561,7 +561,7 @@ class TestAdminLiveApply:
     has no HTTP-401 mapping — rejection is tool-level, ``auth.py:257-327``).
     Each test runs a successful probe before any rejection so the shared
     in-memory auth rate-limiter bucket (``auth.py`` client-IP quirk, see
-    ``test_pro_mode.py:424``) is reset; paired with the "unauthorized"
+    ``test_zz_rate_limit.py``) is reset; paired with the "unauthorized"
     message assertion, a rate-limit rejection (also ``"auth"``) can never
     pass vacuously.
     """

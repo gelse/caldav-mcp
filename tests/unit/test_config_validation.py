@@ -210,11 +210,14 @@ def _run_main_simple_mode(
     """Run ``server.main()`` down the simple-mode path with side effects mocked.
 
     Returns the WARNING-level log messages captured during the call.  The HTTP
-    server launch, the app-config singleton, and the pro/simple branch flags
-    are patched so the call is side-effect free.
+    server launch, the app-config singleton, the pro/simple branch flags, and
+    the user-route registration are patched so the call is side-effect free;
+    the user-route spy additionally asserts the route is never registered
+    outside the pro branch (the only thing standing between a non-pro
+    deployment and an exposed write endpoint).
     """
     import server
-    from caldav_mcp import app_config, config
+    from caldav_mcp import app_config, config, user_api
 
     monkeypatch.delenv("DB_CONFIG_ENABLED", raising=False)
     monkeypatch.setenv("CALDAV_MCP_ADMIN_KEY", admin_key)
@@ -226,10 +229,12 @@ def _run_main_simple_mode(
         mock.patch.object(app_config, "load_app_config", return_value=object()),
         mock.patch.object(app_config, "configure_app_config"),
         mock.patch.object(app_config, "get_app_config", return_value=app_stub),
+        mock.patch.object(user_api, "configure_user_routes") as user_routes_spy,
         mock.patch.object(server.mcp, "run_http_async", new=mock.AsyncMock()),
         caplog.at_level(logging.WARNING, logger="caldav-mcp"),
     ):
         server.main()
+    user_routes_spy.assert_not_called()
     return [record.getMessage() for record in caplog.records]
 
 
@@ -284,11 +289,11 @@ def _run_main_pro_mode(
     """Run ``server.main()`` down the pro-mode path with side effects mocked.
 
     Mirrors ``_run_main_simple_mode``: the HTTP launch, the config singleton,
-    the loader, and the admin-route registration are patched so the call is
-    side-effect free.  Returns ``(WARNING-level log messages, run spy)``.
+    the loader, and the admin/user route registrations are patched so the
+    call is side-effect free.  Returns ``(WARNING-level log messages, run spy)``.
     """
     import server
-    from caldav_mcp import admin, app_config, auth, config, db_loader
+    from caldav_mcp import admin, app_config, auth, config, db_loader, user_api
 
     monkeypatch.setenv("DB_CONFIG_ENABLED", "true")
     monkeypatch.setenv("CALDAV_MCP_DB_PATH", db_path)
@@ -309,11 +314,14 @@ def _run_main_pro_mode(
         mock.patch.object(app_config, "configure_app_config"),
         mock.patch.object(auth, "configure_pro_users"),
         mock.patch.object(admin, "configure_admin_routes") as admin_routes_spy,
+        mock.patch.object(user_api, "configure_user_routes") as user_routes_spy,
         mock.patch.object(server.mcp, "run_http_async", new=mock.AsyncMock()) as run_spy,
         caplog.at_level(logging.WARNING, logger="caldav-mcp"),
     ):
         server.main()
     assert admin_routes_spy.called or not admin_key
+    # User calendar routes register unconditionally within the pro branch.
+    user_routes_spy.assert_called_once_with(server.mcp)
     return [record.getMessage() for record in caplog.records], run_spy
 
 

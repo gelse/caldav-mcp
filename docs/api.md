@@ -113,11 +113,12 @@ rotate a compromised key, create or delete a user, grant or revoke config
 access. It speaks plain HTTP on the same listener as `/mcp`, under
 `/admin/users…` and `/admin/configs`, authenticated with a dedicated
 admin key. It is not part of the MCP tool surface (the 14 tools below are
-unchanged), and it does not manage configs, remotes, or calendars — those
-stay CLI-managed (see [`docs/cli.md`](cli.md)). The one config-related
-route, `GET /admin/configs`, is read-only: it lists the store's config
-names so operators can discover which configs a user may be granted
-without reaching for the CLI.
+unchanged), and it does not manage configs, remotes, or calendars — for
+those, operators use the CLI (see [`docs/cli.md`](cli.md)) and users
+their own route, [`POST /user/calendars`](#user-calendar-provisioning)
+below. The one config-related route, `GET /admin/configs`, is read-only:
+it lists the store's config names so operators can discover which
+configs a user may be granted without reaching for the CLI.
 
 > **Release-notes callout — deliberate behavior change:** the admin API is
 > the first time the *server* writes the SQLite config store (until now
@@ -193,14 +194,17 @@ keys nor key hashes; a user object is always
 
 ### Restart and reload: the one rule
 
-**User changes made through this API apply live; topology changes still
-require a restart.** After every successful mutation the server re-reads
+**User changes made through this API apply live; operator-made topology
+changes still require a restart — the one exception is
+[`POST /user/calendars`](#user-calendar-provisioning), below.** After
+every successful mutation the server re-reads
 the user rows and swaps its in-process user snapshot, so the change takes
 effect on the next MCP request. Create, delete, key rotation, grant,
 revoke, and replace all behave this way — none of their responses carry a
 `restart_required` field.
 
-Two exceptions, both signaled in the response body:
+Two caveats apply to the live user-change rule above, both signaled in
+the response body:
 
 - **Failed live reload** — if the snapshot refresh fails, the write has
   already succeeded: the response carries `"reload": "failed"` and a
@@ -215,9 +219,11 @@ Two exceptions, both signaled in the response body:
 CLI-made changes (configs, remotes, calendars — and users) reach a running
 server at its next restart; for users that is the dependable path, though a
 later successful admin-API mutation also re-reads the whole user table and
-may pick such changes up sooner. See [`docs/cli.md`](cli.md) and
-[`docs/pro-mode.md`](pro-mode.md). Everything below references this rule
-instead of repeating it.
+may pick such changes up sooner, and a later successful
+[`POST /user/calendars`](#user-calendar-provisioning) re-reads the whole
+store — configs, remotes, and calendars included. See
+[`docs/cli.md`](cli.md) and [`docs/pro-mode.md`](pro-mode.md). Everything
+below references this rule instead of repeating it.
 
 ### Routes
 
@@ -386,6 +392,125 @@ failure, so the count stays at the threshold (the backoff formula —
 doubling per extra recorded failure, capped at 5 minutes — would need a
 higher count to grow). The block lifts once failures age out of the
 sliding window; the limiter is in-memory and resets on server restart.
+
+## User calendar provisioning
+
+`POST /user/calendars` lets a pro-mode DB user add one of their own CalDAV
+calendars without operator involvement. One authenticated call creates the
+user's personal config (`user-<username>`), a `direct` remote for the
+given server (password encrypted with that user's per-user store secret),
+the calendar entry, and the grant; applies the new topology live; and
+returns the dotted `config.remote.calendar` path for immediate use with
+the MCP tools. Like the admin API it speaks plain HTTP on the same
+listener as `/mcp` and is not part of the MCP tool surface — but it is a
+single route with no read/list, delete, or rename siblings, and it never
+contacts the CalDAV server (it only registers the calendar). See
+[User-managed calendars (homelab)](pro-mode.md#user-managed-calendars-homelab)
+for the operator-facing write-up: naming rules, the security tradeoff,
+and degradation/recovery.
+
+### Enabling the route
+
+The route exists only in pro mode — `DB_CONFIG_ENABLED=true` — and is
+registered with the rest of the pro wiring; no `CALDAV_MCP_ADMIN_KEY` is
+involved (callers authenticate as DB users). Outside pro mode the route
+is never registered (the framework serves 404) and the handler
+independently refuses with 404 `{"error": "not found"}`, so a
+registration bug still could not expose it.
+
+### Authentication
+
+The same credentials as the MCP endpoint in pro mode, on every request:
+
+| Header | Example |
+|--------|---------|
+| `X-Mcp-Username` | `X-Mcp-Username: alice` |
+| `Authorization: Bearer <key>` | `Authorization: Bearer <user-key>` |
+| `X-Api-Key: <key>` (alternative to Bearer) | `X-Api-Key: <user-key>` |
+
+### Request
+
+Request bodies are JSON with `Content-Type: application/json`:
+
+| Field | Type | Required | Rules |
+|-------|------|----------|-------|
+| `caldav_url` | str | yes | non-empty; parses as an `http`/`https` URL with a host |
+| `caldav_username` | str | yes | non-empty, valid UTF-8 |
+| `caldav_password` | str | yes | non-empty, valid UTF-8 |
+| `calendar_name` | str | yes | matches `^[A-Za-z0-9][A-Za-z0-9_-]*$` (no dots/spaces); must also equal the calendar's display name on the CalDAV server exactly — a server-side requirement the route cannot check (see below) |
+| `remote_name` | str | no | same charset rule; defaults to `calendar_name` |
+
+Field and name rules are validated before any store write, so a 400 never
+leaves partial rows behind. The route registers the calendar — it does not
+create it server-side; a name that does not match the server still
+provisions (201) and fails only at first tool use, where the tool's
+not-found error lists the server's available names.
+
+Retrying is safe while the calendar row does not exist yet: an identical
+`remote_name` with the same URL and CalDAV username reuses the stored
+remote (a changed password refreshes the stored token) and completes the
+chain; once the calendar row exists, the same call answers 409
+(duplicate).
+
+**Example:**
+
+```bash
+curl -s -X POST http://localhost:8600/user/calendars \
+  -H "X-Mcp-Username: alice" \
+  -H "Authorization: Bearer <user-key>" \
+  -H "Content-Type: application/json" \
+  -d '{"caldav_url": "http://nextcloud.example/remote.php/dav",
+       "caldav_username": "alice",
+       "caldav_password": "<caldav-password>",
+       "calendar_name": "hobby"}'
+```
+
+### Response
+
+**201 Created:**
+
+```json
+{"path": "user-alice.hobby.hobby", "config": "user-alice", "remote": "hobby", "calendar": "hobby"}
+```
+
+`path` is the dotted identifier to pass as `calendar_name` to the MCP
+tools — in pro mode any tool call that explicitly names a calendar uses
+this form, reads and writes alike. On success the topology has already
+been swapped in-process — the path works on the next MCP request, and the
+response carries no reload signal. The CalDAV password, the stored token,
+and the user's encryption secret are never echoed.
+
+**`"reload": "failed"`** — appended to the 201 body when the live-apply
+step could not run (its cause is logged server-side): the store write
+**stands**, but the running process still serves the old topology; a
+server restart applies the change.
+
+### Status codes
+
+| Status | Meaning |
+|--------|---------|
+| `201` | Calendar provisioned — body `{path, config, remote, calendar}` (+ optional `"reload": "failed"`) |
+| `400` | Invalid input: wrong `Content-Type`, malformed or non-object JSON, missing/empty/non-string field, invalid UTF-8, a URL that is not http(s) or has no host, `calendar_name`/`remote_name` failing the charset rule — all rejected before any store write |
+| `401` | Missing or invalid key, unknown `X-Mcp-Username` — **or rate limited**: this route shares the MCP endpoint's auth limiter, so a limited caller gets 401 with the limiter's `retry in Ns` hint instead of the admin API's 429 |
+| `404` | Outside pro mode — the route does not exist |
+| `409` | Conflict: personal config already provisioned for another user; `remote_name` exists with a different URL or username (or belongs to a passthrough remote); the existing remote's stored password cannot be decrypted with this user's secret; duplicate calendar |
+| `500` | Unexpected server error — generic message; the detail is logged server-side only |
+| `503` | Store unavailable: locked or unreadable (message carries a retry hint), schema newer than the running code, or this user's encryption secret is missing |
+
+Errors are always `{"error": "<message>"}` — the same convention as the
+admin API:
+
+```json
+{"error": "remote 'hobby' already exists with different connection details - choose another remote_name"}
+```
+
+### Audit
+
+Every **authenticated** attempt writes one structured audit entry
+(`action="user_add_calendar"`, `status="ok"` or `"error"`, with the
+calling user and client IP). Failures before authentication are logged by
+the auth layer instead, and the non-pro 404 is silent (outside pro
+deployments the route does not exist).
 
 ## MCP Tools
 

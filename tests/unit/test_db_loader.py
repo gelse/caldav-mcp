@@ -21,7 +21,16 @@ from caldav_mcp.app_config import (
 )
 from caldav_mcp.config_crypto import ConfigSecretError, encrypt_secret
 from caldav_mcp.config_store import SCHEMA_VERSION, ConfigStore, RemoteRecord
-from caldav_mcp.db_loader import ProConfigError, ProState, ProUser, load_pro_state
+from caldav_mcp.db_loader import (
+    USER_TOKEN_PREFIX,
+    ProConfigError,
+    ProState,
+    ProUser,
+    _build_candidate_secrets,
+    _decrypt_with_secret,
+    _encrypt_with_secret,
+    load_pro_state,
+)
 
 SECRET = "test-master-secret-for-loading-1234"
 
@@ -624,3 +633,409 @@ class TestAutoCreateEmptyStore:
         _assert_permission_denied_message(str(excinfo.value), db)
         assert "cannot create" in str(excinfo.value)
         assert not Path(db).exists(), "loader must not create the store file"
+
+
+# ---------------------------------------------------------------------------
+# Case 9: Per-user encryption (u1:) — dual-key load + drop-on-failure (M2/D3)
+# ---------------------------------------------------------------------------
+
+USER_SECRET = "test-user-secret-for-alice-5678"
+OTHER_USER_SECRET = "test-user-secret-for-bob-9012"
+
+
+def _tag(password: str, secret: str) -> str:
+    """Stored form of a per-user-encrypted password (plan D3 tagging)."""
+    return USER_TOKEN_PREFIX + _encrypt_with_secret(password, secret)
+
+
+def _seed_token_store(
+    db_path: str,
+    *,
+    bare_enc: str | None = None,
+    tagged_enc: str | None = None,
+    user_secret: str | None = USER_SECRET,
+    grant: bool = True,
+) -> None:
+    """Config ``work`` with an optional bare-master remote (``legacy``) and an
+    optional ``u1:``-tagged remote (``provisioned``), one calendar each.
+
+    ``user_secret=None`` creates no users at all; ``grant=False`` keeps the
+    user but skips the grant (the stale-row shape after a revoke).
+    """
+    with ConfigStore(db_path) as store:
+        store.create_config("work")
+        if bare_enc is not None:
+            store.create_remote(
+                "work",
+                RemoteRecord(
+                    config_name="work",
+                    name="legacy",
+                    url="https://legacy.example.com/dav/",
+                    auth_mode="direct",
+                    username="svc",
+                    password_enc=bare_enc,
+                ),
+            )
+            store.create_calendar("work", "legacy", "personal")
+        if tagged_enc is not None:
+            store.create_remote(
+                "work",
+                RemoteRecord(
+                    config_name="work",
+                    name="provisioned",
+                    url="https://prov.example.com/dav/",
+                    auth_mode="direct",
+                    username="alice",
+                    password_enc=tagged_enc,
+                ),
+            )
+            store.create_calendar("work", "provisioned", "personal")
+        if user_secret is not None:
+            store.create_user("alice", "hash-alice", enc_secret=user_secret)
+            if grant:
+                store.grant_config("alice", "work")
+
+
+def _remote_password(cfg: Config, name: str) -> str:
+    """Decoded password of *name* — fails the test when the remote was dropped."""
+    remote = find_remote(cfg, name)
+    assert remote is not None, f"remote {name!r} must be present in {cfg.name!r}"
+    return remote.password
+
+
+class TestUserSecretRoundTrip:
+    """Plan D7: ``_encrypt_with_secret`` ⇄ ``_decrypt_with_secret``."""
+
+    def test_encrypt_decrypt_roundtrip_with_user_secret(self) -> None:
+        token = _encrypt_with_secret("s3cret-pwd", USER_SECRET)
+
+        # Helper returns a bare token — callers tag the stored form with
+        # USER_TOKEN_PREFIX (round-trip through the helpers is direct).
+        assert not token.startswith(USER_TOKEN_PREFIX)
+        assert _decrypt_with_secret(token, USER_SECRET) == "s3cret-pwd"
+
+    def test_roundtrip_with_wrong_user_secret_raises(self) -> None:
+        token = _encrypt_with_secret("s3cret-pwd", USER_SECRET)
+
+        with pytest.raises(ConfigSecretError):
+            _decrypt_with_secret(token, OTHER_USER_SECRET)
+
+
+class TestCandidateSecrets:
+    """Plan D3: candidate secrets are per-config and sorted by username."""
+
+    def test_candidates_sorted_by_username_and_scoped_per_config(self, tmp_path: Path) -> None:
+        db = str(tmp_path / "store.db")
+        with ConfigStore(db) as store:
+            store.create_config("work")
+            store.create_config("home")
+            # Reverse username insertion order — rowid order must not win.
+            store.create_user("bob", "hash-bob", enc_secret=OTHER_USER_SECRET)
+            store.create_user("alice", "hash-alice", enc_secret=USER_SECRET)
+            store.grant_config("bob", "work")
+            store.grant_config("alice", "work")
+            store.grant_config("bob", "home")
+
+        with ConfigStore(db) as store:
+            candidates = _build_candidate_secrets(store, store.list_users())
+
+        assert candidates == {
+            "work": [USER_SECRET, OTHER_USER_SECRET],  # alice (sorted) first
+            "home": [OTHER_USER_SECRET],  # alice never granted "home"
+        }
+
+
+class TestTaggedRemoteDecryption:
+    """Plan D7: ``u1:``-tagged remotes decrypt via the granted user's secret."""
+
+    def test_tagged_remote_decrypts_via_granted_user_secret(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        db = str(tmp_path / "store.db")
+        monkeypatch.setenv("CALDAV_MCP_CONFIG_SECRET", SECRET)
+        _seed_token_store(db, tagged_enc=_tag("user-pwd", USER_SECRET))
+
+        state = load_pro_state(db, SECRET)
+
+        cfg = state.app_config.configs[0]
+        assert _remote_password(cfg, "provisioned") == "user-pwd"
+        assert find_calendar(cfg, "provisioned", "personal") is not None
+
+    def test_mixed_store_bare_and_tagged_load_both_plaintexts(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        db = str(tmp_path / "store.db")
+        monkeypatch.setenv("CALDAV_MCP_CONFIG_SECRET", SECRET)
+        _seed_token_store(
+            db,
+            bare_enc=encrypt_secret("legacy-pwd"),
+            tagged_enc=_tag("user-pwd", USER_SECRET),
+        )
+
+        state = load_pro_state(db, SECRET)
+
+        cfg = state.app_config.configs[0]
+        assert len(cfg.remotes) == 2
+        assert _remote_password(cfg, "legacy") == "legacy-pwd"
+        assert _remote_password(cfg, "provisioned") == "user-pwd"
+
+    def test_bare_token_in_user_granted_config_still_uses_master(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A bare master token inside a user-granted config keeps the
+        master path exactly: wrong master secret raises (the user's
+        secret is never tried for untagged rows)."""
+        db = str(tmp_path / "store.db")
+        monkeypatch.setenv("CALDAV_MCP_CONFIG_SECRET", SECRET)
+        _seed_token_store(db, bare_enc=encrypt_secret("legacy-pwd"))
+
+        state = load_pro_state(db, SECRET)
+        assert _remote_password(state.app_config.configs[0], "legacy") == "legacy-pwd"
+
+        with pytest.raises(ConfigSecretError):
+            load_pro_state(db, "wrong-master-secret")
+
+    def test_bare_token_never_tries_user_secret_fallback(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An untagged token the master key cannot decrypt must raise even
+        though the granted user's secret would open it — proof that the
+        bare path is master-only (no candidate fallback for untagged rows)."""
+        db = str(tmp_path / "store.db")
+        monkeypatch.setenv("CALDAV_MCP_CONFIG_SECRET", SECRET)
+        _seed_token_store(db, bare_enc=_encrypt_with_secret("legacy-pwd", USER_SECRET))
+
+        with pytest.raises(ConfigSecretError):
+            load_pro_state(db, SECRET)
+
+
+class TestTaggedDropOnFailure:
+    """Plan D3/D7: an undecryptable ``u1:`` row drops the remote with a
+    WARNING — ``load_pro_state`` never raises for it (no startup
+    crash-loop), and every other config/remote loads intact."""
+
+    def test_no_candidate_users_drops_remote_and_warns(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """No user rows at all → zero candidates → remote dropped, warning."""
+        db = str(tmp_path / "store.db")
+        monkeypatch.setenv("CALDAV_MCP_CONFIG_SECRET", SECRET)
+        _seed_token_store(
+            db,
+            bare_enc=encrypt_secret("legacy-pwd"),
+            tagged_enc=_tag("user-pwd", USER_SECRET),
+            user_secret=None,
+        )
+
+        with caplog.at_level(logging.WARNING, logger="caldav_mcp.db_loader"):
+            state = load_pro_state(db, SECRET)  # ProConfigError must NOT be raised
+
+        cfg = state.app_config.configs[0]
+        assert find_remote(cfg, "provisioned") is None
+        # The dropped remote's calendar group is omitted as well.
+        assert all(rname != "provisioned" for rname, _ in cfg.calendars)
+        # The other remote stays fully intact.
+        assert _remote_password(cfg, "legacy") == "legacy-pwd"
+        assert find_calendar(cfg, "legacy", "personal") is not None
+
+        text = self._drop_warnings(caplog)
+        assert "Dropping remote" in text
+        assert "provisioned" in text
+        assert USER_SECRET not in text and SECRET not in text
+
+    def test_grant_removed_drops_remote_and_warns(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """User exists with a secret, but the grant was revoked → no
+        candidates for the config → remote dropped, warning, load succeeds."""
+        db = str(tmp_path / "store.db")
+        monkeypatch.setenv("CALDAV_MCP_CONFIG_SECRET", SECRET)
+        _seed_token_store(
+            db,
+            bare_enc=encrypt_secret("legacy-pwd"),
+            tagged_enc=_tag("user-pwd", USER_SECRET),
+            grant=False,
+        )
+
+        with caplog.at_level(logging.WARNING, logger="caldav_mcp.db_loader"):
+            state = load_pro_state(db, SECRET)  # ProConfigError must NOT be raised
+
+        cfg = state.app_config.configs[0]
+        assert find_remote(cfg, "provisioned") is None
+        assert _remote_password(cfg, "legacy") == "legacy-pwd"
+        assert "Dropping remote" in self._drop_warnings(caplog)
+
+    def test_wrong_user_secret_drops_remote_and_warns(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """All candidate secrets fail (row written with a different secret)
+        → same drop behavior: warning, load succeeds, no exception."""
+        db = str(tmp_path / "store.db")
+        monkeypatch.setenv("CALDAV_MCP_CONFIG_SECRET", SECRET)
+        _seed_token_store(
+            db,
+            bare_enc=encrypt_secret("legacy-pwd"),
+            tagged_enc=_tag("user-pwd", OTHER_USER_SECRET),  # != USER_SECRET
+        )
+
+        with caplog.at_level(logging.WARNING, logger="caldav_mcp.db_loader"):
+            state = load_pro_state(db, SECRET)  # ProConfigError must NOT be raised
+
+        cfg = state.app_config.configs[0]
+        assert find_remote(cfg, "provisioned") is None
+        assert _remote_password(cfg, "legacy") == "legacy-pwd"
+        assert "Dropping remote" in self._drop_warnings(caplog)
+
+    def test_candidate_secrets_scoped_to_granted_config(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Candidates are per config, never a global pool: a user granted
+        only ``beta`` must not decrypt ``alpha``'s tagged row — alpha's
+        remote drops, beta loads intact."""
+        db = str(tmp_path / "store.db")
+        monkeypatch.setenv("CALDAV_MCP_CONFIG_SECRET", SECRET)
+        with ConfigStore(db) as store:
+            store.create_config("alpha")
+            store.create_remote(
+                "alpha",
+                RemoteRecord(
+                    config_name="alpha",
+                    name="provisioned",
+                    url="https://alpha.example.com/dav/",
+                    auth_mode="direct",
+                    username="alice",
+                    password_enc=_tag("user-pwd", USER_SECRET),
+                ),
+            )
+            store.create_calendar("alpha", "provisioned", "personal")
+            store.create_config("beta")
+            store.create_remote(
+                "beta",
+                RemoteRecord(
+                    config_name="beta",
+                    name="healthy",
+                    url="https://beta.example.com/dav/",
+                    auth_mode="direct",
+                    username="svc",
+                    password_enc=encrypt_secret("beta-pwd"),
+                ),
+            )
+            store.create_calendar("beta", "healthy", "personal")
+            store.create_user("alice", "hash-alice", enc_secret=USER_SECRET)
+            store.grant_config("alice", "beta")
+
+        with caplog.at_level(logging.WARNING, logger="caldav_mcp.db_loader"):
+            state = load_pro_state(db, SECRET)  # ProConfigError must NOT be raised
+
+        alpha = find_config(state.app_config, "alpha")
+        beta = find_config(state.app_config, "beta")
+        assert alpha is not None and beta is not None
+        assert find_remote(alpha, "provisioned") is None
+        assert "alpha" in self._drop_warnings(caplog)
+        assert _remote_password(beta, "healthy") == "beta-pwd"
+        assert find_calendar(beta, "healthy", "personal") is not None
+
+    @pytest.mark.parametrize(
+        "tagged_enc",
+        ["u1:not-a-token", "u1:gA", "u1:ünïcode-token"],
+        ids=["garbage-base64", "short-token", "non-ascii"],
+    )
+    def test_malformed_tagged_payload_drops_remote_and_warns(
+        self,
+        tagged_enc: str,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Malformed payloads (bad base64, truncated, non-ASCII) are wrapped
+        into ConfigSecretError per candidate → same drop contract, never
+        raise — corrupted rows must not crash startup either."""
+        db = str(tmp_path / "store.db")
+        monkeypatch.setenv("CALDAV_MCP_CONFIG_SECRET", SECRET)
+        _seed_token_store(
+            db,
+            bare_enc=encrypt_secret("legacy-pwd"),
+            tagged_enc=tagged_enc,
+        )
+
+        with caplog.at_level(logging.WARNING, logger="caldav_mcp.db_loader"):
+            state = load_pro_state(db, SECRET)  # ProConfigError must NOT be raised
+
+        cfg = state.app_config.configs[0]
+        assert find_remote(cfg, "provisioned") is None
+        assert _remote_password(cfg, "legacy") == "legacy-pwd"
+        assert "Dropping remote" in self._drop_warnings(caplog)
+
+    @staticmethod
+    def _drop_warnings(caplog: pytest.LogCaptureFixture) -> str:
+        warnings = [
+            r.getMessage()
+            for r in caplog.records
+            if r.name == "caldav_mcp.db_loader" and r.levelno == logging.WARNING
+        ]
+        assert warnings, "expected a WARNING about the dropped remote"
+        return "\n".join(warnings)
+
+
+class TestMultiGrantDeterminism:
+    """Plan D7: candidate order is sorted by username and covers every
+    granted user — the 2nd sorted user's secret still decrypts."""
+
+    def test_password_encrypted_with_second_sorted_user_secret(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        db = str(tmp_path / "store.db")
+        monkeypatch.setenv("CALDAV_MCP_CONFIG_SECRET", SECRET)
+        with ConfigStore(db) as store:
+            store.create_config("work")
+            # "first" is encrypted with alice's secret (1st sorted candidate);
+            # "second" with bob's (2nd sorted) — decrypting it requires
+            # surviving alice's failed attempt, exercising the per-candidate
+            # ConfigSecretError catch.  Users are inserted in reverse
+            # username order so rowid order ≠ sorted order.
+            store.create_remote(
+                "work",
+                RemoteRecord(
+                    config_name="work",
+                    name="first",
+                    url="https://first.example.com/dav/",
+                    auth_mode="direct",
+                    username="alice",
+                    password_enc=_tag("first-pwd", USER_SECRET),
+                ),
+            )
+            store.create_calendar("work", "first", "personal")
+            store.create_remote(
+                "work",
+                RemoteRecord(
+                    config_name="work",
+                    name="second",
+                    url="https://second.example.com/dav/",
+                    auth_mode="direct",
+                    username="bob",
+                    password_enc=_tag("second-pwd", OTHER_USER_SECRET),
+                ),
+            )
+            store.create_calendar("work", "second", "personal")
+            store.create_user("bob", "hash-bob", enc_secret=OTHER_USER_SECRET)
+            store.create_user("alice", "hash-alice", enc_secret=USER_SECRET)
+            store.grant_config("bob", "work")
+            store.grant_config("alice", "work")
+
+        state = load_pro_state(db, SECRET)
+
+        cfg = state.app_config.configs[0]
+        assert _remote_password(cfg, "first") == "first-pwd"
+        assert _remote_password(cfg, "second") == "second-pwd"
