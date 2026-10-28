@@ -203,7 +203,8 @@ effect on the next MCP request. Create, delete, key rotation, grant,
 revoke, and replace all behave this way — none of their responses carry a
 `restart_required` field.
 
-Two exceptions, both signaled in the response body:
+Two caveats apply to the live user-change rule above, both signaled in
+the response body:
 
 - **Failed live reload** — if the snapshot refresh fails, the write has
   already succeeded: the response carries `"reload": "failed"` and a
