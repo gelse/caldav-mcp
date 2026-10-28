@@ -36,6 +36,7 @@
 - `test_crdl_lifecycle.py` — Full CRUD lifecycle for calendars and events
 - `test_multi_calendar.py` — Operations across multiple calendars
 - `test_concurrent_access.py` — Concurrent read/write patterns
+- `test_ui_hosting.py` — Admin UI hosting: SPA served at `/ui` on mcp-pro, hosting-off 404 contract on mcp-simple
 - `test_pro_mode.py` — Pro-mode DB auth, fan-out reads, dotted-path writes
 - `test_multi_remote_fanout.py` — Multi-remote fan-out, partial failure, passthrough, header/env edge cases
 - `test_admin_api.py` — Admin REST API: read/write routes, pro/simple mode gating, CLI cross-surface, M5.1 live round-trips (create/delete/rotate apply on the next request; grant/revoke move addressing; CLI-added config still needs a restart)
@@ -103,7 +104,7 @@ automatically before starting compose. The MCP server is available at
 > honoring that; positively-authenticated suites (`test_user_api.py`, …)
 > must never run after it.
 
-Because both modules share that one service, the store built by
+Because these modules share that one service, the store built by
 `tests/integration/build_pro_store.py` (topology defined in `conftest_pro.py`)
 carries the **union** of their requirements: `main` → remotes `radicale`
 (userA) and `rad1` (testuser); `mirror` → `radicale-mirror` (userB);

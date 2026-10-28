@@ -194,8 +194,10 @@ keys nor key hashes; a user object is always
 
 ### Restart and reload: the one rule
 
-**User changes made through this API apply live; topology changes still
-require a restart.** After every successful mutation the server re-reads
+**User changes made through this API apply live; operator-made topology
+changes still require a restart — the one exception is
+[`POST /user/calendars`](#user-calendar-provisioning), below.** After
+every successful mutation the server re-reads
 the user rows and swaps its in-process user snapshot, so the change takes
 effect on the next MCP request. Create, delete, key rotation, grant,
 revoke, and replace all behave this way — none of their responses carry a

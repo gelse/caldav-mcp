@@ -13,8 +13,11 @@ single server instance must route requests to different CalDAV accounts.
 > CLI-made user changes reach a running server at the next restart. The
 > `CALDAV_MCP_CONFIG_SECRET` must
 > **match** between CLI and server — the CLI encrypts passwords with it, and
-> the server decrypts them on startup. Config changes require a server
-> restart (the store is frozen into an immutable `AppConfig` at startup).
+> the server decrypts them on startup. Config changes made outside the
+> user calendar route require a server restart (the store is frozen into
+> an immutable `AppConfig` at startup);
+> [`POST /user/calendars`](api.md#user-calendar-provisioning) re-reads the
+> whole store and applies its own topology live.
 > In simple mode the server continues to use environment variables or
 > per-request headers as described in [`docs/api.md`](api.md).
 
@@ -440,15 +443,20 @@ rm -f "$STORE"
   milestones of this release is gone). **Still true for
   `CALDAV_MCP_CONFIG_SECRET`:** there is no built-in flow to rotate it —
   re-add remotes after a secret change.
-- **No config hot reload** — with one exception: since M5, **user** changes made
+- **No config hot reload** — with two exceptions: since M5, **user** changes made
   through the [admin REST API](api.md#admin-rest-api) (create, delete, key
   rotation, grant, revoke,
-  replace grants) apply on the next request, no restart. Everything else
-  in the store — configs, remotes, calendars, and CLI-made changes —
-  still requires a server restart (inherited from the singleton design of
-  [`caldav_mcp/app_config.py`](../caldav_mcp/app_config.py)). That also
-  covers access to a config added after startup: a grant for it is stored,
-  but reaching the config needs a restart (the grant response carries
+  replace grants) apply on the next request, no restart; and calendars
+  provisioned via
+  [`POST /user/calendars`](api.md#user-calendar-provisioning) apply live
+  as well. Everything else in the store — configs, remotes, calendars,
+  and CLI-made changes — reaches a running server at its next restart
+  (inherited from the singleton design of
+  [`caldav_mcp/app_config.py`](../caldav_mcp/app_config.py)); a later
+  successful `POST /user/calendars` re-reads the whole store and may
+  apply it sooner. That also covers access to a config added after
+  startup: a grant for it is stored, but reaching the config needs that
+  restart or a later route call (the grant response carries
   `config_topology_restart_required: true`).
 
 ## Cross-references

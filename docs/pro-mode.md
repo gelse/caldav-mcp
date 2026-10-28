@@ -19,7 +19,8 @@ SQLite config store at startup, enabling multi-user, multi-account deployments.
 - **Dotted-path writes**: Write tools require a `config.remote.calendar`
   dotted path (e.g. `main.radicale.work`) to uniquely identify the target
   calendar. Plain calendar names are rejected.
-- **Users apply live, other config changes still need a restart**: The
+- **Users and user-provisioned calendars apply live; operator config
+  changes still need a restart**: The
   store is read once at startup and frozen into an immutable `AppConfig`.
   User changes made through the [admin REST API](api.md#admin-rest-api)
   (create, delete, key rotation, grant, revoke, replace grants) take

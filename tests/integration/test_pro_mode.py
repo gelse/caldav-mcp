@@ -4,7 +4,8 @@ Requires the pro-mode MCP server running via:
     docker compose -f docker-compose.test.yaml up -d
 
 The pro-mode service (``mcp-pro``) starts with ``DB_CONFIG_ENABLED=true``
-and a pre-built SQLite store containing:
+and a pre-built SQLite store — these tests exercise this subset (the full
+union topology lives in ``conftest_pro.py``):
 
 * config ``main`` → remote ``radicale`` (user A) → calendars ``personal``, ``work``
 * config ``mirror`` → remote ``radicale-mirror`` (user B) → calendar ``shared``
@@ -290,7 +291,7 @@ class TestEnvApiKeyIgnoredInProMode:
 
 
 # ---------------------------------------------------------------------------
-# 4. Fan-out read: caldav_list_calendars
+# 3. Fan-out read: caldav_list_calendars
 # ---------------------------------------------------------------------------
 
 
@@ -339,7 +340,7 @@ class TestFanoutRead:
 
 
 # ---------------------------------------------------------------------------
-# 5. Dotted-path write
+# 4. Dotted-path write
 # ---------------------------------------------------------------------------
 
 
@@ -392,7 +393,7 @@ class TestDottedPathWrite:
 
 
 # ---------------------------------------------------------------------------
-# 6. Plain-name write → typed rejection
+# 5. Plain-name write → typed rejection
 # ---------------------------------------------------------------------------
 
 
