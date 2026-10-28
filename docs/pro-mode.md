@@ -32,8 +32,10 @@ SQLite config store at startup, enabling multi-user, multi-account deployments.
   a config that was added after startup responds with
   `config_topology_restart_required: true` — the grant applies, but
   reaching that config still needs a restart. Config, remote, and
-  calendar changes made any other way (CLI, direct store edits) require a
-  server restart.
+  calendar changes made any other way (CLI, direct store edits) reach a
+  running server at their next restart — a later successful
+  `POST /user/calendars` re-reads the whole store and may apply them
+  sooner.
 
 ## User-managed calendars (homelab)
 
@@ -118,8 +120,9 @@ accessible scope. Recovery depends on the cause:
 
 **Rate limiting.** This route shares the MCP endpoint's auth limiter, so
 a rate-limited caller gets **401** carrying the limiter's `retry in Ns`
-hint — deliberately not the admin API's 429: re-checking the limiter here
-would double-count the failure.
+hint — deliberately not the admin API's 429: the shared limiter already
+counted this failure inside the credential check, and counting it again
+at the route (the admin pattern) would double-count.
 
 ## Required env vars
 

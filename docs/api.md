@@ -216,9 +216,11 @@ Two exceptions, both signaled in the response body:
 CLI-made changes (configs, remotes, calendars — and users) reach a running
 server at its next restart; for users that is the dependable path, though a
 later successful admin-API mutation also re-reads the whole user table and
-may pick such changes up sooner. See [`docs/cli.md`](cli.md) and
-[`docs/pro-mode.md`](pro-mode.md). Everything below references this rule
-instead of repeating it.
+may pick such changes up sooner, and a later successful
+[`POST /user/calendars`](#user-calendar-provisioning) re-reads the whole
+store — configs, remotes, and calendars included. See
+[`docs/cli.md`](cli.md) and [`docs/pro-mode.md`](pro-mode.md). Everything
+below references this rule instead of repeating it.
 
 ### Routes
 
@@ -432,11 +434,11 @@ Request bodies are JSON with `Content-Type: application/json`:
 | `caldav_url` | str | yes | non-empty; parses as an `http`/`https` URL with a host |
 | `caldav_username` | str | yes | non-empty, valid UTF-8 |
 | `caldav_password` | str | yes | non-empty, valid UTF-8 |
-| `calendar_name` | str | yes | matches `^[A-Za-z0-9][A-Za-z0-9_-]*$` (no dots/spaces) **and** equals the calendar's display name on the CalDAV server exactly |
+| `calendar_name` | str | yes | matches `^[A-Za-z0-9][A-Za-z0-9_-]*$` (no dots/spaces); must also equal the calendar's display name on the CalDAV server exactly — a server-side requirement the route cannot check (see below) |
 | `remote_name` | str | no | same charset rule; defaults to `calendar_name` |
 
-Every rule is validated before any store write, so a 400 never leaves
-partial rows behind. The route registers the calendar — it does not
+Field and name rules are validated before any store write, so a 400 never
+leaves partial rows behind. The route registers the calendar — it does not
 create it server-side; a name that does not match the server still
 provisions (201) and fails only at first tool use, where the tool's
 not-found error lists the server's available names.
